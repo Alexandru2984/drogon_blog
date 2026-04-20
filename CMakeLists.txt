@@ -30,7 +30,8 @@ add_executable(${PROJECT_NAME} main.cc)
 # and comment out the following lines
 find_package(Drogon CONFIG REQUIRED)
 find_package(CURL REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon CURL::libcurl)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 
 # ##############################################################################
 

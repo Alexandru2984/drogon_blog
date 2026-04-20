@@ -169,7 +169,7 @@ void AuthController::loginUser(const HttpRequestPtr &req,
 
         // Set session
         auto session = req->session();
-        session->insert("user_id", user.getValueOfId());
+        session->insert("user_id", static_cast<int>(user.getValueOfId()));
         session->insert("username", user.getValueOfUsername());
 
         Json::Value ret;

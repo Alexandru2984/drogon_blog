@@ -159,7 +159,7 @@ public:
     static bool sendVerificationEmail(const std::string& email, 
                                      const std::string& username,
                                      const std::string& token) {
-        std::string verificationLink = "http://localhost:8090/auth/verify-email?token=" + token;
+        std::string verificationLink = "https://blog.micutu.com/#/verify-email?token=" + token;
         
         std::ostringstream htmlBody;
         htmlBody << "<!DOCTYPE html>"
@@ -181,7 +181,7 @@ public:
     static bool sendPasswordResetEmail(const std::string& email,
                                        const std::string& username,
                                        const std::string& token) {
-        std::string resetLink = "http://localhost:8090/auth/reset-password?token=" + token;
+        std::string resetLink = "https://blog.micutu.com/#/reset-password?token=" + token;
         
         std::ostringstream htmlBody;
         htmlBody << "<!DOCTYPE html>"

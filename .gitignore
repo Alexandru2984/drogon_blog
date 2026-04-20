@@ -580,8 +580,14 @@ uploads/tmp/
 .env
 .env.*
 
+# Symlinked uploads in public dir
+public/uploads
+
 # Drogon CSP compiled views
 *.csp.cc
+
+# Logs
+access.log
 
 # OS files
 .DS_Store
