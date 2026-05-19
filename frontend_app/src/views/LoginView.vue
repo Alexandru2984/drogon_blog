@@ -1,0 +1,52 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { useToastStore } from '@/stores/toast'
+
+const username = ref('')
+const password = ref('')
+const loading = ref(false)
+const error = ref('')
+
+const auth = useAuthStore()
+const router = useRouter()
+const route = useRoute()
+const toasts = useToastStore()
+
+async function submit() {
+  error.value = ''
+  loading.value = true
+  try {
+    await auth.login(username.value, password.value)
+    toasts.push(`Welcome back, ${auth.user!.username}`, 'ok')
+    const next = (route.query.next as string) || '/'
+    router.push(next)
+  } catch (e: any) {
+    error.value = e?.response?.data?.error ?? 'Login failed'
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="card" style="max-width: 420px; margin: 2rem auto;">
+    <h2>Login</h2>
+    <form @submit.prevent="submit">
+      <label>Username</label>
+      <input v-model="username" autofocus autocomplete="username" required />
+      <label>Password</label>
+      <input v-model="password" type="password" autocomplete="current-password" required />
+      <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
+      <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
+        {{ loading ? 'Signing in…' : 'Sign in' }}
+      </button>
+    </form>
+    <p class="muted" style="margin-top: 1rem; text-align: center;">
+      <router-link to="/forgot-password">Forgot password?</router-link>
+      &nbsp;·&nbsp;
+      <router-link to="/register">Create account</router-link>
+    </p>
+  </div>
+</template>
