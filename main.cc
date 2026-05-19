@@ -1,5 +1,8 @@
 #include <drogon/drogon.h>
 #include <json/json.h>
+#include <sodium.h>
+#include "helpers/EmailHelper.h"
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -99,6 +102,12 @@ int main()
         return 1;
     }
 
+    if (sodium_init() < 0)
+    {
+        std::cerr << "libsodium init failed" << std::endl;
+        return 1;
+    }
+
     try
     {
         drogon::app().loadConfigJson(cfgJson);
@@ -109,6 +118,9 @@ int main()
         std::cerr << "Error loading config: " << e.what() << std::endl;
         return 1;
     }
+
+    EmailHelper::start();
+    drogon::app().getLoop()->runOnQuit([] { EmailHelper::stop(); });
 
     std::cout << "Drogon listening (see config for port)..." << std::endl;
     drogon::app().run();

@@ -4,26 +4,40 @@
 #include "../helpers/EmailHelper.h"
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
-#include <openssl/sha.h>
-#include <sstream>
-#include <iomanip>
-#include <chrono>
+#include <sodium.h>
+#include <stdexcept>
+#include <string>
 
 using namespace drogon;
 using namespace drogon::orm;
 
-// Helper function to hash passwords
-std::string hashPassword(const std::string& password) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256(reinterpret_cast<const unsigned char*>(password.c_str()), 
-           password.length(), hash);
-    
-    std::stringstream ss;
-    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+namespace {
+
+// Argon2id-based password hashing via libsodium. The output is a self-describing
+// string (algorithm id + parameters + salt + tag), so verification only needs the
+// stored hash and the candidate password — no extra salt column.
+std::string hashPassword(const std::string& password)
+{
+    char out[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(out,
+                          password.c_str(),
+                          password.size(),
+                          crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                          crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0)
+    {
+        throw std::runtime_error("password hashing failed");
     }
-    return ss.str();
+    return std::string(out);
 }
+
+bool verifyPassword(const std::string& storedHash, const std::string& candidate)
+{
+    return crypto_pwhash_str_verify(storedHash.c_str(),
+                                    candidate.c_str(),
+                                    candidate.size()) == 0;
+}
+
+} // namespace
 
 void AuthController::registerUser(const HttpRequestPtr &req,
                                   std::function<void(const HttpResponsePtr &)> &&callback)
@@ -156,9 +170,8 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         }
 
         auto user = users[0];
-        std::string hashedPassword = hashPassword(password);
 
-        if (user.getValueOfPasswordHash() != hashedPassword) {
+        if (!verifyPassword(user.getValueOfPasswordHash(), password)) {
             Json::Value ret;
             ret["error"] = "Invalid credentials";
             auto resp = HttpResponse::newHttpJsonResponse(ret);

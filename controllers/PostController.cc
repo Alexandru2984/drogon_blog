@@ -12,47 +12,50 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
                                 std::function<void(const HttpResponsePtr &)> &&callback)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> postMapper(dbClient);
-    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
-    try {
-        auto posts = postMapper.orderBy(drogon_model::blog_db::Posts::Cols::_created_at, 
-                                       SortOrder::DESC).findAll();
+    // Single JOIN — author resolved in one round-trip instead of N+1.
+    static const char* kSql =
+        "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
+        "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
+        "FROM posts p "
+        "LEFT JOIN users u ON u.id = p.user_id "
+        "ORDER BY p.created_at DESC";
 
-        Json::Value ret;
-        ret["posts"] = Json::Value(Json::arrayValue);
+    dbClient->execSqlAsync(
+        kSql,
+        [callback](const Result& r) {
+            Json::Value ret;
+            ret["posts"] = Json::Value(Json::arrayValue);
 
-        for (const auto &post : posts) {
-            Json::Value postJson;
-            postJson["id"] = post.getValueOfId();
-            postJson["title"] = post.getValueOfTitle();
-            postJson["content"] = post.getValueOfContent();
-            postJson["created_at"] = post.getValueOfCreatedAt().toDbStringLocal();
-            postJson["updated_at"] = post.getValueOfUpdatedAt().toDbStringLocal();
-            
-            // Get author info
-            try {
-                auto author = userMapper.findByPrimaryKey(post.getValueOfUserId());
-                postJson["author"]["id"] = author.getValueOfId();
-                postJson["author"]["username"] = author.getValueOfUsername();
-                if (!author.getValueOfProfileImage().empty()) {
-                    postJson["author"]["profile_image"] = author.getValueOfProfileImage();
+            for (const auto& row : r) {
+                Json::Value post;
+                post["id"]         = row["id"].as<int64_t>();
+                post["title"]      = row["title"].as<std::string>();
+                post["content"]    = row["content"].as<std::string>();
+                post["created_at"] = row["created_at"].as<std::string>();
+                post["updated_at"] = row["updated_at"].as<std::string>();
+
+                if (!row["author_id"].isNull()) {
+                    post["author"]["id"]       = row["author_id"].as<int64_t>();
+                    post["author"]["username"] = row["author_username"].as<std::string>();
+                    if (!row["author_profile_image"].isNull()) {
+                        auto img = row["author_profile_image"].as<std::string>();
+                        if (!img.empty()) post["author"]["profile_image"] = img;
+                    }
                 }
-            } catch (...) {}
+                ret["posts"].append(post);
+            }
 
-            ret["posts"].append(postJson);
-        }
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to fetch posts";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (getAllPosts): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch posts";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        });
 }
 
 void PostController::getPost(const HttpRequestPtr &req,
@@ -60,38 +63,52 @@ void PostController::getPost(const HttpRequestPtr &req,
                             int postId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> postMapper(dbClient);
-    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
-    try {
-        auto post = postMapper.findByPrimaryKey(postId);
+    static const char* kSql =
+        "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
+        "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
+        "FROM posts p "
+        "LEFT JOIN users u ON u.id = p.user_id "
+        "WHERE p.id = $1";
 
-        Json::Value ret;
-        ret["id"] = post.getValueOfId();
-        ret["title"] = post.getValueOfTitle();
-        ret["content"] = post.getValueOfContent();
-        ret["created_at"] = post.getValueOfCreatedAt().toDbStringLocal();
-        ret["updated_at"] = post.getValueOfUpdatedAt().toDbStringLocal();
-
-        // Get author info
-        try {
-            auto author = userMapper.findByPrimaryKey(post.getValueOfUserId());
-            ret["author"]["id"] = author.getValueOfId();
-            ret["author"]["username"] = author.getValueOfUsername();
-            if (!author.getValueOfProfileImage().empty()) {
-                ret["author"]["profile_image"] = author.getValueOfProfileImage();
+    dbClient->execSqlAsync(
+        kSql,
+        [callback](const Result& r) {
+            if (r.empty()) {
+                Json::Value ret;
+                ret["error"] = "Post not found";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k404NotFound);
+                callback(resp);
+                return;
             }
-        } catch (...) {}
+            const auto& row = r[0];
+            Json::Value ret;
+            ret["id"]         = row["id"].as<int64_t>();
+            ret["title"]      = row["title"].as<std::string>();
+            ret["content"]    = row["content"].as<std::string>();
+            ret["created_at"] = row["created_at"].as<std::string>();
+            ret["updated_at"] = row["updated_at"].as<std::string>();
 
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        Json::Value ret;
-        ret["error"] = "Post not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    }
+            if (!row["author_id"].isNull()) {
+                ret["author"]["id"]       = row["author_id"].as<int64_t>();
+                ret["author"]["username"] = row["author_username"].as<std::string>();
+                if (!row["author_profile_image"].isNull()) {
+                    auto img = row["author_profile_image"].as<std::string>();
+                    if (!img.empty()) ret["author"]["profile_image"] = img;
+                }
+            }
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (getPost): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Post not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+        },
+        postId);
 }
 
 void PostController::createPost(const HttpRequestPtr &req,

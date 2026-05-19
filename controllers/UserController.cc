@@ -3,6 +3,7 @@
 #include <drogon/orm/Mapper.h>
 #include <drogon/MultiPart.h>
 #include <trantor/utils/Logger.h>
+#include <filesystem>
 #include <fstream>
 
 using namespace drogon;
@@ -147,10 +148,19 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
     std::string filename = "profile_" + std::to_string(userIdOpt.value()) + 
                           "_" + std::to_string(std::time(nullptr)) + fileExtension;
     std::string uploadPath = "uploads/profiles/";
-    
-    // Create directory if it doesn't exist
-    system(("mkdir -p " + uploadPath).c_str());
-    
+
+    std::error_code ec;
+    std::filesystem::create_directories(uploadPath, ec);
+    if (ec) {
+        LOG_ERROR << "Failed to create upload dir " << uploadPath << ": " << ec.message();
+        Json::Value ret;
+        ret["error"] = "Failed to save upload";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k500InternalServerError);
+        callback(resp);
+        return;
+    }
+
     std::string fullPath = uploadPath + filename;
     
     // Save file
