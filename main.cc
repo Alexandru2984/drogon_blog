@@ -2,11 +2,13 @@
 #include <json/json.h>
 #include <sodium.h>
 #include "helpers/EmailHelper.h"
+#include "helpers/Security.h"
 
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <cstdlib>
 #include <cctype>
 
@@ -121,6 +123,9 @@ int main()
 
     EmailHelper::start();
     drogon::app().getLoop()->runOnQuit([] { EmailHelper::stop(); });
+
+    // Rate limiting, CSRF (double-submit), and response security headers.
+    security::registerAdvices();
 
     std::cout << "Drogon listening (see config for port)..." << std::endl;
     drogon::app().run();

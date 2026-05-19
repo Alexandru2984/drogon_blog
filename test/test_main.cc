@@ -3,6 +3,8 @@
 #include <drogon/drogon_test.h>
 #include <sodium.h>
 
+#include "../helpers/Security.h"
+
 #include <cstdlib>
 #include <fstream>
 #include <future>
@@ -90,6 +92,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // Disable per-IP rate limiting for the test suite — every test originates
+    // from 127.0.0.1, so the production limits would trip mid-run.
+    setenv("BLOG_DISABLE_RATE_LIMIT", "1", 1);
+
     if (!resetDatabase()) {
         std::cerr << "Failed to reset test database. "
                      "Ensure blog_test_db exists and TEST_DB_* env vars are set.\n";
@@ -97,6 +103,10 @@ int main(int argc, char** argv)
     }
 
     app().loadConfigJson(buildConfig());
+
+    // Mirror production's security wiring (rate limit + CSRF + headers).
+    // BLOG_DISABLE_RATE_LIMIT=1 (set above) keeps the limiter out of the way.
+    security::registerAdvices();
 
     std::promise<void> ready;
     auto readyFut = ready.get_future();

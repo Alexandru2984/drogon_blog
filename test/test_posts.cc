@@ -52,10 +52,33 @@ DROGON_TEST(Posts_CreateRequiresAuth)
     auto req = HttpRequest::newHttpJsonRequest(body);
     req->setMethod(Post);
     req->setPath("/posts");
+    // Pass CSRF check so the auth guard is what rejects us. Otherwise the
+    // synchronous advice would short-circuit with 403 before the handler.
+    req->addCookie("csrf_token", "test-token");
+    req->addHeader("X-CSRF-Token",  "test-token");
 
     client->sendRequest(req, [TEST_CTX](ReqResult r, const HttpResponsePtr& resp) {
         REQUIRE(r == ReqResult::Ok);
         CHECK(resp->getStatusCode() == k401Unauthorized);
+    });
+}
+
+DROGON_TEST(Security_MissingCsrfBlocksMutation)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+
+    Json::Value body;
+    body["title"]   = "no csrf";
+    body["content"] = "should 403 before auth check";
+
+    auto req = HttpRequest::newHttpJsonRequest(body);
+    req->setMethod(Post);
+    req->setPath("/posts");
+    // No CSRF cookie / header → must be rejected by the advice.
+
+    client->sendRequest(req, [TEST_CTX](ReqResult r, const HttpResponsePtr& resp) {
+        REQUIRE(r == ReqResult::Ok);
+        CHECK(resp->getStatusCode() == k403Forbidden);
     });
 }
 
@@ -99,9 +122,13 @@ DROGON_TEST(Posts_FeedJoinIncludesAuthor)
                     postReq->setPath("/posts");
 
                     // Drogon's HttpClient does not auto-attach Set-Cookie values to
-                    // subsequent requests, so propagate the session cookie manually.
+                    // subsequent requests, so propagate the session cookie manually,
+                    // and echo the CSRF cookie in the X-CSRF-Token header.
                     for (const auto& [name, c] : resp2->getCookies()) {
                         postReq->addCookie(name, c.value());
+                        if (name == "csrf_token") {
+                            postReq->addHeader("X-CSRF-Token", c.value());
+                        }
                     }
 
                     client->sendRequest(postReq,

@@ -2,6 +2,7 @@
 #include "../models/Users.h"
 #include "../models/PasswordResetTokens.h"
 #include "../helpers/EmailHelper.h"
+#include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
 #include <sodium.h>
@@ -35,6 +36,30 @@ bool verifyPassword(const std::string& storedHash, const std::string& candidate)
     return crypto_pwhash_str_verify(storedHash.c_str(),
                                     candidate.c_str(),
                                     candidate.size()) == 0;
+}
+
+// Ensures a CSRF token exists for the current session and that the response
+// carries the matching readable (non-HttpOnly) Lax cookie. Idempotent: when
+// the session already has a token (returning user, /auth/me), the same value
+// is re-emitted so the frontend can pick it up after a reload.
+void issueCsrfCookie(const drogon::HttpRequestPtr& req,
+                     const drogon::HttpResponsePtr& resp)
+{
+    auto session = req->session();
+    std::string token;
+    auto existing = session->getOptional<std::string>("csrf_token");
+    if (existing.has_value() && !existing.value().empty()) {
+        token = existing.value();
+    } else {
+        token = security::randomToken();
+        session->insert("csrf_token", token);
+    }
+
+    drogon::Cookie c(security::csrfCookieName(), token);
+    c.setPath("/");
+    c.setHttpOnly(false);                       // frontend reads it to echo in header
+    c.setSameSite(drogon::Cookie::SameSite::kLax);
+    resp->addCookie(std::move(c));
 }
 
 } // namespace
@@ -190,8 +215,9 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         ret["user"]["id"] = user.getValueOfId();
         ret["user"]["username"] = user.getValueOfUsername();
         ret["user"]["email"] = user.getValueOfEmail();
-        
+
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        issueCsrfCookie(req, resp);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
@@ -242,12 +268,13 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
         ret["username"] = user.getValueOfUsername();
         ret["email"] = user.getValueOfEmail();
         ret["bio"] = user.getValueOfBio();
-        
+
         if (!user.getValueOfProfileImage().empty()) {
             ret["profile_image"] = user.getValueOfProfileImage();
         }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        issueCsrfCookie(req, resp);             // rehydrate CSRF on session bootstrap
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
