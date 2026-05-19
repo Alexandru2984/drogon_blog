@@ -1,14 +1,37 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(blog_test CXX)
 
-add_executable(${PROJECT_NAME} test_main.cc)
+set(TEST_SOURCES
+    test_main.cc
+    test_auth.cc
+    test_posts.cc
+    test_password_hashing.cc)
 
-# ##############################################################################
-# If you include the drogon source code locally in your project, use this method
-# to add drogon 
-# target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
-#
-# and comment out the following lines
-target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon sqlite3 brotlidec brotlienc)
+add_executable(${PROJECT_NAME} ${TEST_SOURCES})
+
+# Bring in the project's own sources so tests link against the same controllers,
+# helpers and ORM models that the production binary uses.
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../controllers TEST_CTL_SRC)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../helpers     TEST_HELPER_SRC)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../models      TEST_MODEL_SRC)
+
+target_sources(${PROJECT_NAME} PRIVATE
+    ${TEST_CTL_SRC}
+    ${TEST_HELPER_SRC}
+    ${TEST_MODEL_SRC})
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../models
+    ${SODIUM_INCLUDE_DIRS})
+
+target_link_directories(${PROJECT_NAME} PRIVATE ${SODIUM_LIBRARY_DIRS})
+
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    Drogon::Drogon
+    CURL::libcurl
+    OpenSSL::SSL OpenSSL::Crypto
+    ${SODIUM_LIBRARIES}
+    brotlidec brotlienc)
 
 ParseAndAddDrogonTests(${PROJECT_NAME})

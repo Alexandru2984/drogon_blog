@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-blog_db}
+      POSTGRES_USER:     ${DB_USER:-blog_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-blog_dev_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-blog_user} -d ${DB_NAME:-blog_db}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST:     db
+      DB_PORT:     5432
+      DB_NAME:     ${DB_NAME:-blog_db}
+      DB_USER:     ${DB_USER:-blog_user}
+      DB_PASSWORD: ${DB_PASSWORD:-blog_dev_password}
+      SMTP_SERVER:      ${SMTP_SERVER:-}
+      SMTP_USERNAME:    ${SMTP_USERNAME:-}
+      SMTP_PASSWORD:    ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL:  ${SMTP_FROM_EMAIL:-noreply@example.com}
+      SMTP_FROM_NAME:   ${SMTP_FROM_NAME:-Micu's Blog}
+    ports:
+      - "8092:8092"
+    volumes:
+      - uploads:/app/uploads
+
+volumes:
+  pgdata:
+  uploads:

@@ -1,189 +1,255 @@
 # Micu's Blog
 
-Aplicație de blog full-stack — backend REST API în C++ cu [Drogon](https://github.com/drogonframework/drogon), frontend SPA vanilla JS, bază de date SQLite.
+A full-stack blog platform built around a modern C++ HTTP backend and a Vue 3 SPA.
 
-**Live:** [https://blog.micutu.com](https://blog.micutu.com)
+**Live:** [blog.micutu.com](https://blog.micutu.com)
 
-## Funcționalități
+> Modernized in May 2026 — migrated from SQLite to PostgreSQL, replaced
+> SHA-256 password hashing with Argon2id, made SMTP non-blocking, and
+> rebuilt the frontend from vanilla JS to a Vite + Vue 3 SPA.
 
-- **Autentificare** — înregistrare, login, logout, verificare email, reset parolă
-- **Postări** — CRUD complet, listare, postări per utilizator, suport Markdown
-- **Comentarii** — adăugare, editare, ștergere comentarii la postări
-- **Like-uri** — like/unlike pe postări
-- **Mesaje private** — trimitere, primire, conversații, marcare ca citit
-- **Profil utilizator** — editare profil, upload imagine de profil
-- **Email** — verificare cont și reset parolă via SMTP (Brevo)
-- **Frontend SPA** — dark mode, responsive, hash routing
+---
 
-## Tehnologii
+## Highlights
 
-- **C++17** cu framework-ul Drogon
-- **SQLite3** — bază de date
-- **libcurl** — trimitere email-uri SMTP
-- **OpenSSL** — hash-uri parole
-- **CMake** — build system
-- **Vanilla JS/CSS** — frontend SPA (fără framework, fără build tools)
-- **nginx** — reverse proxy cu SSL (Let's Encrypt)
-- **systemd** — management serviciu
+- **C++20 backend** on the [Drogon](https://github.com/drogonframework/drogon) async HTTP framework.
+- **PostgreSQL** with `GENERATED ALWAYS AS IDENTITY`, `TIMESTAMP`, and an `updated_at` trigger function applied to mutable tables.
+- **Argon2id** password hashing via libsodium (`m=64 MiB, t=2, p=1`). Every hash carries its own salt + parameters; no separate salt column.
+- **Non-blocking email** — the HTTP handler enqueues a `Job` into a single worker thread and returns `201` in ~135 ms; SMTP delivery (via libcurl, TLS) happens out-of-band.
+- **Single-query feed** — `GET /posts` is a `LEFT JOIN posts/users` issued via `execSqlAsync`, not the N+1 pattern of `findAll + findByPrimaryKey` per row.
+- **Env-driven config** — `main.cc` loads `.env`, then expands `${VAR}` placeholders inside `config.json` before handing it to Drogon. No secrets in the repo.
+- **Vue 3 SPA** (TypeScript, Pinia, Vue Router in hash mode, Axios) built by Vite directly into Drogon's `document_root`.
 
-## Structura proiectului
+## Architecture
 
 ```
-drogon_blog/
-├── main.cc                  # Entry point
-├── config.json              # Configurație Drogon (port, DB, sesiuni)
-├── schema.sql               # Schema inițială a bazei de date
-├── migrations.sql           # Migrări (verificare email, reset parolă)
-├── CMakeLists.txt           # Build configuration
-├── .env                     # Credențiale SMTP (nu e în git)
-├── controllers/             # HTTP Controllers
-│   ├── AuthController       # /auth/*
-│   ├── PostController       # /posts/*
-│   ├── CommentController    # /posts/{id}/comments, /comments/*
-│   ├── MessageController    # /messages/*
-│   └── UserController       # /users/*
-├── models/                  # ORM Models (generate de Drogon)
-│   ├── Users, Posts, Comments, Likes, Messages
-│   └── PasswordResetTokens
-├── helpers/
-│   └── EmailHelper.h        # Trimitere email via SMTP
-├── public/                  # Document root (servit de Drogon)
-│   ├── index.html           # SPA entry point
-│   ├── static/css/style.css # Stiluri (dark mode)
-│   ├── static/js/app.js     # Aplicația frontend
-│   └── uploads -> ../uploads # Symlink pentru fișiere uploadate
-├── uploads/                 # Fișiere uploadate
-│   └── profiles/            # Imagini de profil
-└── test/                    # Teste
+                   ┌────────────────────────────┐
+                   │     Vue 3 SPA (Vite)       │
+                   │  frontend_app/  →  public/ │
+                   └──────────────┬─────────────┘
+                                  │  same-origin JSON + JSESSIONID cookie
+                                  ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      Drogon application (C++20)                  │
+│                                                                  │
+│  HTTP IO loops                       DB connection pool          │
+│  ────────────                        ──────────────────          │
+│  AuthController  ─┐                  ┌── execSqlAsync ──┐        │
+│  PostController   │  ┌─ Argon2id ─┐  │                  │        │
+│  CommentController├──┤  libsodium │  ├── ORM Mapper ────┤        │
+│  UserController   │  └────────────┘  │  blog_db::*      │        │
+│  MessageController┘                  └──────────────────┘        │
+│                                                  │               │
+│   EmailHelper worker thread (queue + curl SMTP)  │               │
+└──────────────────────────────────────┬───────────┼───────────────┘
+                                       │           │
+                              ┌────────▼──┐    ┌───▼──────────┐
+                              │   SMTP    │    │ PostgreSQL 17│
+                              │  relay    │    │   blog_db    │
+                              └───────────┘    └──────────────┘
 ```
 
-## API Endpoints
+## Tech stack
 
-### Autentificare (`/auth`)
-| Metodă | Endpoint | Descriere |
-|--------|----------|-----------|
-| POST | `/auth/register` | Înregistrare utilizator |
-| POST | `/auth/login` | Autentificare |
-| POST | `/auth/logout` | Deconectare |
-| GET | `/auth/me` | Utilizator curent |
-| POST | `/auth/verify-email` | Verificare email |
-| POST | `/auth/request-reset` | Cerere reset parolă |
-| POST | `/auth/reset-password` | Resetare parolă |
-| POST | `/auth/resend-verification` | Retrimitere email verificare |
+| Layer       | Component                                                          |
+|-------------|--------------------------------------------------------------------|
+| Backend     | C++20, [Drogon](https://github.com/drogonframework/drogon) 1.9     |
+| Database    | PostgreSQL 17 (IDENTITY columns, `updated_at` triggers)            |
+| Auth        | libsodium Argon2id (`crypto_pwhash_str` + `_verify`)               |
+| Mail        | libcurl over SMTPS, dispatched to a background worker thread       |
+| Build (C++) | CMake ≥ 3.10, pkg-config                                           |
+| Frontend    | Vue 3 + TypeScript + Vite + Vue Router (hash) + Pinia + Axios      |
+| Reverse proxy | nginx, TLS via Let's Encrypt, fronted by Cloudflare              |
+| Process mgmt  | systemd (`drogon-blog.service`)                                  |
 
-### Postări (`/posts`)
-| Metodă | Endpoint | Descriere |
-|--------|----------|-----------|
-| GET | `/posts` | Toate postările |
-| GET | `/posts/{id}` | O singură postare |
-| POST | `/posts` | Creare postare (auth) |
-| PUT | `/posts/{id}` | Editare postare (owner) |
-| DELETE | `/posts/{id}` | Ștergere postare (owner) |
-| GET | `/posts/user/{id}` | Postările unui utilizator |
-| POST | `/posts/{id}/like` | Like (auth) |
-| DELETE | `/posts/{id}/like` | Unlike (auth) |
-| GET | `/posts/{id}/likes` | Număr like-uri |
+## Quick start (Docker)
 
-### Comentarii
-| Metodă | Endpoint | Descriere |
-|--------|----------|-----------|
-| GET | `/posts/{id}/comments` | Comentariile unei postări |
-| POST | `/posts/{id}/comments` | Adăugare comentariu (auth) |
-| PUT | `/comments/{id}` | Editare comentariu (owner) |
-| DELETE | `/comments/{id}` | Ștergere comentariu (owner) |
-
-### Mesaje (`/messages`)
-| Metodă | Endpoint | Descriere |
-|--------|----------|-----------|
-| GET | `/messages/received` | Mesaje primite (auth) |
-| GET | `/messages/sent` | Mesaje trimise (auth) |
-| GET | `/messages/conversation/{userId}` | Conversație cu un utilizator (auth) |
-| POST | `/messages` | Trimitere mesaj (auth) |
-| PUT | `/messages/{id}/read` | Marcare ca citit (receiver) |
-| DELETE | `/messages/{id}` | Ștergere mesaj (sender/receiver) |
-
-### Utilizatori (`/users`)
-| Metodă | Endpoint | Descriere |
-|--------|----------|-----------|
-| GET | `/users` | Toți utilizatorii (auth) |
-| GET | `/users/{id}` | Profil utilizator |
-| PUT | `/users/profile` | Editare profil (auth) |
-| POST | `/users/profile/image` | Upload imagine profil (auth) |
-
-## Prerequisite
-
-- **CMake** >= 3.5
-- **Drogon** framework (`apt install libdrogon-dev`)
-- **SQLite3** (`apt install libsqlite3-dev`)
-- **libcurl** (`apt install libcurl4-openssl-dev`)
-- **OpenSSL** (`apt install libssl-dev`)
-- Compilator C++ cu suport C++17
-
-## Build & Run
+The simplest way to run the whole stack — backend, frontend, and PostgreSQL — is via Docker Compose:
 
 ```bash
-# Inițializare bază de date
-sqlite3 blog.db < schema.sql
-sqlite3 blog.db < migrations.sql
+cp .env.example .env          # then edit SMTP creds if you want real email
+docker compose up --build
+```
 
-# Build
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -Wno-dev
-make -j$(nproc)
+The app listens on `http://localhost:8092`. PostgreSQL is exposed on `5432` for local inspection.
 
-# Rulare (din directorul proiectului)
-cd ..
+## Manual build
+
+### Prerequisites
+
+```bash
+sudo apt install -y \
+    cmake g++ pkg-config \
+    libdrogon-dev libsodium-dev libcurl4-openssl-dev libssl-dev \
+    postgresql postgresql-client \
+    nodejs npm
+```
+
+### Database
+
+```bash
+sudo -u postgres psql <<SQL
+CREATE ROLE blog_user LOGIN PASSWORD 'change-me';
+CREATE DATABASE blog_db OWNER blog_user;
+GRANT ALL ON SCHEMA public TO blog_user;
+SQL
+
+PGPASSWORD='change-me' psql -h 127.0.0.1 -U blog_user -d blog_db -f schema.sql
+```
+
+### Environment
+
+Create a `.env` in the project root:
+
+```env
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=blog_db
+DB_USER=blog_user
+DB_PASSWORD=change-me
+
+SMTP_SERVER=smtp://smtp-relay.example.com:587
+SMTP_USERNAME=blog@example.com
+SMTP_PASSWORD=...
+SMTP_FROM_EMAIL=blog@example.com
+SMTP_FROM_NAME=Example Blog
+```
+
+### Build backend
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+### Build frontend
+
+```bash
+cd frontend_app
+npm install
+npm run build        # outputs to ../public/
+```
+
+### Run
+
+```bash
 ./build/blog
 ```
 
-Serverul pornește pe **http://localhost:8092** (configurabil în `config.json`).
+## Project layout
 
-## Deploy (producție)
+```
+drogon_blog/
+├── main.cc                       # entry point; loads .env, expands ${VAR}, starts EmailHelper
+├── config.json                   # Drogon config (port, DB, sessions); secrets via ${ENV}
+├── schema.sql                    # PostgreSQL DDL + updated_at trigger function
+├── CMakeLists.txt
+│
+├── controllers/                  # HTTP routes
+│   ├── AuthController.{h,cc}     #   /auth/*    — register/login/logout/me/verify/reset
+│   ├── PostController.{h,cc}     #   /posts/*   — CRUD + likes
+│   ├── CommentController.{h,cc}  #   /posts/{id}/comments, /comments/*
+│   ├── UserController.{h,cc}     #   /users/*   — profile + avatar upload
+│   └── MessageController.{h,cc}  #   /messages/* — private messaging
+│
+├── models/                       # ORM models generated by drogon_ctl
+│   └── ...                       #   namespace drogon_model::blog_db::*
+│
+├── helpers/
+│   ├── EmailHelper.h             # public interface (start/stop, send*, generateToken)
+│   └── EmailHelper.cc            # worker thread + queue + libcurl SMTPS
+│
+├── public/                       # Drogon's document_root (Vite build output)
+│   ├── index.html
+│   ├── assets/                   # hashed JS/CSS chunks
+│   └── uploads/                  # user-uploaded files (preserved across builds)
+│
+├── frontend_app/                 # Vite + Vue 3 + TypeScript SPA
+│   ├── src/{api,stores,router,views,components}/
+│   └── vite.config.ts            # outputs to ../public/ with emptyOutDir:false
+│
+└── test/                         # Drogon-test integration suite
+```
 
-Blogul rulează ca serviciu systemd cu nginx reverse proxy:
+## API reference
+
+### Auth — `/auth`
+
+| Method | Path                       | Auth | Notes                                   |
+|--------|----------------------------|------|-----------------------------------------|
+| POST   | `/auth/register`           | —    | Returns 201 immediately; email is async |
+| POST   | `/auth/login`              | —    | Sets `JSESSIONID` on success            |
+| POST   | `/auth/logout`             | —    | Clears session                          |
+| GET    | `/auth/me`                 | ✓    | Current session user                    |
+| POST   | `/auth/verify-email`       | —    | Body `{ token }`                        |
+| POST   | `/auth/request-reset`      | —    | Body `{ email }`                        |
+| POST   | `/auth/reset-password`     | —    | Body `{ token, password }`              |
+| POST   | `/auth/resend-verification`| —    | Body `{ email }`                        |
+
+### Posts — `/posts`
+
+| Method | Path                  | Auth  | Notes                                |
+|--------|-----------------------|-------|--------------------------------------|
+| GET    | `/posts`              | —     | Single JOIN, ordered by created_at   |
+| GET    | `/posts/{id}`         | —     | Single JOIN with author              |
+| POST   | `/posts`              | ✓     |                                      |
+| PUT    | `/posts/{id}`         | owner |                                      |
+| DELETE | `/posts/{id}`         | owner |                                      |
+| GET    | `/posts/user/{id}`    | —     |                                      |
+| POST   | `/posts/{id}/like`    | ✓     |                                      |
+| DELETE | `/posts/{id}/like`    | ✓     |                                      |
+| GET    | `/posts/{id}/likes`   | —     |                                      |
+
+### Comments, Users, Messages
+
+See `controllers/CommentController.h`, `UserController.h`, `MessageController.h` — same shape.
+
+## Schema
+
+```sql
+users          (id IDENTITY, username, email, password_hash, profile_image,
+                bio, email_verified, email_verification_token,
+                email_verification_expires, created_at, updated_at)
+posts          (id IDENTITY, user_id → users, title, content, created_at, updated_at)
+comments       (id IDENTITY, post_id → posts, user_id → users, content, created_at)
+likes          (id IDENTITY, post_id, user_id, created_at, UNIQUE(post_id, user_id))
+messages       (id IDENTITY, sender_id → users, receiver_id → users, content,
+                is_read, created_at)
+password_reset_tokens (id IDENTITY, user_id → users, token, expires_at, created_at)
+```
+
+`updated_at` columns on `users` and `posts` are kept current by a shared `set_updated_at()` trigger function.
+
+## Testing
 
 ```bash
-# Build
-cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -Wno-dev && make -j$(nproc)
-
-# Restart serviciu
-sudo systemctl restart drogon-blog
+cmake --build build --target blog_test
+./build/test/blog_test
 ```
 
-**Infrastructură:**
-- **systemd** — `drogon-blog.service` (auto-start la boot)
-- **nginx** — reverse proxy pe `blog.micutu.com` → `127.0.0.1:8092`
-- **SSL** — Let's Encrypt via certbot (auto-renew)
-- **Cloudflare** — DNS + proxy
+Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopback port, and hit it with the framework's HTTP client. Tests target a real PostgreSQL database (`blog_test_db`, see `test/setup.sql`) rather than mocks, so SQL behaviour and trigger logic are exercised end-to-end.
 
-## Configurare email
+## Performance notes
 
-Creează un fișier `.env` în directorul proiectului:
+- **Read feed (`GET /posts`)** — one round-trip via `execSqlAsync`, no per-row author lookup. Drogon's connection pool is sized at 16 for default workloads.
+- **Register (`POST /auth/register`)** — ~135 ms median; dominated by the deliberate Argon2id cost (`OPSLIMIT_INTERACTIVE`). SMTP latency is removed from the response path by the worker thread.
+- **Login (`POST /auth/login`)** — ~120 ms median, same Argon2id cost (`crypto_pwhash_str_verify`).
 
-```
-SMTP_SERVER=smtp://smtp-relay.brevo.com:587
-SMTP_USERNAME=...
-SMTP_PASSWORD=...
-SMTP_FROM_EMAIL=blog@example.com
-SMTP_FROM_NAME=Blog Name
-```
+## Deployment
 
-## Teste
+The production deployment uses systemd + nginx:
 
-```bash
-cd build/test
-./blog_test
+```ini
+# /etc/systemd/system/drogon-blog.service
+[Service]
+User=micu
+WorkingDirectory=/home/micu/drogon_blog
+ExecStart=/home/micu/drogon_blog/build/blog
+Restart=on-failure
 ```
 
-## Schema bazei de date
+`nginx` reverse-proxies `blog.micutu.com` to `127.0.0.1:8092`; TLS via Let's Encrypt, fronted by Cloudflare.
 
-- **users** — utilizatori (username, email, parolă hash, imagine profil, bio, verificare email)
-- **posts** — postări (titlu, conținut, autor, timestamps)
-- **comments** — comentarii la postări
-- **likes** — like-uri pe postări (unic per utilizator/postare)
-- **messages** — mesaje private între utilizatori
-- **password_reset_tokens** — token-uri temporare pentru resetare parolă
+## License
 
-## Licență
-
-Proiect personal.
+Personal project. Code is open for reading and learning; no redistribution intended.

@@ -1,0 +1,15 @@
+build/
+node_modules/
+frontend_app/node_modules/
+frontend_app/dist/
+public/assets/
+public/index.html
+public/uploads/
+.git/
+.github/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+*.bak.*
