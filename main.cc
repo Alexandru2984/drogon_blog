@@ -1,7 +1,9 @@
 #include <drogon/drogon.h>
 #include <json/json.h>
 #include <sodium.h>
+#include "helpers/AccessLog.h"
 #include "helpers/EmailHelper.h"
+#include "helpers/Ops.h"
 #include "helpers/Security.h"
 
 #include <iostream>
@@ -126,6 +128,12 @@ int main()
 
     // Rate limiting, CSRF (double-submit), and response security headers.
     security::registerAdvices();
+
+    // Structured JSON access log + request-ID propagation + metrics ingestion.
+    access_log::install();
+
+    // /healthz, /readyz, /metrics.
+    ops::install();
 
     std::cout << "Drogon listening (see config for port)..." << std::endl;
     drogon::app().run();

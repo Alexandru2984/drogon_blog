@@ -3,6 +3,8 @@
 #include <drogon/drogon_test.h>
 #include <sodium.h>
 
+#include "../helpers/AccessLog.h"
+#include "../helpers/Ops.h"
 #include "../helpers/Security.h"
 
 #include <cstdlib>
@@ -107,6 +109,10 @@ int main(int argc, char** argv)
     // Mirror production's security wiring (rate limit + CSRF + headers).
     // BLOG_DISABLE_RATE_LIMIT=1 (set above) keeps the limiter out of the way.
     security::registerAdvices();
+
+    // Observability: structured access log + metrics ingestion + ops routes.
+    access_log::install();
+    ops::install();
 
     std::promise<void> ready;
     auto readyFut = ready.get_future();

@@ -149,6 +149,12 @@ void EmailHelper::stop()
     if (g_worker.joinable()) g_worker.join();
 }
 
+std::size_t EmailHelper::queueDepth()
+{
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_queue.size();
+}
+
 std::string EmailHelper::generateToken(std::size_t length)
 {
     static const char chars[] =

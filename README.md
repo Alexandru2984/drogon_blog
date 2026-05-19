@@ -229,6 +229,26 @@ cmake --build build --target blog_test
 
 Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopback port, and hit it with the framework's HTTP client. Tests target a real PostgreSQL database (`blog_test_db`, see `test/setup.sql`) rather than mocks, so SQL behaviour and trigger logic are exercised end-to-end.
 
+## Observability
+
+| Endpoint   | Purpose                                                                    |
+|------------|----------------------------------------------------------------------------|
+| `/healthz` | Liveness probe. Always `200` once the process is up.                       |
+| `/readyz`  | Readiness probe. Runs `SELECT 1` against the configured DB; `503` on fail. |
+| `/metrics` | Prometheus text exposition. See below.                                     |
+
+**Structured access log.** Every request emits a single JSON line to stdout (captured by journald in production):
+
+```json
+{"ts":"2026-05-19T19:54:49.707Z","req_id":"2EfFX5Bt8f6-ehXx","method":"GET","path":"/posts","route":"/posts","status":200,"latency_ms":2.500,"bytes":12,"ip":"127.0.0.1"}
+```
+
+Request IDs are generated on entry (or honoured if the client supplied an `X-Request-Id` header) and echoed back in the response. `route` is the matched Drogon route pattern, so cardinality stays bounded across path parameters.
+
+**Metrics** include per-route request counters (`blog_http_requests_total{route,method,status}`), a latency histogram (`blog_http_request_duration_seconds`), the in-flight email queue depth, resident memory, and process uptime.
+
+By default `/metrics` is reachable only from the loopback interface; set `METRICS_TOKEN=<secret>` to require `Authorization: Bearer <secret>` instead, which is what production deployments behind nginx should use.
+
 ## Performance notes
 
 - **Read feed (`GET /posts`)** — one round-trip via `execSqlAsync`, no per-row author lookup. Drogon's connection pool is sized at 16 for default workloads.

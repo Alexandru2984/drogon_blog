@@ -22,4 +22,7 @@ public:
     static void sendPasswordResetEmail(const std::string& email,
                                        const std::string& username,
                                        const std::string& token);
+
+    // Pending jobs in the worker queue. Exposed for metrics.
+    static std::size_t queueDepth();
 };
