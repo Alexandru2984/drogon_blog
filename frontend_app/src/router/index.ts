@@ -9,6 +9,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/reset-password',    name: 'reset',         component: () => import('@/views/ResetPasswordView.vue') },
   { path: '/verify-email',      name: 'verify',        component: () => import('@/views/VerifyEmailView.vue') },
   { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true } },
+  { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue') },
   { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/:catchAll(.*)',     redirect: '/' },

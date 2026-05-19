@@ -10,6 +10,9 @@ class PostController : public drogon::HttpController<PostController>
     METHOD_LIST_BEGIN
     // Get all posts
     ADD_METHOD_TO(PostController::getAllPosts, "/posts", Get);
+    // Full-text search across title + content (must be registered before the
+    // /posts/{id} pattern so "/posts/search" doesn't get routed to getPost).
+    ADD_METHOD_TO(PostController::searchPosts, "/posts/search", Get);
     // Get single post
     ADD_METHOD_TO(PostController::getPost, "/posts/{1}", Get);
     // Create post
@@ -30,6 +33,8 @@ class PostController : public drogon::HttpController<PostController>
     
     void getAllPosts(const HttpRequestPtr &req,
                     std::function<void(const HttpResponsePtr &)> &&callback);
+    void searchPosts(const HttpRequestPtr &req,
+                     std::function<void(const HttpResponsePtr &)> &&callback);
     void getPost(const HttpRequestPtr &req,
                 std::function<void(const HttpResponsePtr &)> &&callback,
                 int postId);

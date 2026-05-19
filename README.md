@@ -199,10 +199,38 @@ drogon_blog/
 | POST   | `/posts/{id}/like`    | ✓     |                                      |
 | DELETE | `/posts/{id}/like`    | ✓     |                                      |
 | GET    | `/posts/{id}/likes`   | —     |                                      |
+| GET    | `/posts/search?q=`    | —     | Full-text search, ranked + highlighted |
 
 ### Comments, Users, Messages
 
 See `controllers/CommentController.h`, `UserController.h`, `MessageController.h` — same shape.
+
+## Full-text search
+
+`posts.search` is a `tsvector` column maintained as `GENERATED ALWAYS … STORED` from the title (weight `A`) and content (weight `B`), backed by a GIN index `idx_posts_search`. Because it's a generated column, every `INSERT`/`UPDATE` keeps the index live with no application logic and no triggers to babysit.
+
+`GET /posts/search?q=…` builds the query with `websearch_to_tsquery('english', …)`, which tolerates raw user input (quoted phrases, `OR`, `-negate`) without throwing on punctuation. Results are ordered by `ts_rank` and snippets are produced server-side via `ts_headline` with `<mark>` highlights:
+
+```json
+{
+  "query": "postgresql",
+  "count": 2,
+  "posts": [
+    {
+      "id": 4, "title": "PostgreSQL tsvector primer",
+      "snippet": "body discusses GIN indexes",
+      "rank": 0.6079, "author": {"id": 6, "username": "alice"}, ...
+    },
+    {
+      "id": 5, "title": "Drogon performance tuning",
+      "snippet": "title mentions <mark>postgresql</mark> once",
+      "rank": 0.2432, ...
+    }
+  ]
+}
+```
+
+The title-weighted hit is first because A > B; both posts appear in the same single round-trip via `execSqlAsync`.
 
 ## Schema
 

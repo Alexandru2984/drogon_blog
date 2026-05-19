@@ -29,15 +29,29 @@ CREATE TRIGGER trg_users_updated_at
 BEFORE UPDATE ON users
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Tabela postări
+-- Posts table. The `search` column is a GENERATED tsvector kept in sync with
+-- title + content automatically (no triggers needed). title is weighted higher
+-- (A) than content (B) so matches in the title rank above body matches.
 CREATE TABLE IF NOT EXISTS posts (
     id          INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id     INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title       TEXT        NOT NULL,
     content     TEXT        NOT NULL,
     created_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP   NOT NULL DEFAULT NOW()
+    updated_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    search      TSVECTOR    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(title,   '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(content, '')), 'B')
+    ) STORED
 );
+
+-- In-place migration for existing deployments where `posts` already exists
+-- without the FTS column.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS search TSVECTOR
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(title,   '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(content, '')), 'B')
+    ) STORED;
 
 DROP TRIGGER IF EXISTS trg_posts_updated_at ON posts;
 CREATE TRIGGER trg_posts_updated_at
@@ -92,3 +106,4 @@ CREATE INDEX IF NOT EXISTS idx_messages_sender         ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_receiver       ON messages(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_token    ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user     ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_posts_search            ON posts USING GIN(search);

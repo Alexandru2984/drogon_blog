@@ -15,9 +15,28 @@ export interface Post {
   author?: PostAuthor
 }
 
+export interface SearchHit {
+  id: number
+  title: string
+  snippet: string          // HTML; contains <mark>…</mark> highlights
+  rank: number
+  created_at: string
+  updated_at: string
+  author?: PostAuthor
+}
+
+export interface SearchResponse {
+  query: string
+  count: number
+  posts: SearchHit[]
+}
+
 export const postsApi = {
   list() {
     return api.get<{ posts: Post[] }>('/posts').then(r => r.data.posts)
+  },
+  search(q: string) {
+    return api.get<SearchResponse>('/posts/search', { params: { q } }).then(r => r.data)
   },
   byUser(userId: number) {
     return api.get<{ posts: Post[] }>(`/posts/user/${userId}`).then(r => r.data.posts)

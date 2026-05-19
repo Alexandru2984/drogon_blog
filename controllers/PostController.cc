@@ -58,6 +58,80 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         });
 }
 
+void PostController::searchPosts(const HttpRequestPtr &req,
+                                std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    const std::string q = req->getParameter("q");
+    if (q.empty() || q.size() > 256) {
+        Json::Value ret;
+        ret["error"] = "Missing or oversized query parameter `q`";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    // websearch_to_tsquery tolerates raw user input (quoted phrases, OR, -negate)
+    // without throwing on punctuation. ts_headline returns highlighted snippets;
+    // ts_rank orders by relevance, falling back to recency as a tiebreaker.
+    static const char* kSql =
+        "WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query) "
+        "SELECT p.id, p.title, "
+        "       ts_headline('english', p.content, q.query, "
+        "                   'MaxFragments=2,MaxWords=24,MinWords=8,"
+        "ShortWord=2,StartSel=<mark>,StopSel=</mark>') AS snippet, "
+        "       p.created_at, p.updated_at, "
+        "       u.id AS author_id, u.username AS author_username, "
+        "       u.profile_image AS author_profile_image, "
+        "       ts_rank(p.search, q.query) AS rank "
+        "FROM posts p "
+        "CROSS JOIN q "
+        "LEFT JOIN users u ON u.id = p.user_id "
+        "WHERE p.search @@ q.query "
+        "ORDER BY rank DESC, p.created_at DESC "
+        "LIMIT 50";
+
+    auto dbClient = drogon::app().getDbClient();
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, q](const Result& r) {
+            Json::Value ret;
+            ret["query"] = q;
+            ret["count"] = static_cast<Json::UInt>(r.size());
+            ret["posts"] = Json::Value(Json::arrayValue);
+
+            for (const auto& row : r) {
+                Json::Value post;
+                post["id"]         = row["id"].as<int64_t>();
+                post["title"]      = row["title"].as<std::string>();
+                post["snippet"]    = row["snippet"].as<std::string>();
+                post["created_at"] = row["created_at"].as<std::string>();
+                post["updated_at"] = row["updated_at"].as<std::string>();
+                post["rank"]       = row["rank"].as<double>();
+
+                if (!row["author_id"].isNull()) {
+                    post["author"]["id"]       = row["author_id"].as<int64_t>();
+                    post["author"]["username"] = row["author_username"].as<std::string>();
+                    if (!row["author_profile_image"].isNull()) {
+                        auto img = row["author_profile_image"].as<std::string>();
+                        if (!img.empty()) post["author"]["profile_image"] = img;
+                    }
+                }
+                ret["posts"].append(post);
+            }
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (searchPosts): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Search failed";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        q);
+}
+
 void PostController::getPost(const HttpRequestPtr &req,
                             std::function<void(const HttpResponsePtr &)> &&callback,
                             int postId)
