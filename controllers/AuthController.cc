@@ -51,14 +51,14 @@ void AuthController::registerUser(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     // Check if username or email already exists
     try {
         auto existingUser = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Users::Cols::_username, 
+            Criteria(drogon_model::blog_db::Users::Cols::_username, 
                     CompareOperator::EQ, username) ||
-            Criteria(drogon_model::sqlite3::Users::Cols::_email, 
+            Criteria(drogon_model::blog_db::Users::Cols::_email, 
                     CompareOperator::EQ, email)
         );
         
@@ -75,7 +75,7 @@ void AuthController::registerUser(const HttpRequestPtr &req,
     }
 
     // Create new user
-    drogon_model::sqlite3::Users newUser;
+    drogon_model::blog_db::Users newUser;
     newUser.setUsername(username);
     newUser.setEmail(email);
     newUser.setPasswordHash(hashPassword(password));
@@ -138,11 +138,11 @@ void AuthController::loginUser(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto users = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Users::Cols::_username, 
+            Criteria(drogon_model::blog_db::Users::Cols::_username, 
                     CompareOperator::EQ, username)
         );
 
@@ -219,7 +219,7 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
@@ -270,11 +270,11 @@ void AuthController::verifyEmail(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto users = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Users::Cols::_email_verification_token, 
+            Criteria(drogon_model::blog_db::Users::Cols::_email_verification_token, 
                     CompareOperator::EQ, token)
         );
 
@@ -343,12 +343,12 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
-    Mapper<drogon_model::sqlite3::PasswordResetTokens> tokenMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::PasswordResetTokens> tokenMapper(dbClient);
 
     try {
         auto users = userMapper.findBy(
-            Criteria(drogon_model::sqlite3::Users::Cols::_email, 
+            Criteria(drogon_model::blog_db::Users::Cols::_email, 
                     CompareOperator::EQ, email)
         );
 
@@ -367,7 +367,7 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
         std::string resetToken = EmailHelper::generateToken();
         
         // Create reset token record
-        drogon_model::sqlite3::PasswordResetTokens resetRecord;
+        drogon_model::blog_db::PasswordResetTokens resetRecord;
         resetRecord.setUserId(user.getValueOfId());
         resetRecord.setToken(resetToken);
         resetRecord.setExpiresAt(trantor::Date::now().after(3600)); // 1 hour expiry
@@ -416,12 +416,12 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::PasswordResetTokens> tokenMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::PasswordResetTokens> tokenMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
         auto tokens = tokenMapper.findBy(
-            Criteria(drogon_model::sqlite3::PasswordResetTokens::Cols::_token, 
+            Criteria(drogon_model::blog_db::PasswordResetTokens::Cols::_token, 
                     CompareOperator::EQ, token)
         );
 
@@ -495,11 +495,11 @@ void AuthController::resendVerification(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto users = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Users::Cols::_email, 
+            Criteria(drogon_model::blog_db::Users::Cols::_email, 
                     CompareOperator::EQ, email)
         );
 

@@ -31,7 +31,16 @@ add_executable(${PROJECT_NAME} main.cc)
 find_package(Drogon CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED libsodium)
+target_include_directories(${PROJECT_NAME} PRIVATE ${SODIUM_INCLUDE_DIRS})
+target_link_directories(${PROJECT_NAME} PRIVATE ${SODIUM_LIBRARY_DIRS})
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    Drogon::Drogon
+    CURL::libcurl
+    OpenSSL::SSL OpenSSL::Crypto
+    ${SODIUM_LIBRARIES}
+    brotlidec brotlienc)
 
 # ##############################################################################
 

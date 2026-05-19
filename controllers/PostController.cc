@@ -12,11 +12,11 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
                                 std::function<void(const HttpResponsePtr &)> &&callback)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> postMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> postMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto posts = postMapper.orderBy(drogon_model::sqlite3::Posts::Cols::_created_at, 
+        auto posts = postMapper.orderBy(drogon_model::blog_db::Posts::Cols::_created_at, 
                                        SortOrder::DESC).findAll();
 
         Json::Value ret;
@@ -60,8 +60,8 @@ void PostController::getPost(const HttpRequestPtr &req,
                             int postId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> postMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> postMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
         auto post = postMapper.findByPrimaryKey(postId);
@@ -131,9 +131,9 @@ void PostController::createPost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
-    drogon_model::sqlite3::Posts newPost;
+    drogon_model::blog_db::Posts newPost;
     newPost.setUserId(userIdOpt.value());
     newPost.setTitle(title);
     newPost.setContent(content);
@@ -186,7 +186,7 @@ void PostController::updatePost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
     try {
         auto post = mapper.findByPrimaryKey(postId);
@@ -245,7 +245,7 @@ void PostController::deletePost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
     try {
         auto post = mapper.findByPrimaryKey(postId);
@@ -281,11 +281,11 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
                                  int userId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Posts> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
     try {
         auto posts = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Posts::Cols::_user_id, 
+            Criteria(drogon_model::blog_db::Posts::Cols::_user_id, 
                     CompareOperator::EQ, userId)
         );
 
@@ -330,14 +330,14 @@ void PostController::likePost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Likes> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
 
     try {
         // Check if already liked
         auto existingLikes = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Likes::Cols::_post_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
                     CompareOperator::EQ, postId) &&
-            Criteria(drogon_model::sqlite3::Likes::Cols::_user_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_user_id, 
                     CompareOperator::EQ, userIdOpt.value())
         );
 
@@ -350,7 +350,7 @@ void PostController::likePost(const HttpRequestPtr &req,
             return;
         }
 
-        drogon_model::sqlite3::Likes newLike;
+        drogon_model::blog_db::Likes newLike;
         newLike.setPostId(postId);
         newLike.setUserId(userIdOpt.value());
 
@@ -387,13 +387,13 @@ void PostController::unlikePost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Likes> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
 
     try {
         auto likes = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Likes::Cols::_post_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
                     CompareOperator::EQ, postId) &&
-            Criteria(drogon_model::sqlite3::Likes::Cols::_user_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_user_id, 
                     CompareOperator::EQ, userIdOpt.value())
         );
 
@@ -427,11 +427,11 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
                                   int postId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Likes> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
 
     try {
         auto likes = mapper.findBy(
-            Criteria(drogon_model::sqlite3::Likes::Cols::_post_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
                     CompareOperator::EQ, postId)
         );
 

@@ -12,13 +12,13 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                                        int postId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Comments> commentMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Comments> commentMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto comments = commentMapper.orderBy(drogon_model::sqlite3::Comments::Cols::_created_at, 
+        auto comments = commentMapper.orderBy(drogon_model::blog_db::Comments::Cols::_created_at, 
                                              SortOrder::ASC)
-                                    .findBy(Criteria(drogon_model::sqlite3::Comments::Cols::_post_id, 
+                                    .findBy(Criteria(drogon_model::blog_db::Comments::Cols::_post_id, 
                                                     CompareOperator::EQ, postId));
 
         Json::Value ret;
@@ -92,9 +92,9 @@ void CommentController::createComment(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Comments> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
 
-    drogon_model::sqlite3::Comments newComment;
+    drogon_model::blog_db::Comments newComment;
     newComment.setPostId(postId);
     newComment.setUserId(userIdOpt.value());
     newComment.setContent(content);
@@ -147,7 +147,7 @@ void CommentController::updateComment(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Comments> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
 
     try {
         auto comment = mapper.findByPrimaryKey(commentId);
@@ -202,7 +202,7 @@ void CommentController::deleteComment(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Comments> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
 
     try {
         auto comment = mapper.findByPrimaryKey(commentId);

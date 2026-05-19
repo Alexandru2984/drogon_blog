@@ -36,7 +36,7 @@ using DbClientPtr = std::shared_ptr<DbClient>;
 }
 namespace drogon_model
 {
-namespace sqlite3
+namespace blog_db
 {
 
 class Messages
@@ -56,7 +56,7 @@ class Messages
     static const std::string tableName;
     static const bool hasPrimaryKey;
     static const std::string primaryKeyName;
-    using PrimaryKeyType = int64_t;
+    using PrimaryKeyType = int32_t;
     const PrimaryKeyType &getPrimaryKey() const;
 
     /**
@@ -103,28 +103,27 @@ class Messages
 
     /**  For column id  */
     ///Get the value of the column id, returns the default value if the column is null
-    const int64_t &getValueOfId() const noexcept;
+    const int32_t &getValueOfId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getId() const noexcept;
+    const std::shared_ptr<int32_t> &getId() const noexcept;
     ///Set the value of the column id
-    void setId(const int64_t &pId) noexcept;
-    void setIdToNull() noexcept;
+    void setId(const int32_t &pId) noexcept;
 
     /**  For column sender_id  */
     ///Get the value of the column sender_id, returns the default value if the column is null
-    const int64_t &getValueOfSenderId() const noexcept;
+    const int32_t &getValueOfSenderId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getSenderId() const noexcept;
+    const std::shared_ptr<int32_t> &getSenderId() const noexcept;
     ///Set the value of the column sender_id
-    void setSenderId(const int64_t &pSenderId) noexcept;
+    void setSenderId(const int32_t &pSenderId) noexcept;
 
     /**  For column receiver_id  */
     ///Get the value of the column receiver_id, returns the default value if the column is null
-    const int64_t &getValueOfReceiverId() const noexcept;
+    const int32_t &getValueOfReceiverId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getReceiverId() const noexcept;
+    const std::shared_ptr<int32_t> &getReceiverId() const noexcept;
     ///Set the value of the column receiver_id
-    void setReceiverId(const int64_t &pReceiverId) noexcept;
+    void setReceiverId(const int32_t &pReceiverId) noexcept;
 
     /**  For column content  */
     ///Get the value of the column content, returns the default value if the column is null
@@ -137,12 +136,11 @@ class Messages
 
     /**  For column is_read  */
     ///Get the value of the column is_read, returns the default value if the column is null
-    const int64_t &getValueOfIsRead() const noexcept;
+    const int32_t &getValueOfIsRead() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getIsRead() const noexcept;
+    const std::shared_ptr<int32_t> &getIsRead() const noexcept;
     ///Set the value of the column is_read
-    void setIsRead(const int64_t &pIsRead) noexcept;
-    void setIsReadToNull() noexcept;
+    void setIsRead(const int32_t &pIsRead) noexcept;
 
     /**  For column created_at  */
     ///Get the value of the column created_at, returns the default value if the column is null
@@ -151,7 +149,6 @@ class Messages
     const std::shared_ptr<::trantor::Date> &getCreatedAt() const noexcept;
     ///Set the value of the column created_at
     void setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept;
-    void setCreatedAtToNull() noexcept;
 
 
     static size_t getColumnNumber() noexcept {  return 6;  }
@@ -176,11 +173,11 @@ class Messages
     void updateArgs(drogon::orm::internal::SqlBinder &binder) const;
     ///For mysql or sqlite3
     void updateId(const uint64_t id);
-    std::shared_ptr<int64_t> id_;
-    std::shared_ptr<int64_t> senderId_;
-    std::shared_ptr<int64_t> receiverId_;
+    std::shared_ptr<int32_t> id_;
+    std::shared_ptr<int32_t> senderId_;
+    std::shared_ptr<int32_t> receiverId_;
     std::shared_ptr<std::string> content_;
-    std::shared_ptr<int64_t> isRead_;
+    std::shared_ptr<int32_t> isRead_;
     std::shared_ptr<::trantor::Date> createdAt_;
     struct MetaData
     {
@@ -197,13 +194,13 @@ class Messages
   public:
     static const std::string &sqlForFindingByPrimaryKey()
     {
-        static const std::string sql="select * from " + tableName + " where id = ?";
+        static const std::string sql="select * from " + tableName + " where id = $1";
         return sql;
     }
 
     static const std::string &sqlForDeletingByPrimaryKey()
     {
-        static const std::string sql="delete from " + tableName + " where id = ?";
+        static const std::string sql="delete from " + tableName + " where id = $1";
         return sql;
     }
     std::string sqlForInserting(bool &needSelection) const
@@ -211,6 +208,8 @@ class Messages
         std::string sql="insert into " + tableName + " (";
         size_t parametersCount = 0;
         needSelection = false;
+            sql += "id,";
+            ++parametersCount;
         if(dirtyFlag_[1])
         {
             sql += "sender_id,";
@@ -226,24 +225,19 @@ class Messages
             sql += "content,";
             ++parametersCount;
         }
-        if(dirtyFlag_[4])
-        {
-            sql += "is_read,";
-            ++parametersCount;
-        }
+        sql += "is_read,";
+        ++parametersCount;
         if(!dirtyFlag_[4])
         {
             needSelection=true;
         }
-        if(dirtyFlag_[5])
-        {
-            sql += "created_at,";
-            ++parametersCount;
-        }
+        sql += "created_at,";
+        ++parametersCount;
         if(!dirtyFlag_[5])
         {
             needSelection=true;
         }
+        needSelection=true;
         if(parametersCount > 0)
         {
             sql[sql.length()-1]=')';
@@ -252,39 +246,58 @@ class Messages
         else
             sql += ") values (";
 
+        int placeholder=1;
+        char placeholderStr[64];
+        size_t n=0;
+        sql +="default,";
         if(dirtyFlag_[1])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[2])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[3])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[4])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(dirtyFlag_[5])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(parametersCount > 0)
         {
             sql.resize(sql.length() - 1);
         }
-        sql.append(1, ')');
+        if(needSelection)
+        {
+            sql.append(") returning *");
+        }
+        else
+        {
+            sql.append(1, ')');
+        }
         LOG_TRACE << sql;
         return sql;
     }
 };
-} // namespace sqlite3
+} // namespace blog_db
 } // namespace drogon_model

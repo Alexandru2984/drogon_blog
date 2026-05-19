@@ -11,25 +11,25 @@
 
 using namespace drogon;
 using namespace drogon::orm;
-using namespace drogon_model::sqlite3;
+using namespace drogon_model::blog_db;
 
-const std::string Messages::Cols::_id = "id";
-const std::string Messages::Cols::_sender_id = "sender_id";
-const std::string Messages::Cols::_receiver_id = "receiver_id";
-const std::string Messages::Cols::_content = "content";
-const std::string Messages::Cols::_is_read = "is_read";
-const std::string Messages::Cols::_created_at = "created_at";
+const std::string Messages::Cols::_id = "\"id\"";
+const std::string Messages::Cols::_sender_id = "\"sender_id\"";
+const std::string Messages::Cols::_receiver_id = "\"receiver_id\"";
+const std::string Messages::Cols::_content = "\"content\"";
+const std::string Messages::Cols::_is_read = "\"is_read\"";
+const std::string Messages::Cols::_created_at = "\"created_at\"";
 const std::string Messages::primaryKeyName = "id";
 const bool Messages::hasPrimaryKey = true;
-const std::string Messages::tableName = "messages";
+const std::string Messages::tableName = "\"messages\"";
 
 const std::vector<typename Messages::MetaData> Messages::metaData_={
-{"id","int64_t","integer",8,1,1,0},
-{"sender_id","int64_t","integer",8,0,0,1},
-{"receiver_id","int64_t","integer",8,0,0,1},
+{"id","int32_t","integer",4,1,1,1},
+{"sender_id","int32_t","integer",4,0,0,1},
+{"receiver_id","int32_t","integer",4,0,0,1},
 {"content","std::string","text",0,0,0,1},
-{"is_read","int64_t","integer",8,0,0,0},
-{"created_at","::trantor::Date","datetime",0,0,0,0}
+{"is_read","int32_t","integer",4,0,0,1},
+{"created_at","::trantor::Date","timestamp without time zone",0,0,0,1}
 };
 const std::string &Messages::getColumnName(size_t index) noexcept(false)
 {
@@ -42,15 +42,15 @@ Messages::Messages(const Row &r, const ssize_t indexOffset) noexcept
     {
         if(!r["id"].isNull())
         {
-            id_=std::make_shared<int64_t>(r["id"].as<int64_t>());
+            id_=std::make_shared<int32_t>(r["id"].as<int32_t>());
         }
         if(!r["sender_id"].isNull())
         {
-            senderId_=std::make_shared<int64_t>(r["sender_id"].as<int64_t>());
+            senderId_=std::make_shared<int32_t>(r["sender_id"].as<int32_t>());
         }
         if(!r["receiver_id"].isNull())
         {
-            receiverId_=std::make_shared<int64_t>(r["receiver_id"].as<int64_t>());
+            receiverId_=std::make_shared<int32_t>(r["receiver_id"].as<int32_t>());
         }
         if(!r["content"].isNull())
         {
@@ -58,7 +58,7 @@ Messages::Messages(const Row &r, const ssize_t indexOffset) noexcept
         }
         if(!r["is_read"].isNull())
         {
-            isRead_=std::make_shared<int64_t>(r["is_read"].as<int64_t>());
+            isRead_=std::make_shared<int32_t>(r["is_read"].as<int32_t>());
         }
         if(!r["created_at"].isNull())
         {
@@ -95,17 +95,17 @@ Messages::Messages(const Row &r, const ssize_t indexOffset) noexcept
         index = offset + 0;
         if(!r[index].isNull())
         {
-            id_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            id_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 1;
         if(!r[index].isNull())
         {
-            senderId_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            senderId_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 2;
         if(!r[index].isNull())
         {
-            receiverId_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            receiverId_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 3;
         if(!r[index].isNull())
@@ -115,7 +115,7 @@ Messages::Messages(const Row &r, const ssize_t indexOffset) noexcept
         index = offset + 4;
         if(!r[index].isNull())
         {
-            isRead_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            isRead_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 5;
         if(!r[index].isNull())
@@ -156,7 +156,7 @@ Messages::Messages(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[0] = true;
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -164,7 +164,7 @@ Messages::Messages(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            senderId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            senderId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -172,7 +172,7 @@ Messages::Messages(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[2] = true;
         if(!pJson[pMasqueradingVector[2]].isNull())
         {
-            receiverId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[2]].asInt64());
+            receiverId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[2]].asInt64());
         }
     }
     if(!pMasqueradingVector[3].empty() && pJson.isMember(pMasqueradingVector[3]))
@@ -188,7 +188,7 @@ Messages::Messages(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[4] = true;
         if(!pJson[pMasqueradingVector[4]].isNull())
         {
-            isRead_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[4]].asInt64());
+            isRead_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[4]].asInt64());
         }
     }
     if(!pMasqueradingVector[5].empty() && pJson.isMember(pMasqueradingVector[5]))
@@ -226,7 +226,7 @@ Messages::Messages(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[0]=true;
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("sender_id"))
@@ -234,7 +234,7 @@ Messages::Messages(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[1]=true;
         if(!pJson["sender_id"].isNull())
         {
-            senderId_=std::make_shared<int64_t>((int64_t)pJson["sender_id"].asInt64());
+            senderId_=std::make_shared<int32_t>((int32_t)pJson["sender_id"].asInt64());
         }
     }
     if(pJson.isMember("receiver_id"))
@@ -242,7 +242,7 @@ Messages::Messages(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[2]=true;
         if(!pJson["receiver_id"].isNull())
         {
-            receiverId_=std::make_shared<int64_t>((int64_t)pJson["receiver_id"].asInt64());
+            receiverId_=std::make_shared<int32_t>((int32_t)pJson["receiver_id"].asInt64());
         }
     }
     if(pJson.isMember("content"))
@@ -258,7 +258,7 @@ Messages::Messages(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[4]=true;
         if(!pJson["is_read"].isNull())
         {
-            isRead_=std::make_shared<int64_t>((int64_t)pJson["is_read"].asInt64());
+            isRead_=std::make_shared<int32_t>((int32_t)pJson["is_read"].asInt64());
         }
     }
     if(pJson.isMember("created_at"))
@@ -301,7 +301,7 @@ void Messages::updateByMasqueradedJson(const Json::Value &pJson,
     {
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -309,7 +309,7 @@ void Messages::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            senderId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            senderId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -317,7 +317,7 @@ void Messages::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[2] = true;
         if(!pJson[pMasqueradingVector[2]].isNull())
         {
-            receiverId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[2]].asInt64());
+            receiverId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[2]].asInt64());
         }
     }
     if(!pMasqueradingVector[3].empty() && pJson.isMember(pMasqueradingVector[3]))
@@ -333,7 +333,7 @@ void Messages::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[4] = true;
         if(!pJson[pMasqueradingVector[4]].isNull())
         {
-            isRead_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[4]].asInt64());
+            isRead_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[4]].asInt64());
         }
     }
     if(!pMasqueradingVector[5].empty() && pJson.isMember(pMasqueradingVector[5]))
@@ -370,7 +370,7 @@ void Messages::updateByJson(const Json::Value &pJson) noexcept(false)
     {
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("sender_id"))
@@ -378,7 +378,7 @@ void Messages::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[1] = true;
         if(!pJson["sender_id"].isNull())
         {
-            senderId_=std::make_shared<int64_t>((int64_t)pJson["sender_id"].asInt64());
+            senderId_=std::make_shared<int32_t>((int32_t)pJson["sender_id"].asInt64());
         }
     }
     if(pJson.isMember("receiver_id"))
@@ -386,7 +386,7 @@ void Messages::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[2] = true;
         if(!pJson["receiver_id"].isNull())
         {
-            receiverId_=std::make_shared<int64_t>((int64_t)pJson["receiver_id"].asInt64());
+            receiverId_=std::make_shared<int32_t>((int32_t)pJson["receiver_id"].asInt64());
         }
     }
     if(pJson.isMember("content"))
@@ -402,7 +402,7 @@ void Messages::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[4] = true;
         if(!pJson["is_read"].isNull())
         {
-            isRead_=std::make_shared<int64_t>((int64_t)pJson["is_read"].asInt64());
+            isRead_=std::make_shared<int32_t>((int32_t)pJson["is_read"].asInt64());
         }
     }
     if(pJson.isMember("created_at"))
@@ -433,25 +433,20 @@ void Messages::updateByJson(const Json::Value &pJson) noexcept(false)
     }
 }
 
-const int64_t &Messages::getValueOfId() const noexcept
+const int32_t &Messages::getValueOfId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(id_)
         return *id_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Messages::getId() const noexcept
+const std::shared_ptr<int32_t> &Messages::getId() const noexcept
 {
     return id_;
 }
-void Messages::setId(const int64_t &pId) noexcept
+void Messages::setId(const int32_t &pId) noexcept
 {
-    id_ = std::make_shared<int64_t>(pId);
-    dirtyFlag_[0] = true;
-}
-void Messages::setIdToNull() noexcept
-{
-    id_.reset();
+    id_ = std::make_shared<int32_t>(pId);
     dirtyFlag_[0] = true;
 }
 const typename Messages::PrimaryKeyType & Messages::getPrimaryKey() const
@@ -460,37 +455,37 @@ const typename Messages::PrimaryKeyType & Messages::getPrimaryKey() const
     return *id_;
 }
 
-const int64_t &Messages::getValueOfSenderId() const noexcept
+const int32_t &Messages::getValueOfSenderId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(senderId_)
         return *senderId_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Messages::getSenderId() const noexcept
+const std::shared_ptr<int32_t> &Messages::getSenderId() const noexcept
 {
     return senderId_;
 }
-void Messages::setSenderId(const int64_t &pSenderId) noexcept
+void Messages::setSenderId(const int32_t &pSenderId) noexcept
 {
-    senderId_ = std::make_shared<int64_t>(pSenderId);
+    senderId_ = std::make_shared<int32_t>(pSenderId);
     dirtyFlag_[1] = true;
 }
 
-const int64_t &Messages::getValueOfReceiverId() const noexcept
+const int32_t &Messages::getValueOfReceiverId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(receiverId_)
         return *receiverId_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Messages::getReceiverId() const noexcept
+const std::shared_ptr<int32_t> &Messages::getReceiverId() const noexcept
 {
     return receiverId_;
 }
-void Messages::setReceiverId(const int64_t &pReceiverId) noexcept
+void Messages::setReceiverId(const int32_t &pReceiverId) noexcept
 {
-    receiverId_ = std::make_shared<int64_t>(pReceiverId);
+    receiverId_ = std::make_shared<int32_t>(pReceiverId);
     dirtyFlag_[2] = true;
 }
 
@@ -516,25 +511,20 @@ void Messages::setContent(std::string &&pContent) noexcept
     dirtyFlag_[3] = true;
 }
 
-const int64_t &Messages::getValueOfIsRead() const noexcept
+const int32_t &Messages::getValueOfIsRead() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(isRead_)
         return *isRead_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Messages::getIsRead() const noexcept
+const std::shared_ptr<int32_t> &Messages::getIsRead() const noexcept
 {
     return isRead_;
 }
-void Messages::setIsRead(const int64_t &pIsRead) noexcept
+void Messages::setIsRead(const int32_t &pIsRead) noexcept
 {
-    isRead_ = std::make_shared<int64_t>(pIsRead);
-    dirtyFlag_[4] = true;
-}
-void Messages::setIsReadToNull() noexcept
-{
-    isRead_.reset();
+    isRead_ = std::make_shared<int32_t>(pIsRead);
     dirtyFlag_[4] = true;
 }
 
@@ -554,15 +544,9 @@ void Messages::setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept
     createdAt_ = std::make_shared<::trantor::Date>(pCreatedAt);
     dirtyFlag_[5] = true;
 }
-void Messages::setCreatedAtToNull() noexcept
-{
-    createdAt_.reset();
-    dirtyFlag_[5] = true;
-}
 
 void Messages::updateId(const uint64_t id)
 {
-    id_ = std::make_shared<int64_t>(static_cast<int64_t>(id));
 }
 
 const std::vector<std::string> &Messages::insertColumns() noexcept
@@ -725,7 +709,7 @@ Json::Value Messages::toJson() const
     Json::Value ret;
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -733,7 +717,7 @@ Json::Value Messages::toJson() const
     }
     if(getSenderId())
     {
-        ret["sender_id"]=(Json::Int64)getValueOfSenderId();
+        ret["sender_id"]=getValueOfSenderId();
     }
     else
     {
@@ -741,7 +725,7 @@ Json::Value Messages::toJson() const
     }
     if(getReceiverId())
     {
-        ret["receiver_id"]=(Json::Int64)getValueOfReceiverId();
+        ret["receiver_id"]=getValueOfReceiverId();
     }
     else
     {
@@ -757,7 +741,7 @@ Json::Value Messages::toJson() const
     }
     if(getIsRead())
     {
-        ret["is_read"]=(Json::Int64)getValueOfIsRead();
+        ret["is_read"]=getValueOfIsRead();
     }
     else
     {
@@ -789,7 +773,7 @@ Json::Value Messages::toMasqueradedJson(
         {
             if(getId())
             {
-                ret[pMasqueradingVector[0]]=(Json::Int64)getValueOfId();
+                ret[pMasqueradingVector[0]]=getValueOfId();
             }
             else
             {
@@ -800,7 +784,7 @@ Json::Value Messages::toMasqueradedJson(
         {
             if(getSenderId())
             {
-                ret[pMasqueradingVector[1]]=(Json::Int64)getValueOfSenderId();
+                ret[pMasqueradingVector[1]]=getValueOfSenderId();
             }
             else
             {
@@ -811,7 +795,7 @@ Json::Value Messages::toMasqueradedJson(
         {
             if(getReceiverId())
             {
-                ret[pMasqueradingVector[2]]=(Json::Int64)getValueOfReceiverId();
+                ret[pMasqueradingVector[2]]=getValueOfReceiverId();
             }
             else
             {
@@ -833,7 +817,7 @@ Json::Value Messages::toMasqueradedJson(
         {
             if(getIsRead())
             {
-                ret[pMasqueradingVector[4]]=(Json::Int64)getValueOfIsRead();
+                ret[pMasqueradingVector[4]]=getValueOfIsRead();
             }
             else
             {
@@ -856,7 +840,7 @@ Json::Value Messages::toMasqueradedJson(
     LOG_ERROR << "Masquerade failed";
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -864,7 +848,7 @@ Json::Value Messages::toMasqueradedJson(
     }
     if(getSenderId())
     {
-        ret["sender_id"]=(Json::Int64)getValueOfSenderId();
+        ret["sender_id"]=getValueOfSenderId();
     }
     else
     {
@@ -872,7 +856,7 @@ Json::Value Messages::toMasqueradedJson(
     }
     if(getReceiverId())
     {
-        ret["receiver_id"]=(Json::Int64)getValueOfReceiverId();
+        ret["receiver_id"]=getValueOfReceiverId();
     }
     else
     {
@@ -888,7 +872,7 @@ Json::Value Messages::toMasqueradedJson(
     }
     if(getIsRead())
     {
-        ret["is_read"]=(Json::Int64)getValueOfIsRead();
+        ret["is_read"]=getValueOfIsRead();
     }
     else
     {
@@ -1136,16 +1120,17 @@ bool Messages::validJsonOfField(size_t index,
     switch(index)
     {
         case 0:
+            if(pJson.isNull())
+            {
+                err="The " + fieldName + " column cannot be null";
+                return false;
+            }
             if(isForCreation)
             {
                 err="The automatic primary key cannot be set";
                 return false;
             }
-            if(pJson.isNull())
-            {
-                return true;
-            }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1157,7 +1142,7 @@ bool Messages::validJsonOfField(size_t index,
                 err="The " + fieldName + " column cannot be null";
                 return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1169,7 +1154,7 @@ bool Messages::validJsonOfField(size_t index,
                 err="The " + fieldName + " column cannot be null";
                 return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1190,9 +1175,10 @@ bool Messages::validJsonOfField(size_t index,
         case 4:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1201,7 +1187,8 @@ bool Messages::validJsonOfField(size_t index,
         case 5:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
             if(!pJson.isString())
             {

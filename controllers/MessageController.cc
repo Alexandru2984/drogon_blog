@@ -23,13 +23,13 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> messageMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> messageMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto messages = messageMapper.orderBy(drogon_model::sqlite3::Messages::Cols::_created_at, 
+        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
                                              SortOrder::DESC)
-                                    .findBy(Criteria(drogon_model::sqlite3::Messages::Cols::_receiver_id, 
+                                    .findBy(Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
                                                     CompareOperator::EQ, userIdOpt.value()));
 
         Json::Value ret;
@@ -83,13 +83,13 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> messageMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> messageMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto messages = messageMapper.orderBy(drogon_model::sqlite3::Messages::Cols::_created_at, 
+        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
                                              SortOrder::DESC)
-                                    .findBy(Criteria(drogon_model::sqlite3::Messages::Cols::_sender_id, 
+                                    .findBy(Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
                                                     CompareOperator::EQ, userIdOpt.value()));
 
         Json::Value ret;
@@ -144,21 +144,21 @@ void MessageController::getConversation(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> messageMapper(dbClient);
-    Mapper<drogon_model::sqlite3::Users> userMapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> messageMapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
         // Get messages between current user and other user
-        auto messages = messageMapper.orderBy(drogon_model::sqlite3::Messages::Cols::_created_at, 
+        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
                                              SortOrder::ASC)
                                     .findBy(
-                                        (Criteria(drogon_model::sqlite3::Messages::Cols::_sender_id, 
+                                        (Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
                                                 CompareOperator::EQ, userIdOpt.value()) &&
-                                         Criteria(drogon_model::sqlite3::Messages::Cols::_receiver_id, 
+                                         Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
                                                 CompareOperator::EQ, otherUserId)) ||
-                                        (Criteria(drogon_model::sqlite3::Messages::Cols::_sender_id, 
+                                        (Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
                                                 CompareOperator::EQ, otherUserId) &&
-                                         Criteria(drogon_model::sqlite3::Messages::Cols::_receiver_id, 
+                                         Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
                                                 CompareOperator::EQ, userIdOpt.value()))
                                     );
 
@@ -236,9 +236,9 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> mapper(dbClient);
 
-    drogon_model::sqlite3::Messages newMessage;
+    drogon_model::blog_db::Messages newMessage;
     newMessage.setSenderId(userIdOpt.value());
     newMessage.setReceiverId(receiverId);
     newMessage.setContent(content);
@@ -283,7 +283,7 @@ void MessageController::markAsRead(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> mapper(dbClient);
 
     try {
         auto message = mapper.findByPrimaryKey(messageId);
@@ -332,7 +332,7 @@ void MessageController::deleteMessage(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Messages> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Messages> mapper(dbClient);
 
     try {
         auto message = mapper.findByPrimaryKey(messageId);

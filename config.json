@@ -10,27 +10,23 @@
     ],
     "db_clients": [
         {
-            //name: Name of the client,'default' by default
             "name": "default",
-            //rdbms: Server type, postgresql,mysql or sqlite3, "postgresql" by default
-            "rdbms": "sqlite3",
-            //filename: Sqlite3 db file name
-            "filename": "blog.db",
-            //is_fast: false by default, if it is true, the client is faster but user can't call
-            //any synchronous interface of it.
+            "rdbms": "postgresql",
+            "host": "127.0.0.1",
+            "port": 5432,
+            "dbname": "blog_db",
+            "user": "blog_user",
+            "passwd": "${DB_PASSWORD}",
             "is_fast": false,
-            //number_of_connections: 1 by default, if the 'is_fast' is true, the number is the number of  
-            //connections per IO thread, otherwise it is the total number of all connections.  
-            "number_of_connections": 1,
-            //timeout: -1.0 by default, in seconds, the timeout for executing a SQL query.
-            //zero or negative value means no timeout.
-            "timeout": -1.0
+            "number_of_connections": 16,
+            "timeout": -1.0,
+            "auto_batch": false
         }
     ],
     "app": {
         //number_of_threads: The number of IO threads, 1 by default, if the value is set to 0, the number of threads
         //is the number of CPU cores
-        "number_of_threads": 1,
+        "number_of_threads": 0,
         //app: Set application global parameters.
         //enable_session: False by default
         "enable_session": true,

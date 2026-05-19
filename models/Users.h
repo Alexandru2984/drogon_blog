@@ -36,7 +36,7 @@ using DbClientPtr = std::shared_ptr<DbClient>;
 }
 namespace drogon_model
 {
-namespace sqlite3
+namespace blog_db
 {
 
 class Users
@@ -50,18 +50,18 @@ class Users
         static const std::string _password_hash;
         static const std::string _profile_image;
         static const std::string _bio;
-        static const std::string _created_at;
-        static const std::string _updated_at;
         static const std::string _email_verified;
         static const std::string _email_verification_token;
         static const std::string _email_verification_expires;
+        static const std::string _created_at;
+        static const std::string _updated_at;
     };
 
     static const int primaryKeyNumber;
     static const std::string tableName;
     static const bool hasPrimaryKey;
     static const std::string primaryKeyName;
-    using PrimaryKeyType = int64_t;
+    using PrimaryKeyType = int32_t;
     const PrimaryKeyType &getPrimaryKey() const;
 
     /**
@@ -108,12 +108,11 @@ class Users
 
     /**  For column id  */
     ///Get the value of the column id, returns the default value if the column is null
-    const int64_t &getValueOfId() const noexcept;
+    const int32_t &getValueOfId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getId() const noexcept;
+    const std::shared_ptr<int32_t> &getId() const noexcept;
     ///Set the value of the column id
-    void setId(const int64_t &pId) noexcept;
-    void setIdToNull() noexcept;
+    void setId(const int32_t &pId) noexcept;
 
     /**  For column username  */
     ///Get the value of the column username, returns the default value if the column is null
@@ -162,31 +161,13 @@ class Users
     void setBio(std::string &&pBio) noexcept;
     void setBioToNull() noexcept;
 
-    /**  For column created_at  */
-    ///Get the value of the column created_at, returns the default value if the column is null
-    const ::trantor::Date &getValueOfCreatedAt() const noexcept;
-    ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<::trantor::Date> &getCreatedAt() const noexcept;
-    ///Set the value of the column created_at
-    void setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept;
-    void setCreatedAtToNull() noexcept;
-
-    /**  For column updated_at  */
-    ///Get the value of the column updated_at, returns the default value if the column is null
-    const ::trantor::Date &getValueOfUpdatedAt() const noexcept;
-    ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<::trantor::Date> &getUpdatedAt() const noexcept;
-    ///Set the value of the column updated_at
-    void setUpdatedAt(const ::trantor::Date &pUpdatedAt) noexcept;
-    void setUpdatedAtToNull() noexcept;
-
     /**  For column email_verified  */
     ///Get the value of the column email_verified, returns the default value if the column is null
-    const int64_t &getValueOfEmailVerified() const noexcept;
+    const int32_t &getValueOfEmailVerified() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getEmailVerified() const noexcept;
+    const std::shared_ptr<int32_t> &getEmailVerified() const noexcept;
     ///Set the value of the column email_verified
-    void setEmailVerified(const int64_t &pEmailVerified) noexcept;
+    void setEmailVerified(const int32_t &pEmailVerified) noexcept;
     void setEmailVerifiedToNull() noexcept;
 
     /**  For column email_verification_token  */
@@ -207,6 +188,22 @@ class Users
     ///Set the value of the column email_verification_expires
     void setEmailVerificationExpires(const ::trantor::Date &pEmailVerificationExpires) noexcept;
     void setEmailVerificationExpiresToNull() noexcept;
+
+    /**  For column created_at  */
+    ///Get the value of the column created_at, returns the default value if the column is null
+    const ::trantor::Date &getValueOfCreatedAt() const noexcept;
+    ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
+    const std::shared_ptr<::trantor::Date> &getCreatedAt() const noexcept;
+    ///Set the value of the column created_at
+    void setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept;
+
+    /**  For column updated_at  */
+    ///Get the value of the column updated_at, returns the default value if the column is null
+    const ::trantor::Date &getValueOfUpdatedAt() const noexcept;
+    ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
+    const std::shared_ptr<::trantor::Date> &getUpdatedAt() const noexcept;
+    ///Set the value of the column updated_at
+    void setUpdatedAt(const ::trantor::Date &pUpdatedAt) noexcept;
 
 
     static size_t getColumnNumber() noexcept {  return 11;  }
@@ -231,17 +228,17 @@ class Users
     void updateArgs(drogon::orm::internal::SqlBinder &binder) const;
     ///For mysql or sqlite3
     void updateId(const uint64_t id);
-    std::shared_ptr<int64_t> id_;
+    std::shared_ptr<int32_t> id_;
     std::shared_ptr<std::string> username_;
     std::shared_ptr<std::string> email_;
     std::shared_ptr<std::string> passwordHash_;
     std::shared_ptr<std::string> profileImage_;
     std::shared_ptr<std::string> bio_;
-    std::shared_ptr<::trantor::Date> createdAt_;
-    std::shared_ptr<::trantor::Date> updatedAt_;
-    std::shared_ptr<int64_t> emailVerified_;
+    std::shared_ptr<int32_t> emailVerified_;
     std::shared_ptr<std::string> emailVerificationToken_;
     std::shared_ptr<::trantor::Date> emailVerificationExpires_;
+    std::shared_ptr<::trantor::Date> createdAt_;
+    std::shared_ptr<::trantor::Date> updatedAt_;
     struct MetaData
     {
         const std::string colName_;
@@ -257,13 +254,13 @@ class Users
   public:
     static const std::string &sqlForFindingByPrimaryKey()
     {
-        static const std::string sql="select * from " + tableName + " where id = ?";
+        static const std::string sql="select * from " + tableName + " where id = $1";
         return sql;
     }
 
     static const std::string &sqlForDeletingByPrimaryKey()
     {
-        static const std::string sql="delete from " + tableName + " where id = ?";
+        static const std::string sql="delete from " + tableName + " where id = $1";
         return sql;
     }
     std::string sqlForInserting(bool &needSelection) const
@@ -271,6 +268,8 @@ class Users
         std::string sql="insert into " + tableName + " (";
         size_t parametersCount = 0;
         needSelection = false;
+            sql += "id,";
+            ++parametersCount;
         if(dirtyFlag_[1])
         {
             sql += "username,";
@@ -291,64 +290,41 @@ class Users
             sql += "profile_image,";
             ++parametersCount;
         }
-        if(!dirtyFlag_[4])
-        {
-            needSelection=true;
-        }
-        if(dirtyFlag_[5])
-        {
-            sql += "bio,";
-            ++parametersCount;
-        }
+        sql += "bio,";
+        ++parametersCount;
         if(!dirtyFlag_[5])
         {
             needSelection=true;
         }
-        if(dirtyFlag_[6])
-        {
-            sql += "created_at,";
-            ++parametersCount;
-        }
+        sql += "email_verified,";
+        ++parametersCount;
         if(!dirtyFlag_[6])
         {
             needSelection=true;
         }
         if(dirtyFlag_[7])
         {
-            sql += "updated_at,";
-            ++parametersCount;
-        }
-        if(!dirtyFlag_[7])
-        {
-            needSelection=true;
-        }
-        if(dirtyFlag_[8])
-        {
-            sql += "email_verified,";
-            ++parametersCount;
-        }
-        if(!dirtyFlag_[8])
-        {
-            needSelection=true;
-        }
-        if(dirtyFlag_[9])
-        {
             sql += "email_verification_token,";
             ++parametersCount;
         }
-        if(!dirtyFlag_[9])
-        {
-            needSelection=true;
-        }
-        if(dirtyFlag_[10])
+        if(dirtyFlag_[8])
         {
             sql += "email_verification_expires,";
             ++parametersCount;
         }
+        sql += "created_at,";
+        ++parametersCount;
+        if(!dirtyFlag_[9])
+        {
+            needSelection=true;
+        }
+        sql += "updated_at,";
+        ++parametersCount;
         if(!dirtyFlag_[10])
         {
             needSelection=true;
         }
+        needSelection=true;
         if(parametersCount > 0)
         {
             sql[sql.length()-1]=')';
@@ -357,64 +333,91 @@ class Users
         else
             sql += ") values (";
 
+        int placeholder=1;
+        char placeholderStr[64];
+        size_t n=0;
+        sql +="default,";
         if(dirtyFlag_[1])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[2])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[3])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[4])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[5])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(dirtyFlag_[6])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(dirtyFlag_[7])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[8])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[9])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(dirtyFlag_[10])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(parametersCount > 0)
         {
             sql.resize(sql.length() - 1);
         }
-        sql.append(1, ')');
+        if(needSelection)
+        {
+            sql.append(") returning *");
+        }
+        else
+        {
+            sql.append(1, ')');
+        }
         LOG_TRACE << sql;
         return sql;
     }
 };
-} // namespace sqlite3
+} // namespace blog_db
 } // namespace drogon_model

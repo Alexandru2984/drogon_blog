@@ -36,7 +36,7 @@ using DbClientPtr = std::shared_ptr<DbClient>;
 }
 namespace drogon_model
 {
-namespace sqlite3
+namespace blog_db
 {
 
 class Comments
@@ -55,7 +55,7 @@ class Comments
     static const std::string tableName;
     static const bool hasPrimaryKey;
     static const std::string primaryKeyName;
-    using PrimaryKeyType = int64_t;
+    using PrimaryKeyType = int32_t;
     const PrimaryKeyType &getPrimaryKey() const;
 
     /**
@@ -102,28 +102,27 @@ class Comments
 
     /**  For column id  */
     ///Get the value of the column id, returns the default value if the column is null
-    const int64_t &getValueOfId() const noexcept;
+    const int32_t &getValueOfId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getId() const noexcept;
+    const std::shared_ptr<int32_t> &getId() const noexcept;
     ///Set the value of the column id
-    void setId(const int64_t &pId) noexcept;
-    void setIdToNull() noexcept;
+    void setId(const int32_t &pId) noexcept;
 
     /**  For column post_id  */
     ///Get the value of the column post_id, returns the default value if the column is null
-    const int64_t &getValueOfPostId() const noexcept;
+    const int32_t &getValueOfPostId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getPostId() const noexcept;
+    const std::shared_ptr<int32_t> &getPostId() const noexcept;
     ///Set the value of the column post_id
-    void setPostId(const int64_t &pPostId) noexcept;
+    void setPostId(const int32_t &pPostId) noexcept;
 
     /**  For column user_id  */
     ///Get the value of the column user_id, returns the default value if the column is null
-    const int64_t &getValueOfUserId() const noexcept;
+    const int32_t &getValueOfUserId() const noexcept;
     ///Return a shared_ptr object pointing to the column const value, or an empty shared_ptr object if the column is null
-    const std::shared_ptr<int64_t> &getUserId() const noexcept;
+    const std::shared_ptr<int32_t> &getUserId() const noexcept;
     ///Set the value of the column user_id
-    void setUserId(const int64_t &pUserId) noexcept;
+    void setUserId(const int32_t &pUserId) noexcept;
 
     /**  For column content  */
     ///Get the value of the column content, returns the default value if the column is null
@@ -141,7 +140,6 @@ class Comments
     const std::shared_ptr<::trantor::Date> &getCreatedAt() const noexcept;
     ///Set the value of the column created_at
     void setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept;
-    void setCreatedAtToNull() noexcept;
 
 
     static size_t getColumnNumber() noexcept {  return 5;  }
@@ -166,9 +164,9 @@ class Comments
     void updateArgs(drogon::orm::internal::SqlBinder &binder) const;
     ///For mysql or sqlite3
     void updateId(const uint64_t id);
-    std::shared_ptr<int64_t> id_;
-    std::shared_ptr<int64_t> postId_;
-    std::shared_ptr<int64_t> userId_;
+    std::shared_ptr<int32_t> id_;
+    std::shared_ptr<int32_t> postId_;
+    std::shared_ptr<int32_t> userId_;
     std::shared_ptr<std::string> content_;
     std::shared_ptr<::trantor::Date> createdAt_;
     struct MetaData
@@ -186,13 +184,13 @@ class Comments
   public:
     static const std::string &sqlForFindingByPrimaryKey()
     {
-        static const std::string sql="select * from " + tableName + " where id = ?";
+        static const std::string sql="select * from " + tableName + " where id = $1";
         return sql;
     }
 
     static const std::string &sqlForDeletingByPrimaryKey()
     {
-        static const std::string sql="delete from " + tableName + " where id = ?";
+        static const std::string sql="delete from " + tableName + " where id = $1";
         return sql;
     }
     std::string sqlForInserting(bool &needSelection) const
@@ -200,6 +198,8 @@ class Comments
         std::string sql="insert into " + tableName + " (";
         size_t parametersCount = 0;
         needSelection = false;
+            sql += "id,";
+            ++parametersCount;
         if(dirtyFlag_[1])
         {
             sql += "post_id,";
@@ -215,15 +215,13 @@ class Comments
             sql += "content,";
             ++parametersCount;
         }
-        if(dirtyFlag_[4])
-        {
-            sql += "created_at,";
-            ++parametersCount;
-        }
+        sql += "created_at,";
+        ++parametersCount;
         if(!dirtyFlag_[4])
         {
             needSelection=true;
         }
+        needSelection=true;
         if(parametersCount > 0)
         {
             sql[sql.length()-1]=')';
@@ -232,34 +230,49 @@ class Comments
         else
             sql += ") values (";
 
+        int placeholder=1;
+        char placeholderStr[64];
+        size_t n=0;
+        sql +="default,";
         if(dirtyFlag_[1])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[2])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[3])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
         }
         if(dirtyFlag_[4])
         {
-            sql.append("?,");
-
+            n = snprintf(placeholderStr,sizeof(placeholderStr),"$%d,",placeholder++);
+            sql.append(placeholderStr, n);
+        }
+        else
+        {
+            sql +="default,";
         }
         if(parametersCount > 0)
         {
             sql.resize(sql.length() - 1);
         }
-        sql.append(1, ')');
+        if(needSelection)
+        {
+            sql.append(") returning *");
+        }
+        else
+        {
+            sql.append(1, ')');
+        }
         LOG_TRACE << sql;
         return sql;
     }
 };
-} // namespace sqlite3
+} // namespace blog_db
 } // namespace drogon_model

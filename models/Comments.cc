@@ -11,23 +11,23 @@
 
 using namespace drogon;
 using namespace drogon::orm;
-using namespace drogon_model::sqlite3;
+using namespace drogon_model::blog_db;
 
-const std::string Comments::Cols::_id = "id";
-const std::string Comments::Cols::_post_id = "post_id";
-const std::string Comments::Cols::_user_id = "user_id";
-const std::string Comments::Cols::_content = "content";
-const std::string Comments::Cols::_created_at = "created_at";
+const std::string Comments::Cols::_id = "\"id\"";
+const std::string Comments::Cols::_post_id = "\"post_id\"";
+const std::string Comments::Cols::_user_id = "\"user_id\"";
+const std::string Comments::Cols::_content = "\"content\"";
+const std::string Comments::Cols::_created_at = "\"created_at\"";
 const std::string Comments::primaryKeyName = "id";
 const bool Comments::hasPrimaryKey = true;
-const std::string Comments::tableName = "comments";
+const std::string Comments::tableName = "\"comments\"";
 
 const std::vector<typename Comments::MetaData> Comments::metaData_={
-{"id","int64_t","integer",8,1,1,0},
-{"post_id","int64_t","integer",8,0,0,1},
-{"user_id","int64_t","integer",8,0,0,1},
+{"id","int32_t","integer",4,1,1,1},
+{"post_id","int32_t","integer",4,0,0,1},
+{"user_id","int32_t","integer",4,0,0,1},
 {"content","std::string","text",0,0,0,1},
-{"created_at","::trantor::Date","datetime",0,0,0,0}
+{"created_at","::trantor::Date","timestamp without time zone",0,0,0,1}
 };
 const std::string &Comments::getColumnName(size_t index) noexcept(false)
 {
@@ -40,15 +40,15 @@ Comments::Comments(const Row &r, const ssize_t indexOffset) noexcept
     {
         if(!r["id"].isNull())
         {
-            id_=std::make_shared<int64_t>(r["id"].as<int64_t>());
+            id_=std::make_shared<int32_t>(r["id"].as<int32_t>());
         }
         if(!r["post_id"].isNull())
         {
-            postId_=std::make_shared<int64_t>(r["post_id"].as<int64_t>());
+            postId_=std::make_shared<int32_t>(r["post_id"].as<int32_t>());
         }
         if(!r["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>(r["user_id"].as<int64_t>());
+            userId_=std::make_shared<int32_t>(r["user_id"].as<int32_t>());
         }
         if(!r["content"].isNull())
         {
@@ -89,17 +89,17 @@ Comments::Comments(const Row &r, const ssize_t indexOffset) noexcept
         index = offset + 0;
         if(!r[index].isNull())
         {
-            id_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            id_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 1;
         if(!r[index].isNull())
         {
-            postId_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            postId_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 2;
         if(!r[index].isNull())
         {
-            userId_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            userId_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 3;
         if(!r[index].isNull())
@@ -145,7 +145,7 @@ Comments::Comments(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[0] = true;
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -153,7 +153,7 @@ Comments::Comments(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            postId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            postId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -161,7 +161,7 @@ Comments::Comments(const Json::Value &pJson, const std::vector<std::string> &pMa
         dirtyFlag_[2] = true;
         if(!pJson[pMasqueradingVector[2]].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[2]].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[2]].asInt64());
         }
     }
     if(!pMasqueradingVector[3].empty() && pJson.isMember(pMasqueradingVector[3]))
@@ -207,7 +207,7 @@ Comments::Comments(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[0]=true;
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("post_id"))
@@ -215,7 +215,7 @@ Comments::Comments(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[1]=true;
         if(!pJson["post_id"].isNull())
         {
-            postId_=std::make_shared<int64_t>((int64_t)pJson["post_id"].asInt64());
+            postId_=std::make_shared<int32_t>((int32_t)pJson["post_id"].asInt64());
         }
     }
     if(pJson.isMember("user_id"))
@@ -223,7 +223,7 @@ Comments::Comments(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[2]=true;
         if(!pJson["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson["user_id"].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson["user_id"].asInt64());
         }
     }
     if(pJson.isMember("content"))
@@ -274,7 +274,7 @@ void Comments::updateByMasqueradedJson(const Json::Value &pJson,
     {
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -282,7 +282,7 @@ void Comments::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            postId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            postId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -290,7 +290,7 @@ void Comments::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[2] = true;
         if(!pJson[pMasqueradingVector[2]].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[2]].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[2]].asInt64());
         }
     }
     if(!pMasqueradingVector[3].empty() && pJson.isMember(pMasqueradingVector[3]))
@@ -335,7 +335,7 @@ void Comments::updateByJson(const Json::Value &pJson) noexcept(false)
     {
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("post_id"))
@@ -343,7 +343,7 @@ void Comments::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[1] = true;
         if(!pJson["post_id"].isNull())
         {
-            postId_=std::make_shared<int64_t>((int64_t)pJson["post_id"].asInt64());
+            postId_=std::make_shared<int32_t>((int32_t)pJson["post_id"].asInt64());
         }
     }
     if(pJson.isMember("user_id"))
@@ -351,7 +351,7 @@ void Comments::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[2] = true;
         if(!pJson["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson["user_id"].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson["user_id"].asInt64());
         }
     }
     if(pJson.isMember("content"))
@@ -390,25 +390,20 @@ void Comments::updateByJson(const Json::Value &pJson) noexcept(false)
     }
 }
 
-const int64_t &Comments::getValueOfId() const noexcept
+const int32_t &Comments::getValueOfId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(id_)
         return *id_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Comments::getId() const noexcept
+const std::shared_ptr<int32_t> &Comments::getId() const noexcept
 {
     return id_;
 }
-void Comments::setId(const int64_t &pId) noexcept
+void Comments::setId(const int32_t &pId) noexcept
 {
-    id_ = std::make_shared<int64_t>(pId);
-    dirtyFlag_[0] = true;
-}
-void Comments::setIdToNull() noexcept
-{
-    id_.reset();
+    id_ = std::make_shared<int32_t>(pId);
     dirtyFlag_[0] = true;
 }
 const typename Comments::PrimaryKeyType & Comments::getPrimaryKey() const
@@ -417,37 +412,37 @@ const typename Comments::PrimaryKeyType & Comments::getPrimaryKey() const
     return *id_;
 }
 
-const int64_t &Comments::getValueOfPostId() const noexcept
+const int32_t &Comments::getValueOfPostId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(postId_)
         return *postId_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Comments::getPostId() const noexcept
+const std::shared_ptr<int32_t> &Comments::getPostId() const noexcept
 {
     return postId_;
 }
-void Comments::setPostId(const int64_t &pPostId) noexcept
+void Comments::setPostId(const int32_t &pPostId) noexcept
 {
-    postId_ = std::make_shared<int64_t>(pPostId);
+    postId_ = std::make_shared<int32_t>(pPostId);
     dirtyFlag_[1] = true;
 }
 
-const int64_t &Comments::getValueOfUserId() const noexcept
+const int32_t &Comments::getValueOfUserId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(userId_)
         return *userId_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Comments::getUserId() const noexcept
+const std::shared_ptr<int32_t> &Comments::getUserId() const noexcept
 {
     return userId_;
 }
-void Comments::setUserId(const int64_t &pUserId) noexcept
+void Comments::setUserId(const int32_t &pUserId) noexcept
 {
-    userId_ = std::make_shared<int64_t>(pUserId);
+    userId_ = std::make_shared<int32_t>(pUserId);
     dirtyFlag_[2] = true;
 }
 
@@ -489,15 +484,9 @@ void Comments::setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept
     createdAt_ = std::make_shared<::trantor::Date>(pCreatedAt);
     dirtyFlag_[4] = true;
 }
-void Comments::setCreatedAtToNull() noexcept
-{
-    createdAt_.reset();
-    dirtyFlag_[4] = true;
-}
 
 void Comments::updateId(const uint64_t id)
 {
-    id_ = std::make_shared<int64_t>(static_cast<int64_t>(id));
 }
 
 const std::vector<std::string> &Comments::insertColumns() noexcept
@@ -633,7 +622,7 @@ Json::Value Comments::toJson() const
     Json::Value ret;
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -641,7 +630,7 @@ Json::Value Comments::toJson() const
     }
     if(getPostId())
     {
-        ret["post_id"]=(Json::Int64)getValueOfPostId();
+        ret["post_id"]=getValueOfPostId();
     }
     else
     {
@@ -649,7 +638,7 @@ Json::Value Comments::toJson() const
     }
     if(getUserId())
     {
-        ret["user_id"]=(Json::Int64)getValueOfUserId();
+        ret["user_id"]=getValueOfUserId();
     }
     else
     {
@@ -689,7 +678,7 @@ Json::Value Comments::toMasqueradedJson(
         {
             if(getId())
             {
-                ret[pMasqueradingVector[0]]=(Json::Int64)getValueOfId();
+                ret[pMasqueradingVector[0]]=getValueOfId();
             }
             else
             {
@@ -700,7 +689,7 @@ Json::Value Comments::toMasqueradedJson(
         {
             if(getPostId())
             {
-                ret[pMasqueradingVector[1]]=(Json::Int64)getValueOfPostId();
+                ret[pMasqueradingVector[1]]=getValueOfPostId();
             }
             else
             {
@@ -711,7 +700,7 @@ Json::Value Comments::toMasqueradedJson(
         {
             if(getUserId())
             {
-                ret[pMasqueradingVector[2]]=(Json::Int64)getValueOfUserId();
+                ret[pMasqueradingVector[2]]=getValueOfUserId();
             }
             else
             {
@@ -745,7 +734,7 @@ Json::Value Comments::toMasqueradedJson(
     LOG_ERROR << "Masquerade failed";
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -753,7 +742,7 @@ Json::Value Comments::toMasqueradedJson(
     }
     if(getPostId())
     {
-        ret["post_id"]=(Json::Int64)getValueOfPostId();
+        ret["post_id"]=getValueOfPostId();
     }
     else
     {
@@ -761,7 +750,7 @@ Json::Value Comments::toMasqueradedJson(
     }
     if(getUserId())
     {
-        ret["user_id"]=(Json::Int64)getValueOfUserId();
+        ret["user_id"]=getValueOfUserId();
     }
     else
     {
@@ -994,16 +983,17 @@ bool Comments::validJsonOfField(size_t index,
     switch(index)
     {
         case 0:
+            if(pJson.isNull())
+            {
+                err="The " + fieldName + " column cannot be null";
+                return false;
+            }
             if(isForCreation)
             {
                 err="The automatic primary key cannot be set";
                 return false;
             }
-            if(pJson.isNull())
-            {
-                return true;
-            }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1015,7 +1005,7 @@ bool Comments::validJsonOfField(size_t index,
                 err="The " + fieldName + " column cannot be null";
                 return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1027,7 +1017,7 @@ bool Comments::validJsonOfField(size_t index,
                 err="The " + fieldName + " column cannot be null";
                 return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1048,7 +1038,8 @@ bool Comments::validJsonOfField(size_t index,
         case 4:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
             if(!pJson.isString())
             {

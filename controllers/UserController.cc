@@ -13,7 +13,7 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
                                    int userId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto user = mapper.findByPrimaryKey(userId);
@@ -65,7 +65,7 @@ void UserController::updateProfile(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
@@ -158,7 +158,7 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
 
     // Update database
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
@@ -197,7 +197,7 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::sqlite3::Users> mapper(dbClient);
+    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto users = mapper.findAll();

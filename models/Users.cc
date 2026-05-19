@@ -11,35 +11,35 @@
 
 using namespace drogon;
 using namespace drogon::orm;
-using namespace drogon_model::sqlite3;
+using namespace drogon_model::blog_db;
 
-const std::string Users::Cols::_id = "id";
-const std::string Users::Cols::_username = "username";
-const std::string Users::Cols::_email = "email";
-const std::string Users::Cols::_password_hash = "password_hash";
-const std::string Users::Cols::_profile_image = "profile_image";
-const std::string Users::Cols::_bio = "bio";
-const std::string Users::Cols::_created_at = "created_at";
-const std::string Users::Cols::_updated_at = "updated_at";
-const std::string Users::Cols::_email_verified = "email_verified";
-const std::string Users::Cols::_email_verification_token = "email_verification_token";
-const std::string Users::Cols::_email_verification_expires = "email_verification_expires";
+const std::string Users::Cols::_id = "\"id\"";
+const std::string Users::Cols::_username = "\"username\"";
+const std::string Users::Cols::_email = "\"email\"";
+const std::string Users::Cols::_password_hash = "\"password_hash\"";
+const std::string Users::Cols::_profile_image = "\"profile_image\"";
+const std::string Users::Cols::_bio = "\"bio\"";
+const std::string Users::Cols::_email_verified = "\"email_verified\"";
+const std::string Users::Cols::_email_verification_token = "\"email_verification_token\"";
+const std::string Users::Cols::_email_verification_expires = "\"email_verification_expires\"";
+const std::string Users::Cols::_created_at = "\"created_at\"";
+const std::string Users::Cols::_updated_at = "\"updated_at\"";
 const std::string Users::primaryKeyName = "id";
 const bool Users::hasPrimaryKey = true;
-const std::string Users::tableName = "users";
+const std::string Users::tableName = "\"users\"";
 
 const std::vector<typename Users::MetaData> Users::metaData_={
-{"id","int64_t","integer",8,1,1,0},
-{"username","std::string","text",0,0,0,1},
-{"email","std::string","text",0,0,0,1},
+{"id","int32_t","integer",4,1,1,1},
+{"username","std::string","character varying",64,0,0,1},
+{"email","std::string","character varying",255,0,0,1},
 {"password_hash","std::string","text",0,0,0,1},
 {"profile_image","std::string","text",0,0,0,0},
 {"bio","std::string","text",0,0,0,0},
-{"created_at","::trantor::Date","datetime",0,0,0,0},
-{"updated_at","::trantor::Date","datetime",0,0,0,0},
-{"email_verified","int64_t","integer",8,0,0,0},
+{"email_verified","int32_t","integer",4,0,0,0},
 {"email_verification_token","std::string","text",0,0,0,0},
-{"email_verification_expires","::trantor::Date","datetime",0,0,0,0}
+{"email_verification_expires","::trantor::Date","timestamp without time zone",0,0,0,0},
+{"created_at","::trantor::Date","timestamp without time zone",0,0,0,1},
+{"updated_at","::trantor::Date","timestamp without time zone",0,0,0,1}
 };
 const std::string &Users::getColumnName(size_t index) noexcept(false)
 {
@@ -52,7 +52,7 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
     {
         if(!r["id"].isNull())
         {
-            id_=std::make_shared<int64_t>(r["id"].as<int64_t>());
+            id_=std::make_shared<int32_t>(r["id"].as<int32_t>());
         }
         if(!r["username"].isNull())
         {
@@ -73,6 +73,36 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
         if(!r["bio"].isNull())
         {
             bio_=std::make_shared<std::string>(r["bio"].as<std::string>());
+        }
+        if(!r["email_verified"].isNull())
+        {
+            emailVerified_=std::make_shared<int32_t>(r["email_verified"].as<int32_t>());
+        }
+        if(!r["email_verification_token"].isNull())
+        {
+            emailVerificationToken_=std::make_shared<std::string>(r["email_verification_token"].as<std::string>());
+        }
+        if(!r["email_verification_expires"].isNull())
+        {
+            auto timeStr = r["email_verification_expires"].as<std::string>();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
         }
         if(!r["created_at"].isNull())
         {
@@ -118,36 +148,6 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
                 updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
-        if(!r["email_verified"].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>(r["email_verified"].as<int64_t>());
-        }
-        if(!r["email_verification_token"].isNull())
-        {
-            emailVerificationToken_=std::make_shared<std::string>(r["email_verification_token"].as<std::string>());
-        }
-        if(!r["email_verification_expires"].isNull())
-        {
-            auto timeStr = r["email_verification_expires"].as<std::string>();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
     }
     else
     {
@@ -161,7 +161,7 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
         index = offset + 0;
         if(!r[index].isNull())
         {
-            id_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            id_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 1;
         if(!r[index].isNull())
@@ -191,60 +191,14 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
         index = offset + 6;
         if(!r[index].isNull())
         {
-            auto timeStr = r[index].as<std::string>();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                createdAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
+            emailVerified_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 7;
         if(!r[index].isNull())
         {
-            auto timeStr = r[index].as<std::string>();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
-        index = offset + 8;
-        if(!r[index].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>(r[index].as<int64_t>());
-        }
-        index = offset + 9;
-        if(!r[index].isNull())
-        {
             emailVerificationToken_=std::make_shared<std::string>(r[index].as<std::string>());
         }
-        index = offset + 10;
+        index = offset + 8;
         if(!r[index].isNull())
         {
             auto timeStr = r[index].as<std::string>();
@@ -267,6 +221,52 @@ Users::Users(const Row &r, const ssize_t indexOffset) noexcept
                 emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
+        index = offset + 9;
+        if(!r[index].isNull())
+        {
+            auto timeStr = r[index].as<std::string>();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                createdAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
+        index = offset + 10;
+        if(!r[index].isNull())
+        {
+            auto timeStr = r[index].as<std::string>();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
     }
 
 }
@@ -283,7 +283,7 @@ Users::Users(const Json::Value &pJson, const std::vector<std::string> &pMasquera
         dirtyFlag_[0] = true;
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -331,7 +331,49 @@ Users::Users(const Json::Value &pJson, const std::vector<std::string> &pMasquera
         dirtyFlag_[6] = true;
         if(!pJson[pMasqueradingVector[6]].isNull())
         {
-            auto timeStr = pJson[pMasqueradingVector[6]].asString();
+            emailVerified_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[6]].asInt64());
+        }
+    }
+    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson[pMasqueradingVector[7]].isNull())
+        {
+            emailVerificationToken_=std::make_shared<std::string>(pJson[pMasqueradingVector[7]].asString());
+        }
+    }
+    if(!pMasqueradingVector[8].empty() && pJson.isMember(pMasqueradingVector[8]))
+    {
+        dirtyFlag_[8] = true;
+        if(!pJson[pMasqueradingVector[8]].isNull())
+        {
+            auto timeStr = pJson[pMasqueradingVector[8]].asString();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
+    }
+    if(!pMasqueradingVector[9].empty() && pJson.isMember(pMasqueradingVector[9]))
+    {
+        dirtyFlag_[9] = true;
+        if(!pJson[pMasqueradingVector[9]].isNull())
+        {
+            auto timeStr = pJson[pMasqueradingVector[9]].asString();
             struct tm stm;
             memset(&stm,0,sizeof(stm));
             auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
@@ -350,48 +392,6 @@ Users::Users(const Json::Value &pJson, const std::vector<std::string> &pMasquera
                 }
                 createdAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
-        }
-    }
-    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
-    {
-        dirtyFlag_[7] = true;
-        if(!pJson[pMasqueradingVector[7]].isNull())
-        {
-            auto timeStr = pJson[pMasqueradingVector[7]].asString();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
-    }
-    if(!pMasqueradingVector[8].empty() && pJson.isMember(pMasqueradingVector[8]))
-    {
-        dirtyFlag_[8] = true;
-        if(!pJson[pMasqueradingVector[8]].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[8]].asInt64());
-        }
-    }
-    if(!pMasqueradingVector[9].empty() && pJson.isMember(pMasqueradingVector[9]))
-    {
-        dirtyFlag_[9] = true;
-        if(!pJson[pMasqueradingVector[9]].isNull())
-        {
-            emailVerificationToken_=std::make_shared<std::string>(pJson[pMasqueradingVector[9]].asString());
         }
     }
     if(!pMasqueradingVector[10].empty() && pJson.isMember(pMasqueradingVector[10]))
@@ -416,7 +416,7 @@ Users::Users(const Json::Value &pJson, const std::vector<std::string> &pMasquera
                     }
                     decimalNum = (size_t)atol(decimals.c_str());
                 }
-                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
     }
@@ -429,7 +429,7 @@ Users::Users(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[0]=true;
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("username"))
@@ -472,9 +472,51 @@ Users::Users(const Json::Value &pJson) noexcept(false)
             bio_=std::make_shared<std::string>(pJson["bio"].asString());
         }
     }
-    if(pJson.isMember("created_at"))
+    if(pJson.isMember("email_verified"))
     {
         dirtyFlag_[6]=true;
+        if(!pJson["email_verified"].isNull())
+        {
+            emailVerified_=std::make_shared<int32_t>((int32_t)pJson["email_verified"].asInt64());
+        }
+    }
+    if(pJson.isMember("email_verification_token"))
+    {
+        dirtyFlag_[7]=true;
+        if(!pJson["email_verification_token"].isNull())
+        {
+            emailVerificationToken_=std::make_shared<std::string>(pJson["email_verification_token"].asString());
+        }
+    }
+    if(pJson.isMember("email_verification_expires"))
+    {
+        dirtyFlag_[8]=true;
+        if(!pJson["email_verification_expires"].isNull())
+        {
+            auto timeStr = pJson["email_verification_expires"].asString();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
+    }
+    if(pJson.isMember("created_at"))
+    {
+        dirtyFlag_[9]=true;
         if(!pJson["created_at"].isNull())
         {
             auto timeStr = pJson["created_at"].asString();
@@ -500,7 +542,7 @@ Users::Users(const Json::Value &pJson) noexcept(false)
     }
     if(pJson.isMember("updated_at"))
     {
-        dirtyFlag_[7]=true;
+        dirtyFlag_[10]=true;
         if(!pJson["updated_at"].isNull())
         {
             auto timeStr = pJson["updated_at"].asString();
@@ -524,48 +566,6 @@ Users::Users(const Json::Value &pJson) noexcept(false)
             }
         }
     }
-    if(pJson.isMember("email_verified"))
-    {
-        dirtyFlag_[8]=true;
-        if(!pJson["email_verified"].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>((int64_t)pJson["email_verified"].asInt64());
-        }
-    }
-    if(pJson.isMember("email_verification_token"))
-    {
-        dirtyFlag_[9]=true;
-        if(!pJson["email_verification_token"].isNull())
-        {
-            emailVerificationToken_=std::make_shared<std::string>(pJson["email_verification_token"].asString());
-        }
-    }
-    if(pJson.isMember("email_verification_expires"))
-    {
-        dirtyFlag_[10]=true;
-        if(!pJson["email_verification_expires"].isNull())
-        {
-            auto timeStr = pJson["email_verification_expires"].asString();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
-    }
 }
 
 void Users::updateByMasqueradedJson(const Json::Value &pJson,
@@ -580,7 +580,7 @@ void Users::updateByMasqueradedJson(const Json::Value &pJson,
     {
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -628,7 +628,49 @@ void Users::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[6] = true;
         if(!pJson[pMasqueradingVector[6]].isNull())
         {
-            auto timeStr = pJson[pMasqueradingVector[6]].asString();
+            emailVerified_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[6]].asInt64());
+        }
+    }
+    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson[pMasqueradingVector[7]].isNull())
+        {
+            emailVerificationToken_=std::make_shared<std::string>(pJson[pMasqueradingVector[7]].asString());
+        }
+    }
+    if(!pMasqueradingVector[8].empty() && pJson.isMember(pMasqueradingVector[8]))
+    {
+        dirtyFlag_[8] = true;
+        if(!pJson[pMasqueradingVector[8]].isNull())
+        {
+            auto timeStr = pJson[pMasqueradingVector[8]].asString();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
+    }
+    if(!pMasqueradingVector[9].empty() && pJson.isMember(pMasqueradingVector[9]))
+    {
+        dirtyFlag_[9] = true;
+        if(!pJson[pMasqueradingVector[9]].isNull())
+        {
+            auto timeStr = pJson[pMasqueradingVector[9]].asString();
             struct tm stm;
             memset(&stm,0,sizeof(stm));
             auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
@@ -647,48 +689,6 @@ void Users::updateByMasqueradedJson(const Json::Value &pJson,
                 }
                 createdAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
-        }
-    }
-    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
-    {
-        dirtyFlag_[7] = true;
-        if(!pJson[pMasqueradingVector[7]].isNull())
-        {
-            auto timeStr = pJson[pMasqueradingVector[7]].asString();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
-    }
-    if(!pMasqueradingVector[8].empty() && pJson.isMember(pMasqueradingVector[8]))
-    {
-        dirtyFlag_[8] = true;
-        if(!pJson[pMasqueradingVector[8]].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[8]].asInt64());
-        }
-    }
-    if(!pMasqueradingVector[9].empty() && pJson.isMember(pMasqueradingVector[9]))
-    {
-        dirtyFlag_[9] = true;
-        if(!pJson[pMasqueradingVector[9]].isNull())
-        {
-            emailVerificationToken_=std::make_shared<std::string>(pJson[pMasqueradingVector[9]].asString());
         }
     }
     if(!pMasqueradingVector[10].empty() && pJson.isMember(pMasqueradingVector[10]))
@@ -713,7 +713,7 @@ void Users::updateByMasqueradedJson(const Json::Value &pJson,
                     }
                     decimalNum = (size_t)atol(decimals.c_str());
                 }
-                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+                updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
     }
@@ -725,7 +725,7 @@ void Users::updateByJson(const Json::Value &pJson) noexcept(false)
     {
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("username"))
@@ -768,9 +768,51 @@ void Users::updateByJson(const Json::Value &pJson) noexcept(false)
             bio_=std::make_shared<std::string>(pJson["bio"].asString());
         }
     }
-    if(pJson.isMember("created_at"))
+    if(pJson.isMember("email_verified"))
     {
         dirtyFlag_[6] = true;
+        if(!pJson["email_verified"].isNull())
+        {
+            emailVerified_=std::make_shared<int32_t>((int32_t)pJson["email_verified"].asInt64());
+        }
+    }
+    if(pJson.isMember("email_verification_token"))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson["email_verification_token"].isNull())
+        {
+            emailVerificationToken_=std::make_shared<std::string>(pJson["email_verification_token"].asString());
+        }
+    }
+    if(pJson.isMember("email_verification_expires"))
+    {
+        dirtyFlag_[8] = true;
+        if(!pJson["email_verification_expires"].isNull())
+        {
+            auto timeStr = pJson["email_verification_expires"].asString();
+            struct tm stm;
+            memset(&stm,0,sizeof(stm));
+            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
+            time_t t = mktime(&stm);
+            size_t decimalNum = 0;
+            if(p)
+            {
+                if(*p=='.')
+                {
+                    std::string decimals(p+1,&timeStr[timeStr.length()]);
+                    while(decimals.length()<6)
+                    {
+                        decimals += "0";
+                    }
+                    decimalNum = (size_t)atol(decimals.c_str());
+                }
+                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
+            }
+        }
+    }
+    if(pJson.isMember("created_at"))
+    {
+        dirtyFlag_[9] = true;
         if(!pJson["created_at"].isNull())
         {
             auto timeStr = pJson["created_at"].asString();
@@ -796,7 +838,7 @@ void Users::updateByJson(const Json::Value &pJson) noexcept(false)
     }
     if(pJson.isMember("updated_at"))
     {
-        dirtyFlag_[7] = true;
+        dirtyFlag_[10] = true;
         if(!pJson["updated_at"].isNull())
         {
             auto timeStr = pJson["updated_at"].asString();
@@ -820,69 +862,22 @@ void Users::updateByJson(const Json::Value &pJson) noexcept(false)
             }
         }
     }
-    if(pJson.isMember("email_verified"))
-    {
-        dirtyFlag_[8] = true;
-        if(!pJson["email_verified"].isNull())
-        {
-            emailVerified_=std::make_shared<int64_t>((int64_t)pJson["email_verified"].asInt64());
-        }
-    }
-    if(pJson.isMember("email_verification_token"))
-    {
-        dirtyFlag_[9] = true;
-        if(!pJson["email_verification_token"].isNull())
-        {
-            emailVerificationToken_=std::make_shared<std::string>(pJson["email_verification_token"].asString());
-        }
-    }
-    if(pJson.isMember("email_verification_expires"))
-    {
-        dirtyFlag_[10] = true;
-        if(!pJson["email_verification_expires"].isNull())
-        {
-            auto timeStr = pJson["email_verification_expires"].asString();
-            struct tm stm;
-            memset(&stm,0,sizeof(stm));
-            auto p = strptime(timeStr.c_str(),"%Y-%m-%d %H:%M:%S",&stm);
-            time_t t = mktime(&stm);
-            size_t decimalNum = 0;
-            if(p)
-            {
-                if(*p=='.')
-                {
-                    std::string decimals(p+1,&timeStr[timeStr.length()]);
-                    while(decimals.length()<6)
-                    {
-                        decimals += "0";
-                    }
-                    decimalNum = (size_t)atol(decimals.c_str());
-                }
-                emailVerificationExpires_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
-            }
-        }
-    }
 }
 
-const int64_t &Users::getValueOfId() const noexcept
+const int32_t &Users::getValueOfId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(id_)
         return *id_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Users::getId() const noexcept
+const std::shared_ptr<int32_t> &Users::getId() const noexcept
 {
     return id_;
 }
-void Users::setId(const int64_t &pId) noexcept
+void Users::setId(const int32_t &pId) noexcept
 {
-    id_ = std::make_shared<int64_t>(pId);
-    dirtyFlag_[0] = true;
-}
-void Users::setIdToNull() noexcept
-{
-    id_.reset();
+    id_ = std::make_shared<int32_t>(pId);
     dirtyFlag_[0] = true;
 }
 const typename Users::PrimaryKeyType & Users::getPrimaryKey() const
@@ -1011,70 +1006,26 @@ void Users::setBioToNull() noexcept
     dirtyFlag_[5] = true;
 }
 
-const ::trantor::Date &Users::getValueOfCreatedAt() const noexcept
+const int32_t &Users::getValueOfEmailVerified() const noexcept
 {
-    static const ::trantor::Date defaultValue = ::trantor::Date();
-    if(createdAt_)
-        return *createdAt_;
-    return defaultValue;
-}
-const std::shared_ptr<::trantor::Date> &Users::getCreatedAt() const noexcept
-{
-    return createdAt_;
-}
-void Users::setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept
-{
-    createdAt_ = std::make_shared<::trantor::Date>(pCreatedAt);
-    dirtyFlag_[6] = true;
-}
-void Users::setCreatedAtToNull() noexcept
-{
-    createdAt_.reset();
-    dirtyFlag_[6] = true;
-}
-
-const ::trantor::Date &Users::getValueOfUpdatedAt() const noexcept
-{
-    static const ::trantor::Date defaultValue = ::trantor::Date();
-    if(updatedAt_)
-        return *updatedAt_;
-    return defaultValue;
-}
-const std::shared_ptr<::trantor::Date> &Users::getUpdatedAt() const noexcept
-{
-    return updatedAt_;
-}
-void Users::setUpdatedAt(const ::trantor::Date &pUpdatedAt) noexcept
-{
-    updatedAt_ = std::make_shared<::trantor::Date>(pUpdatedAt);
-    dirtyFlag_[7] = true;
-}
-void Users::setUpdatedAtToNull() noexcept
-{
-    updatedAt_.reset();
-    dirtyFlag_[7] = true;
-}
-
-const int64_t &Users::getValueOfEmailVerified() const noexcept
-{
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(emailVerified_)
         return *emailVerified_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &Users::getEmailVerified() const noexcept
+const std::shared_ptr<int32_t> &Users::getEmailVerified() const noexcept
 {
     return emailVerified_;
 }
-void Users::setEmailVerified(const int64_t &pEmailVerified) noexcept
+void Users::setEmailVerified(const int32_t &pEmailVerified) noexcept
 {
-    emailVerified_ = std::make_shared<int64_t>(pEmailVerified);
-    dirtyFlag_[8] = true;
+    emailVerified_ = std::make_shared<int32_t>(pEmailVerified);
+    dirtyFlag_[6] = true;
 }
 void Users::setEmailVerifiedToNull() noexcept
 {
     emailVerified_.reset();
-    dirtyFlag_[8] = true;
+    dirtyFlag_[6] = true;
 }
 
 const std::string &Users::getValueOfEmailVerificationToken() const noexcept
@@ -1091,17 +1042,17 @@ const std::shared_ptr<std::string> &Users::getEmailVerificationToken() const noe
 void Users::setEmailVerificationToken(const std::string &pEmailVerificationToken) noexcept
 {
     emailVerificationToken_ = std::make_shared<std::string>(pEmailVerificationToken);
-    dirtyFlag_[9] = true;
+    dirtyFlag_[7] = true;
 }
 void Users::setEmailVerificationToken(std::string &&pEmailVerificationToken) noexcept
 {
     emailVerificationToken_ = std::make_shared<std::string>(std::move(pEmailVerificationToken));
-    dirtyFlag_[9] = true;
+    dirtyFlag_[7] = true;
 }
 void Users::setEmailVerificationTokenToNull() noexcept
 {
     emailVerificationToken_.reset();
-    dirtyFlag_[9] = true;
+    dirtyFlag_[7] = true;
 }
 
 const ::trantor::Date &Users::getValueOfEmailVerificationExpires() const noexcept
@@ -1118,17 +1069,50 @@ const std::shared_ptr<::trantor::Date> &Users::getEmailVerificationExpires() con
 void Users::setEmailVerificationExpires(const ::trantor::Date &pEmailVerificationExpires) noexcept
 {
     emailVerificationExpires_ = std::make_shared<::trantor::Date>(pEmailVerificationExpires);
-    dirtyFlag_[10] = true;
+    dirtyFlag_[8] = true;
 }
 void Users::setEmailVerificationExpiresToNull() noexcept
 {
     emailVerificationExpires_.reset();
+    dirtyFlag_[8] = true;
+}
+
+const ::trantor::Date &Users::getValueOfCreatedAt() const noexcept
+{
+    static const ::trantor::Date defaultValue = ::trantor::Date();
+    if(createdAt_)
+        return *createdAt_;
+    return defaultValue;
+}
+const std::shared_ptr<::trantor::Date> &Users::getCreatedAt() const noexcept
+{
+    return createdAt_;
+}
+void Users::setCreatedAt(const ::trantor::Date &pCreatedAt) noexcept
+{
+    createdAt_ = std::make_shared<::trantor::Date>(pCreatedAt);
+    dirtyFlag_[9] = true;
+}
+
+const ::trantor::Date &Users::getValueOfUpdatedAt() const noexcept
+{
+    static const ::trantor::Date defaultValue = ::trantor::Date();
+    if(updatedAt_)
+        return *updatedAt_;
+    return defaultValue;
+}
+const std::shared_ptr<::trantor::Date> &Users::getUpdatedAt() const noexcept
+{
+    return updatedAt_;
+}
+void Users::setUpdatedAt(const ::trantor::Date &pUpdatedAt) noexcept
+{
+    updatedAt_ = std::make_shared<::trantor::Date>(pUpdatedAt);
     dirtyFlag_[10] = true;
 }
 
 void Users::updateId(const uint64_t id)
 {
-    id_ = std::make_shared<int64_t>(static_cast<int64_t>(id));
 }
 
 const std::vector<std::string> &Users::insertColumns() noexcept
@@ -1139,11 +1123,11 @@ const std::vector<std::string> &Users::insertColumns() noexcept
         "password_hash",
         "profile_image",
         "bio",
-        "created_at",
-        "updated_at",
         "email_verified",
         "email_verification_token",
-        "email_verification_expires"
+        "email_verification_expires",
+        "created_at",
+        "updated_at"
     };
     return inCols;
 }
@@ -1207,28 +1191,6 @@ void Users::outputArgs(drogon::orm::internal::SqlBinder &binder) const
     }
     if(dirtyFlag_[6])
     {
-        if(getCreatedAt())
-        {
-            binder << getValueOfCreatedAt();
-        }
-        else
-        {
-            binder << nullptr;
-        }
-    }
-    if(dirtyFlag_[7])
-    {
-        if(getUpdatedAt())
-        {
-            binder << getValueOfUpdatedAt();
-        }
-        else
-        {
-            binder << nullptr;
-        }
-    }
-    if(dirtyFlag_[8])
-    {
         if(getEmailVerified())
         {
             binder << getValueOfEmailVerified();
@@ -1238,7 +1200,7 @@ void Users::outputArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
-    if(dirtyFlag_[9])
+    if(dirtyFlag_[7])
     {
         if(getEmailVerificationToken())
         {
@@ -1249,11 +1211,33 @@ void Users::outputArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
-    if(dirtyFlag_[10])
+    if(dirtyFlag_[8])
     {
         if(getEmailVerificationExpires())
         {
             binder << getValueOfEmailVerificationExpires();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[9])
+    {
+        if(getCreatedAt())
+        {
+            binder << getValueOfCreatedAt();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[10])
+    {
+        if(getUpdatedAt())
+        {
+            binder << getValueOfUpdatedAt();
         }
         else
         {
@@ -1367,28 +1351,6 @@ void Users::updateArgs(drogon::orm::internal::SqlBinder &binder) const
     }
     if(dirtyFlag_[6])
     {
-        if(getCreatedAt())
-        {
-            binder << getValueOfCreatedAt();
-        }
-        else
-        {
-            binder << nullptr;
-        }
-    }
-    if(dirtyFlag_[7])
-    {
-        if(getUpdatedAt())
-        {
-            binder << getValueOfUpdatedAt();
-        }
-        else
-        {
-            binder << nullptr;
-        }
-    }
-    if(dirtyFlag_[8])
-    {
         if(getEmailVerified())
         {
             binder << getValueOfEmailVerified();
@@ -1398,7 +1360,7 @@ void Users::updateArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
-    if(dirtyFlag_[9])
+    if(dirtyFlag_[7])
     {
         if(getEmailVerificationToken())
         {
@@ -1409,11 +1371,33 @@ void Users::updateArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
-    if(dirtyFlag_[10])
+    if(dirtyFlag_[8])
     {
         if(getEmailVerificationExpires())
         {
             binder << getValueOfEmailVerificationExpires();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[9])
+    {
+        if(getCreatedAt())
+        {
+            binder << getValueOfCreatedAt();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[10])
+    {
+        if(getUpdatedAt())
+        {
+            binder << getValueOfUpdatedAt();
         }
         else
         {
@@ -1426,7 +1410,7 @@ Json::Value Users::toJson() const
     Json::Value ret;
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -1472,25 +1456,9 @@ Json::Value Users::toJson() const
     {
         ret["bio"]=Json::Value();
     }
-    if(getCreatedAt())
-    {
-        ret["created_at"]=getCreatedAt()->toDbStringLocal();
-    }
-    else
-    {
-        ret["created_at"]=Json::Value();
-    }
-    if(getUpdatedAt())
-    {
-        ret["updated_at"]=getUpdatedAt()->toDbStringLocal();
-    }
-    else
-    {
-        ret["updated_at"]=Json::Value();
-    }
     if(getEmailVerified())
     {
-        ret["email_verified"]=(Json::Int64)getValueOfEmailVerified();
+        ret["email_verified"]=getValueOfEmailVerified();
     }
     else
     {
@@ -1512,6 +1480,22 @@ Json::Value Users::toJson() const
     {
         ret["email_verification_expires"]=Json::Value();
     }
+    if(getCreatedAt())
+    {
+        ret["created_at"]=getCreatedAt()->toDbStringLocal();
+    }
+    else
+    {
+        ret["created_at"]=Json::Value();
+    }
+    if(getUpdatedAt())
+    {
+        ret["updated_at"]=getUpdatedAt()->toDbStringLocal();
+    }
+    else
+    {
+        ret["updated_at"]=Json::Value();
+    }
     return ret;
 }
 
@@ -1530,7 +1514,7 @@ Json::Value Users::toMasqueradedJson(
         {
             if(getId())
             {
-                ret[pMasqueradingVector[0]]=(Json::Int64)getValueOfId();
+                ret[pMasqueradingVector[0]]=getValueOfId();
             }
             else
             {
@@ -1594,9 +1578,9 @@ Json::Value Users::toMasqueradedJson(
         }
         if(!pMasqueradingVector[6].empty())
         {
-            if(getCreatedAt())
+            if(getEmailVerified())
             {
-                ret[pMasqueradingVector[6]]=getCreatedAt()->toDbStringLocal();
+                ret[pMasqueradingVector[6]]=getValueOfEmailVerified();
             }
             else
             {
@@ -1605,9 +1589,9 @@ Json::Value Users::toMasqueradedJson(
         }
         if(!pMasqueradingVector[7].empty())
         {
-            if(getUpdatedAt())
+            if(getEmailVerificationToken())
             {
-                ret[pMasqueradingVector[7]]=getUpdatedAt()->toDbStringLocal();
+                ret[pMasqueradingVector[7]]=getValueOfEmailVerificationToken();
             }
             else
             {
@@ -1616,9 +1600,9 @@ Json::Value Users::toMasqueradedJson(
         }
         if(!pMasqueradingVector[8].empty())
         {
-            if(getEmailVerified())
+            if(getEmailVerificationExpires())
             {
-                ret[pMasqueradingVector[8]]=(Json::Int64)getValueOfEmailVerified();
+                ret[pMasqueradingVector[8]]=getEmailVerificationExpires()->toDbStringLocal();
             }
             else
             {
@@ -1627,9 +1611,9 @@ Json::Value Users::toMasqueradedJson(
         }
         if(!pMasqueradingVector[9].empty())
         {
-            if(getEmailVerificationToken())
+            if(getCreatedAt())
             {
-                ret[pMasqueradingVector[9]]=getValueOfEmailVerificationToken();
+                ret[pMasqueradingVector[9]]=getCreatedAt()->toDbStringLocal();
             }
             else
             {
@@ -1638,9 +1622,9 @@ Json::Value Users::toMasqueradedJson(
         }
         if(!pMasqueradingVector[10].empty())
         {
-            if(getEmailVerificationExpires())
+            if(getUpdatedAt())
             {
-                ret[pMasqueradingVector[10]]=getEmailVerificationExpires()->toDbStringLocal();
+                ret[pMasqueradingVector[10]]=getUpdatedAt()->toDbStringLocal();
             }
             else
             {
@@ -1652,7 +1636,7 @@ Json::Value Users::toMasqueradedJson(
     LOG_ERROR << "Masquerade failed";
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -1698,25 +1682,9 @@ Json::Value Users::toMasqueradedJson(
     {
         ret["bio"]=Json::Value();
     }
-    if(getCreatedAt())
-    {
-        ret["created_at"]=getCreatedAt()->toDbStringLocal();
-    }
-    else
-    {
-        ret["created_at"]=Json::Value();
-    }
-    if(getUpdatedAt())
-    {
-        ret["updated_at"]=getUpdatedAt()->toDbStringLocal();
-    }
-    else
-    {
-        ret["updated_at"]=Json::Value();
-    }
     if(getEmailVerified())
     {
-        ret["email_verified"]=(Json::Int64)getValueOfEmailVerified();
+        ret["email_verified"]=getValueOfEmailVerified();
     }
     else
     {
@@ -1737,6 +1705,22 @@ Json::Value Users::toMasqueradedJson(
     else
     {
         ret["email_verification_expires"]=Json::Value();
+    }
+    if(getCreatedAt())
+    {
+        ret["created_at"]=getCreatedAt()->toDbStringLocal();
+    }
+    else
+    {
+        ret["created_at"]=Json::Value();
+    }
+    if(getUpdatedAt())
+    {
+        ret["updated_at"]=getUpdatedAt()->toDbStringLocal();
+    }
+    else
+    {
+        ret["updated_at"]=Json::Value();
     }
     return ret;
 }
@@ -1788,29 +1772,29 @@ bool Users::validateJsonForCreation(const Json::Value &pJson, std::string &err)
         if(!validJsonOfField(5, "bio", pJson["bio"], err, true))
             return false;
     }
-    if(pJson.isMember("created_at"))
-    {
-        if(!validJsonOfField(6, "created_at", pJson["created_at"], err, true))
-            return false;
-    }
-    if(pJson.isMember("updated_at"))
-    {
-        if(!validJsonOfField(7, "updated_at", pJson["updated_at"], err, true))
-            return false;
-    }
     if(pJson.isMember("email_verified"))
     {
-        if(!validJsonOfField(8, "email_verified", pJson["email_verified"], err, true))
+        if(!validJsonOfField(6, "email_verified", pJson["email_verified"], err, true))
             return false;
     }
     if(pJson.isMember("email_verification_token"))
     {
-        if(!validJsonOfField(9, "email_verification_token", pJson["email_verification_token"], err, true))
+        if(!validJsonOfField(7, "email_verification_token", pJson["email_verification_token"], err, true))
             return false;
     }
     if(pJson.isMember("email_verification_expires"))
     {
-        if(!validJsonOfField(10, "email_verification_expires", pJson["email_verification_expires"], err, true))
+        if(!validJsonOfField(8, "email_verification_expires", pJson["email_verification_expires"], err, true))
+            return false;
+    }
+    if(pJson.isMember("created_at"))
+    {
+        if(!validJsonOfField(9, "created_at", pJson["created_at"], err, true))
+            return false;
+    }
+    if(pJson.isMember("updated_at"))
+    {
+        if(!validJsonOfField(10, "updated_at", pJson["updated_at"], err, true))
             return false;
     }
     return true;
@@ -1973,29 +1957,29 @@ bool Users::validateJsonForUpdate(const Json::Value &pJson, std::string &err)
         if(!validJsonOfField(5, "bio", pJson["bio"], err, false))
             return false;
     }
-    if(pJson.isMember("created_at"))
-    {
-        if(!validJsonOfField(6, "created_at", pJson["created_at"], err, false))
-            return false;
-    }
-    if(pJson.isMember("updated_at"))
-    {
-        if(!validJsonOfField(7, "updated_at", pJson["updated_at"], err, false))
-            return false;
-    }
     if(pJson.isMember("email_verified"))
     {
-        if(!validJsonOfField(8, "email_verified", pJson["email_verified"], err, false))
+        if(!validJsonOfField(6, "email_verified", pJson["email_verified"], err, false))
             return false;
     }
     if(pJson.isMember("email_verification_token"))
     {
-        if(!validJsonOfField(9, "email_verification_token", pJson["email_verification_token"], err, false))
+        if(!validJsonOfField(7, "email_verification_token", pJson["email_verification_token"], err, false))
             return false;
     }
     if(pJson.isMember("email_verification_expires"))
     {
-        if(!validJsonOfField(10, "email_verification_expires", pJson["email_verification_expires"], err, false))
+        if(!validJsonOfField(8, "email_verification_expires", pJson["email_verification_expires"], err, false))
+            return false;
+    }
+    if(pJson.isMember("created_at"))
+    {
+        if(!validJsonOfField(9, "created_at", pJson["created_at"], err, false))
+            return false;
+    }
+    if(pJson.isMember("updated_at"))
+    {
+        if(!validJsonOfField(10, "updated_at", pJson["updated_at"], err, false))
             return false;
     }
     return true;
@@ -2087,16 +2071,17 @@ bool Users::validJsonOfField(size_t index,
     switch(index)
     {
         case 0:
+            if(pJson.isNull())
+            {
+                err="The " + fieldName + " column cannot be null";
+                return false;
+            }
             if(isForCreation)
             {
                 err="The automatic primary key cannot be set";
                 return false;
             }
-            if(pJson.isNull())
-            {
-                return true;
-            }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -2113,6 +2098,14 @@ bool Users::validJsonOfField(size_t index,
                 err="Type error in the "+fieldName+" field";
                 return false;
             }
+            if(pJson.isString() && std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t>{}
+                .from_bytes(pJson.asCString()).size() > 64)
+            {
+                err="String length exceeds limit for the " +
+                    fieldName +
+                    " field (the maximum value is 64)";
+                return false;
+            }
             break;
         case 2:
             if(pJson.isNull())
@@ -2123,6 +2116,14 @@ bool Users::validJsonOfField(size_t index,
             if(!pJson.isString())
             {
                 err="Type error in the "+fieldName+" field";
+                return false;
+            }
+            if(pJson.isString() && std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t>{}
+                .from_bytes(pJson.asCString()).size() > 255)
+            {
+                err="String length exceeds limit for the " +
+                    fieldName +
+                    " field (the maximum value is 255)";
                 return false;
             }
             break;
@@ -2165,7 +2166,7 @@ bool Users::validJsonOfField(size_t index,
             {
                 return true;
             }
-            if(!pJson.isString())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -2187,7 +2188,7 @@ bool Users::validJsonOfField(size_t index,
             {
                 return true;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isString())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -2196,7 +2197,8 @@ bool Users::validJsonOfField(size_t index,
         case 9:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
             if(!pJson.isString())
             {
@@ -2207,7 +2209,8 @@ bool Users::validJsonOfField(size_t index,
         case 10:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
             if(!pJson.isString())
             {

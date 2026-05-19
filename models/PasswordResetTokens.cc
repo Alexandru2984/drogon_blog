@@ -11,23 +11,23 @@
 
 using namespace drogon;
 using namespace drogon::orm;
-using namespace drogon_model::sqlite3;
+using namespace drogon_model::blog_db;
 
-const std::string PasswordResetTokens::Cols::_id = "id";
-const std::string PasswordResetTokens::Cols::_user_id = "user_id";
-const std::string PasswordResetTokens::Cols::_token = "token";
-const std::string PasswordResetTokens::Cols::_expires_at = "expires_at";
-const std::string PasswordResetTokens::Cols::_created_at = "created_at";
+const std::string PasswordResetTokens::Cols::_id = "\"id\"";
+const std::string PasswordResetTokens::Cols::_user_id = "\"user_id\"";
+const std::string PasswordResetTokens::Cols::_token = "\"token\"";
+const std::string PasswordResetTokens::Cols::_expires_at = "\"expires_at\"";
+const std::string PasswordResetTokens::Cols::_created_at = "\"created_at\"";
 const std::string PasswordResetTokens::primaryKeyName = "id";
 const bool PasswordResetTokens::hasPrimaryKey = true;
-const std::string PasswordResetTokens::tableName = "password_reset_tokens";
+const std::string PasswordResetTokens::tableName = "\"password_reset_tokens\"";
 
 const std::vector<typename PasswordResetTokens::MetaData> PasswordResetTokens::metaData_={
-{"id","int64_t","integer",8,1,1,0},
-{"user_id","int64_t","integer",8,0,0,1},
+{"id","int32_t","integer",4,1,1,1},
+{"user_id","int32_t","integer",4,0,0,1},
 {"token","std::string","text",0,0,0,1},
-{"expires_at","::trantor::Date","datetime",0,0,0,1},
-{"created_at","::trantor::Date","datetime",0,0,0,0}
+{"expires_at","::trantor::Date","timestamp without time zone",0,0,0,1},
+{"created_at","::trantor::Date","timestamp without time zone",0,0,0,1}
 };
 const std::string &PasswordResetTokens::getColumnName(size_t index) noexcept(false)
 {
@@ -40,11 +40,11 @@ PasswordResetTokens::PasswordResetTokens(const Row &r, const ssize_t indexOffset
     {
         if(!r["id"].isNull())
         {
-            id_=std::make_shared<int64_t>(r["id"].as<int64_t>());
+            id_=std::make_shared<int32_t>(r["id"].as<int32_t>());
         }
         if(!r["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>(r["user_id"].as<int64_t>());
+            userId_=std::make_shared<int32_t>(r["user_id"].as<int32_t>());
         }
         if(!r["token"].isNull())
         {
@@ -107,12 +107,12 @@ PasswordResetTokens::PasswordResetTokens(const Row &r, const ssize_t indexOffset
         index = offset + 0;
         if(!r[index].isNull())
         {
-            id_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            id_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 1;
         if(!r[index].isNull())
         {
-            userId_=std::make_shared<int64_t>(r[index].as<int64_t>());
+            userId_=std::make_shared<int32_t>(r[index].as<int32_t>());
         }
         index = offset + 2;
         if(!r[index].isNull())
@@ -181,7 +181,7 @@ PasswordResetTokens::PasswordResetTokens(const Json::Value &pJson, const std::ve
         dirtyFlag_[0] = true;
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -189,7 +189,7 @@ PasswordResetTokens::PasswordResetTokens(const Json::Value &pJson, const std::ve
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -261,7 +261,7 @@ PasswordResetTokens::PasswordResetTokens(const Json::Value &pJson) noexcept(fals
         dirtyFlag_[0]=true;
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("user_id"))
@@ -269,7 +269,7 @@ PasswordResetTokens::PasswordResetTokens(const Json::Value &pJson) noexcept(fals
         dirtyFlag_[1]=true;
         if(!pJson["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson["user_id"].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson["user_id"].asInt64());
         }
     }
     if(pJson.isMember("token"))
@@ -346,7 +346,7 @@ void PasswordResetTokens::updateByMasqueradedJson(const Json::Value &pJson,
     {
         if(!pJson[pMasqueradingVector[0]].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[0]].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[0]].asInt64());
         }
     }
     if(!pMasqueradingVector[1].empty() && pJson.isMember(pMasqueradingVector[1]))
@@ -354,7 +354,7 @@ void PasswordResetTokens::updateByMasqueradedJson(const Json::Value &pJson,
         dirtyFlag_[1] = true;
         if(!pJson[pMasqueradingVector[1]].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson[pMasqueradingVector[1]].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson[pMasqueradingVector[1]].asInt64());
         }
     }
     if(!pMasqueradingVector[2].empty() && pJson.isMember(pMasqueradingVector[2]))
@@ -425,7 +425,7 @@ void PasswordResetTokens::updateByJson(const Json::Value &pJson) noexcept(false)
     {
         if(!pJson["id"].isNull())
         {
-            id_=std::make_shared<int64_t>((int64_t)pJson["id"].asInt64());
+            id_=std::make_shared<int32_t>((int32_t)pJson["id"].asInt64());
         }
     }
     if(pJson.isMember("user_id"))
@@ -433,7 +433,7 @@ void PasswordResetTokens::updateByJson(const Json::Value &pJson) noexcept(false)
         dirtyFlag_[1] = true;
         if(!pJson["user_id"].isNull())
         {
-            userId_=std::make_shared<int64_t>((int64_t)pJson["user_id"].asInt64());
+            userId_=std::make_shared<int32_t>((int32_t)pJson["user_id"].asInt64());
         }
     }
     if(pJson.isMember("token"))
@@ -498,25 +498,20 @@ void PasswordResetTokens::updateByJson(const Json::Value &pJson) noexcept(false)
     }
 }
 
-const int64_t &PasswordResetTokens::getValueOfId() const noexcept
+const int32_t &PasswordResetTokens::getValueOfId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(id_)
         return *id_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &PasswordResetTokens::getId() const noexcept
+const std::shared_ptr<int32_t> &PasswordResetTokens::getId() const noexcept
 {
     return id_;
 }
-void PasswordResetTokens::setId(const int64_t &pId) noexcept
+void PasswordResetTokens::setId(const int32_t &pId) noexcept
 {
-    id_ = std::make_shared<int64_t>(pId);
-    dirtyFlag_[0] = true;
-}
-void PasswordResetTokens::setIdToNull() noexcept
-{
-    id_.reset();
+    id_ = std::make_shared<int32_t>(pId);
     dirtyFlag_[0] = true;
 }
 const typename PasswordResetTokens::PrimaryKeyType & PasswordResetTokens::getPrimaryKey() const
@@ -525,20 +520,20 @@ const typename PasswordResetTokens::PrimaryKeyType & PasswordResetTokens::getPri
     return *id_;
 }
 
-const int64_t &PasswordResetTokens::getValueOfUserId() const noexcept
+const int32_t &PasswordResetTokens::getValueOfUserId() const noexcept
 {
-    static const int64_t defaultValue = int64_t();
+    static const int32_t defaultValue = int32_t();
     if(userId_)
         return *userId_;
     return defaultValue;
 }
-const std::shared_ptr<int64_t> &PasswordResetTokens::getUserId() const noexcept
+const std::shared_ptr<int32_t> &PasswordResetTokens::getUserId() const noexcept
 {
     return userId_;
 }
-void PasswordResetTokens::setUserId(const int64_t &pUserId) noexcept
+void PasswordResetTokens::setUserId(const int32_t &pUserId) noexcept
 {
-    userId_ = std::make_shared<int64_t>(pUserId);
+    userId_ = std::make_shared<int32_t>(pUserId);
     dirtyFlag_[1] = true;
 }
 
@@ -597,15 +592,9 @@ void PasswordResetTokens::setCreatedAt(const ::trantor::Date &pCreatedAt) noexce
     createdAt_ = std::make_shared<::trantor::Date>(pCreatedAt);
     dirtyFlag_[4] = true;
 }
-void PasswordResetTokens::setCreatedAtToNull() noexcept
-{
-    createdAt_.reset();
-    dirtyFlag_[4] = true;
-}
 
 void PasswordResetTokens::updateId(const uint64_t id)
 {
-    id_ = std::make_shared<int64_t>(static_cast<int64_t>(id));
 }
 
 const std::vector<std::string> &PasswordResetTokens::insertColumns() noexcept
@@ -741,7 +730,7 @@ Json::Value PasswordResetTokens::toJson() const
     Json::Value ret;
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -749,7 +738,7 @@ Json::Value PasswordResetTokens::toJson() const
     }
     if(getUserId())
     {
-        ret["user_id"]=(Json::Int64)getValueOfUserId();
+        ret["user_id"]=getValueOfUserId();
     }
     else
     {
@@ -797,7 +786,7 @@ Json::Value PasswordResetTokens::toMasqueradedJson(
         {
             if(getId())
             {
-                ret[pMasqueradingVector[0]]=(Json::Int64)getValueOfId();
+                ret[pMasqueradingVector[0]]=getValueOfId();
             }
             else
             {
@@ -808,7 +797,7 @@ Json::Value PasswordResetTokens::toMasqueradedJson(
         {
             if(getUserId())
             {
-                ret[pMasqueradingVector[1]]=(Json::Int64)getValueOfUserId();
+                ret[pMasqueradingVector[1]]=getValueOfUserId();
             }
             else
             {
@@ -853,7 +842,7 @@ Json::Value PasswordResetTokens::toMasqueradedJson(
     LOG_ERROR << "Masquerade failed";
     if(getId())
     {
-        ret["id"]=(Json::Int64)getValueOfId();
+        ret["id"]=getValueOfId();
     }
     else
     {
@@ -861,7 +850,7 @@ Json::Value PasswordResetTokens::toMasqueradedJson(
     }
     if(getUserId())
     {
-        ret["user_id"]=(Json::Int64)getValueOfUserId();
+        ret["user_id"]=getValueOfUserId();
     }
     else
     {
@@ -1102,16 +1091,17 @@ bool PasswordResetTokens::validJsonOfField(size_t index,
     switch(index)
     {
         case 0:
+            if(pJson.isNull())
+            {
+                err="The " + fieldName + " column cannot be null";
+                return false;
+            }
             if(isForCreation)
             {
                 err="The automatic primary key cannot be set";
                 return false;
             }
-            if(pJson.isNull())
-            {
-                return true;
-            }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1123,7 +1113,7 @@ bool PasswordResetTokens::validJsonOfField(size_t index,
                 err="The " + fieldName + " column cannot be null";
                 return false;
             }
-            if(!pJson.isInt64())
+            if(!pJson.isInt())
             {
                 err="Type error in the "+fieldName+" field";
                 return false;
@@ -1156,7 +1146,8 @@ bool PasswordResetTokens::validJsonOfField(size_t index,
         case 4:
             if(pJson.isNull())
             {
-                return true;
+                err="The " + fieldName + " column cannot be null";
+                return false;
             }
             if(!pJson.isString())
             {
