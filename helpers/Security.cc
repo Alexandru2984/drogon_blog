@@ -195,6 +195,49 @@ void registerAdvices()
         [](const drogon::HttpRequestPtr&, const drogon::HttpResponsePtr& resp) {
             applySecurityHeaders(resp);
         });
+
+    // Drogon attaches the session cookie *after* PostHandling, so we patch it
+    // at the very last step before serialization. When BLOG_SECURE_COOKIES=1
+    // the JSESSIONID cookie is re-emitted with the Secure flag.
+    drogon::app().registerPreSendingAdvice(
+        [](const drogon::HttpRequestPtr&, const drogon::HttpResponsePtr& resp) {
+            if (!secureCookies()) return;
+            const auto& jar = resp->getCookies();
+            auto it = jar.find("JSESSIONID");
+            if (it == jar.end() || it->second.value().empty()) return;
+            if (it->second.isSecure()) return;          // already done
+            drogon::Cookie c = it->second;
+            c.setSecure(true);
+            resp->removeCookie("JSESSIONID");
+            resp->addCookie(std::move(c));
+        });
+}
+
+bool secureCookies()
+{
+    const char* v = std::getenv("BLOG_SECURE_COOKIES");
+    return v && std::string(v) == "1";
+}
+
+std::string hashPassword(const std::string& password)
+{
+    char out[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(out,
+                          password.c_str(),
+                          password.size(),
+                          crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                          crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0)
+    {
+        throw std::runtime_error("password hashing failed");
+    }
+    return std::string(out);
+}
+
+bool verifyPassword(const std::string& storedHash, const std::string& candidate)
+{
+    return crypto_pwhash_str_verify(storedHash.c_str(),
+                                    candidate.c_str(),
+                                    candidate.size()) == 0;
 }
 
 void applySecurityHeaders(const drogon::HttpResponsePtr& resp)

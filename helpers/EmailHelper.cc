@@ -190,6 +190,26 @@ void EmailHelper::sendVerificationEmail(const std::string& email,
     enqueue({email, "Verify your email address", body.str()});
 }
 
+void EmailHelper::sendRegistrationAttemptEmail(const std::string& email,
+                                               const std::string& existingUsername)
+{
+    std::ostringstream body;
+    body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
+         << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
+         << "<h2 style='color:#333;'>Someone tried to register with your email</h2>"
+         << "<p>Hi " << existingUsername << ",</p>"
+         << "<p>An account already exists at " << env("SMTP_FROM_NAME")
+         << " under this email address. Just now, someone attempted to create a"
+         << " <em>new</em> account using the same address.</p>"
+         << "<p>If this was you and you forgot you already had an account, you can"
+         << " log in or reset your password from the usual links. Otherwise you can"
+         << " safely ignore this message — no new account was created.</p>"
+         << "<p style='color:#999;font-size:12px;margin-top:30px;'>"
+         << "This is an automated notification; no action is required.</p>"
+         << "</div></body></html>";
+    enqueue({email, "Someone tried to register with your email", body.str()});
+}
+
 void EmailHelper::sendPasswordResetEmail(const std::string& email,
                                          const std::string& username,
                                          const std::string& token)

@@ -2,6 +2,7 @@
 #include "../models/Comments.h"
 #include "../models/Users.h"
 #include <drogon/orm/Mapper.h>
+#include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
 
 using namespace drogon;
@@ -175,6 +176,12 @@ void CommentController::updateComment(const HttpRequestPtr &req,
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);
+    } catch (const UnexpectedRows &) {
+        Json::Value ret;
+        ret["error"] = "Comment not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
+        callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
         Json::Value ret;
@@ -222,6 +229,12 @@ void CommentController::deleteComment(const HttpRequestPtr &req,
         Json::Value ret;
         ret["message"] = "Comment deleted successfully";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        callback(resp);
+    } catch (const UnexpectedRows &) {
+        Json::Value ret;
+        ret["error"] = "Comment not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

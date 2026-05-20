@@ -14,14 +14,21 @@ const router = useRouter()
 const route = useRoute()
 const toasts = useToastStore()
 
+// Reject anything that could navigate off the current origin. Protocol-relative
+// URLs (`//evil.example`) and absolute URLs both fall through to '/'.
+function safeNext(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0) return '/'
+  if (raw[0] !== '/' || raw.startsWith('//') || raw.startsWith('/\\')) return '/'
+  return raw
+}
+
 async function submit() {
   error.value = ''
   loading.value = true
   try {
     await auth.login(username.value, password.value)
     toasts.push(`Welcome back, ${auth.user!.username}`, 'ok')
-    const next = (route.query.next as string) || '/'
-    router.push(next)
+    router.push(safeNext(route.query.next))
   } catch (e: any) {
     error.value = e?.response?.data?.error ?? 'Login failed'
   } finally {

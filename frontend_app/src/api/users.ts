@@ -5,7 +5,7 @@ export const usersApi = {
   get(id: number) {
     return api.get<User>(`/users/${id}`).then(r => r.data)
   },
-  updateProfile(payload: { email?: string; bio?: string }) {
+  updateProfile(payload: { email?: string; bio?: string; current_password?: string }) {
     return api.put('/users/profile', payload).then(r => r.data)
   },
   uploadImage(file: File) {

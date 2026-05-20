@@ -23,6 +23,12 @@ public:
                                        const std::string& username,
                                        const std::string& token);
 
+    // Sent to a user whose email was used as a registration target by someone
+    // else. Prevents email-enumeration via the register endpoint without
+    // leaving the legitimate owner in the dark.
+    static void sendRegistrationAttemptEmail(const std::string& email,
+                                             const std::string& existingUsername);
+
     // Pending jobs in the worker queue. Exposed for metrics.
     static std::size_t queueDepth();
 };

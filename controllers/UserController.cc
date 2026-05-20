@@ -1,6 +1,9 @@
 #include "UserController.h"
 #include "../models/Users.h"
+#include "../helpers/EmailHelper.h"
+#include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
+#include <drogon/orm/Exception.h>
 #include <drogon/MultiPart.h>
 #include <trantor/utils/Logger.h>
 #include <filesystem>
@@ -71,8 +74,35 @@ void UserController::updateProfile(const HttpRequestPtr &req,
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
 
+        // Changing the email is privileged: an attacker who hijacks a live
+        // session could otherwise pivot the account by retargeting password
+        // recovery. Require the current password and re-issue verification.
         if (json->isMember("email")) {
-            user.setEmail((*json)["email"].asString());
+            const std::string newEmail = (*json)["email"].asString();
+            if (newEmail != user.getValueOfEmail()) {
+                const std::string currentPassword =
+                    (*json)["current_password"].asString();
+                if (currentPassword.empty() ||
+                    !security::verifyPassword(user.getValueOfPasswordHash(),
+                                              currentPassword))
+                {
+                    Json::Value ret;
+                    ret["error"] = "Current password is required to change email";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k403Forbidden);
+                    callback(resp);
+                    return;
+                }
+                user.setEmail(newEmail);
+                user.setEmailVerified(0);
+                const std::string verificationToken = EmailHelper::generateToken();
+                user.setEmailVerificationToken(verificationToken);
+                user.setEmailVerificationExpires(
+                    trantor::Date::now().after(24 * 3600));
+
+                EmailHelper::sendVerificationEmail(
+                    newEmail, user.getValueOfUsername(), verificationToken);
+            }
         }
         if (json->isMember("bio")) {
             user.setBio((*json)["bio"].asString());
@@ -81,13 +111,19 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         mapper.update(user);
 
         Json::Value ret;
-        ret["message"] = "Profile updated successfully";
-        ret["user"]["id"] = user.getValueOfId();
+        ret["message"]          = "Profile updated successfully";
+        ret["user"]["id"]       = user.getValueOfId();
         ret["user"]["username"] = user.getValueOfUsername();
-        ret["user"]["email"] = user.getValueOfEmail();
-        ret["user"]["bio"] = user.getValueOfBio();
+        ret["user"]["email"]    = user.getValueOfEmail();
+        ret["user"]["bio"]      = user.getValueOfBio();
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        callback(resp);
+    } catch (const UnexpectedRows &) {
+        Json::Value ret;
+        ret["error"] = "User not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

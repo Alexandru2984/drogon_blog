@@ -3,6 +3,7 @@
 #include "../models/Users.h"
 #include "../models/Likes.h"
 #include <drogon/orm/Mapper.h>
+#include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
 
 using namespace drogon;
@@ -309,6 +310,12 @@ void PostController::updatePost(const HttpRequestPtr &req,
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);
+    } catch (const UnexpectedRows &) {
+        Json::Value ret;
+        ret["error"] = "Post not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
+        callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
         Json::Value ret;
@@ -356,6 +363,12 @@ void PostController::deletePost(const HttpRequestPtr &req,
         Json::Value ret;
         ret["message"] = "Post deleted successfully";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        callback(resp);
+    } catch (const UnexpectedRows &) {
+        Json::Value ret;
+        ret["error"] = "Post not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

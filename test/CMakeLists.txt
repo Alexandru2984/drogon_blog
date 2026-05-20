@@ -6,7 +6,8 @@ set(TEST_SOURCES
     test_auth.cc
     test_posts.cc
     test_password_hashing.cc
-    test_search.cc)
+    test_search.cc
+    test_security.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 

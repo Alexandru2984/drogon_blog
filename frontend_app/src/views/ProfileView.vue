@@ -21,7 +21,12 @@ const isMe = computed(() => auth.isAuthed && auth.user!.id === props.id)
 const editing = ref(false)
 const editBio = ref('')
 const editEmail = ref('')
+const editCurrentPassword = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+
+const emailChanged = computed(
+  () => !!user.value && editEmail.value !== (user.value.email ?? '')
+)
 
 async function load() {
   loading.value = true
@@ -47,11 +52,21 @@ watch(() => props.id, load)
 
 async function saveProfile() {
   try {
-    const res = await usersApi.updateProfile({ email: editEmail.value, bio: editBio.value })
+    const payload: { email?: string; bio?: string; current_password?: string } = {
+      email: editEmail.value,
+      bio:   editBio.value,
+    }
+    if (emailChanged.value) payload.current_password = editCurrentPassword.value
+    const res = await usersApi.updateProfile(payload)
     user.value = { ...user.value!, email: res.user.email, bio: res.user.bio }
     auth.patchUser({ email: res.user.email, bio: res.user.bio })
     editing.value = false
-    toasts.push('Profile updated', 'ok')
+    editCurrentPassword.value = ''
+    toasts.push(
+      emailChanged.value
+        ? 'Profile updated. Check your email to verify the new address.'
+        : 'Profile updated',
+      'ok')
   } catch (e: any) {
     toasts.push(e?.response?.data?.error ?? 'Could not save', 'error')
   }
@@ -95,12 +110,25 @@ async function onFileChange(ev: Event) {
     <section v-if="editing" class="card">
       <label>Email</label>
       <input v-model="editEmail" type="email" />
+
+      <template v-if="emailChanged">
+        <label>Current password (required to change email)</label>
+        <input v-model="editCurrentPassword" type="password" autocomplete="current-password" />
+        <p class="muted" style="margin-top: 0.25rem; font-size: 0.85em;">
+          A verification email will be sent to the new address; access to the
+          account is restricted until it's confirmed.
+        </p>
+      </template>
+
       <label>Bio</label>
       <textarea v-model="editBio" rows="4"></textarea>
       <label>Profile image</label>
       <input ref="fileInput" type="file" accept="image/*" @change="onFileChange" />
       <div class="toolbar" style="margin-top: 1rem;">
-        <button @click="saveProfile">Save</button>
+        <button
+          @click="saveProfile"
+          :disabled="emailChanged && !editCurrentPassword"
+        >Save</button>
         <button class="ghost" @click="editing = false">Cancel</button>
       </div>
     </section>

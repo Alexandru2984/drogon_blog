@@ -36,6 +36,16 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
 // Applies CSP, HSTS, X-Frame-Options and friends to the response. Idempotent.
 void applySecurityHeaders(const drogon::HttpResponsePtr& resp);
 
+// True when BLOG_SECURE_COOKIES=1 (set in production behind TLS). Controls
+// whether the auth/CSRF cookies carry the Secure flag.
+bool secureCookies();
+
+// Argon2id (via libsodium) wrappers. hashPassword may throw std::runtime_error
+// on OOM. verifyPassword is constant-time within libsodium.
+std::string hashPassword(const std::string& password);
+bool        verifyPassword(const std::string& storedHash,
+                           const std::string& candidate);
+
 // Wires the rate limiter, CSRF guard, and response-header advices into the
 // running Drogon app. Must be called after loadConfigJson and before run().
 // Honours BLOG_DISABLE_RATE_LIMIT=1 to ease integration testing from a
