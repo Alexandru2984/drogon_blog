@@ -10,6 +10,12 @@ jobs:
   backend:
     name: Backend (build + integration tests)
     runs-on: ubuntu-24.04
+    # The official Drogon image carries a pre-built static libdrogon at
+    # /usr/local on top of Ubuntu 22.04. We do *not* use apt's libdrogon-dev
+    # because the version in Ubuntu noble (1.8.7) is too old for the API we
+    # depend on (registerSyncAdvice/HttpResponsePtr return, runOnQuit, …).
+    container:
+      image: drogonframework/drogon:latest
     services:
       postgres:
         image: postgres:17-alpine
@@ -17,8 +23,6 @@ jobs:
           POSTGRES_USER:     blog_user
           POSTGRES_PASSWORD: blog_ci_password
           POSTGRES_DB:       blog_test_db
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U blog_user -d blog_test_db"
           --health-interval 3s
@@ -28,13 +32,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install build-time extras
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config \
-            libdrogon-dev libsodium-dev libcurl4-openssl-dev libssl-dev \
-            libbrotli-dev libjsoncpp-dev uuid-dev zlib1g-dev libpq-dev \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
             postgresql-client
 
       - name: Configure
@@ -44,8 +47,10 @@ jobs:
         run: cmake --build build -j"$(nproc)"
 
       - name: Run integration tests
+        # When the job runs inside a container, services are reachable by their
+        # service name on the bridge network, not via the runner's loopback.
         env:
-          TEST_DB_HOST:     127.0.0.1
+          TEST_DB_HOST:     postgres
           TEST_DB_PORT:     5432
           TEST_DB_USER:     blog_user
           TEST_DB_PASSWORD: blog_ci_password

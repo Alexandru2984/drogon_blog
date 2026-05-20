@@ -12,8 +12,10 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
-    ports:
-      - "5432:5432"
+    # Postgres is only reachable on the compose network by default to avoid
+    # clashing with a local 5432. To inspect it from the host, either run
+    # `docker compose exec db psql -U $DB_USER $DB_NAME`, or add a compose
+    # override mapping (e.g. - "55432:5432") in a docker-compose.override.yml.
 
   app:
     build:
