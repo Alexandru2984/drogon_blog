@@ -30,10 +30,10 @@ async function submit() {
 <template>
   <h1>New post</h1>
   <form @submit.prevent="submit" class="card">
-    <label>Title</label>
-    <input v-model="title" required maxlength="200" />
-    <label>Content</label>
-    <textarea v-model="content" required rows="12"></textarea>
+    <label for="post-title">Title</label>
+    <input id="post-title" v-model="title" required maxlength="200" />
+    <label for="post-content">Content</label>
+    <textarea id="post-content" v-model="content" required rows="12"></textarea>
     <p v-if="error" class="error">{{ error }}</p>
     <div class="toolbar" style="margin-top: 1rem;">
       <button :disabled="loading || !title || !content">

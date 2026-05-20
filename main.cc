@@ -7,6 +7,7 @@
 #include "helpers/Markdown.h"
 #include "helpers/Ops.h"
 #include "helpers/PgListener.h"
+#include "helpers/PublicPages.h"
 #include "helpers/Security.h"
 #include "controllers/MessageWebSocket.h"
 
@@ -182,6 +183,12 @@ int main()
 
     // /healthz, /readyz, /metrics.
     ops::install();
+
+    // /feed.xml (Atom 1.0) + /preview/posts/{id} (OpenGraph/Twitter cards).
+    public_pages::install(
+        std::getenv("BLOG_SITE_ORIGIN")
+            ? std::getenv("BLOG_SITE_ORIGIN")
+            : "https://blog.micutu.com");
 
     std::cout << "Drogon listening (see config for port)..." << std::endl;
     drogon::app().run();

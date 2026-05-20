@@ -141,6 +141,7 @@ void registerAdvices()
         "/auth/request-reset", "/auth/reset-password",
         "/auth/verify-email", "/auth/resend-verification",
     };
+    (void)kCsrfExempt;  // referenced below; kept extracted for clarity
 
     const char* disableRl = std::getenv("BLOG_DISABLE_RATE_LIMIT");
     const bool rateLimitEnabled = !(disableRl && std::string(disableRl) == "1");

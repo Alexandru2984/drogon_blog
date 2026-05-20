@@ -41,10 +41,10 @@ async function submit() {
   <div class="card" style="max-width: 420px; margin: 2rem auto;">
     <h2>Login</h2>
     <form @submit.prevent="submit">
-      <label>Username</label>
-      <input v-model="username" autofocus autocomplete="username" required />
-      <label>Password</label>
-      <input v-model="password" type="password" autocomplete="current-password" required />
+      <label for="login-username">Username</label>
+      <input id="login-username" v-model="username" autofocus autocomplete="username" required />
+      <label for="login-password">Password</label>
+      <input id="login-password" v-model="password" type="password" autocomplete="current-password" required />
       <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
       <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
         {{ loading ? 'Signing in…' : 'Sign in' }}

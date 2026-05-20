@@ -35,12 +35,12 @@ async function submit() {
   <div class="card" style="max-width: 420px; margin: 2rem auto;">
     <h2>Create account</h2>
     <form v-if="!done" @submit.prevent="submit">
-      <label>Username</label>
-      <input v-model="username" autofocus required minlength="3" maxlength="64" />
-      <label>Email</label>
-      <input v-model="email" type="email" required />
-      <label>Password</label>
-      <input v-model="password" type="password" autocomplete="new-password" required minlength="8" />
+      <label for="reg-username">Username</label>
+      <input id="reg-username" v-model="username" autofocus required minlength="3" maxlength="64" />
+      <label for="reg-email">Email</label>
+      <input id="reg-email" v-model="email" type="email" required />
+      <label for="reg-password">Password</label>
+      <input id="reg-password" v-model="password" type="password" autocomplete="new-password" required minlength="8" />
       <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
       <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
         {{ loading ? 'Creating…' : 'Sign up' }}

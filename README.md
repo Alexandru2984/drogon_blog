@@ -270,12 +270,33 @@ password_reset_tokens (id IDENTITY, user_id → users, token, expires_at, create
 
 ## Testing
 
+Two layers, both run in CI on every push:
+
 ```bash
+# C++ integration suite — drogon-test, real Postgres, no mocks.
 cmake --build build --target blog_test
-./build/test/blog_test
+TEST_DB_HOST=127.0.0.1 TEST_DB_PASSWORD=… \
+  ./build/test/blog_test
+
+# Browser end-to-end — Playwright + Chromium against the SPA + backend.
+cd e2e
+npm ci && npx playwright install chromium
+BLOG_DISABLE_RATE_LIMIT=1 sudo systemctl restart drogon-blog
+npm test
 ```
 
-Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopback port, and hit it with the framework's HTTP client. Tests target a real PostgreSQL database (`blog_test_db`, see `test/setup.sql`) rather than mocks, so SQL behaviour and trigger logic are exercised end-to-end.
+The C++ tests cover Argon2id verify, the auth state machine (including the constant-time login and atomic password-reset semantics from [`SECURITY.md`](SECURITY.md)), the markdown sanitiser, the cursor-paginated feed, full-text search ranking and snippets, and the image pipeline (magic-byte sniffer, EXIF strip).
+
+The Playwright suite drives a real browser: register → login → markdown post → comment → search → logout, plus probes `/feed.xml` and `/preview/posts/{id}` directly to assert the Atom XML shape and the OpenGraph / Twitter Card meta tags. It runs in CI against a docker-compose stack with rate limiting disabled.
+
+## Social / SEO
+
+| Endpoint                 | What it serves                                                                       |
+|--------------------------|--------------------------------------------------------------------------------------|
+| `GET /feed.xml`          | Atom 1.0 feed of the 30 most recent posts, `Content-Type: application/atom+xml`.     |
+| `GET /preview/posts/{id}`| Plain HTML carrying `og:title` / `og:description` / `og:url` / `twitter:card` meta tags plus a `<meta http-equiv="refresh">` that bounces human visitors to the SPA hash URL. |
+
+Hash routing (forced by the email verification / reset links shipped to existing users) hides post-specific content from link-preview crawlers, since everything after `#` is client-side. The `/preview/...` route is the bypass: share links go there, bots get a rich snippet, real users land in the SPA on the next tick.
 
 ## Profile-image pipeline (libvips)
 
