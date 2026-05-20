@@ -13,39 +13,83 @@ using namespace drogon;
 
 namespace {
 
-// Per-process hub: which user IDs currently have which WebSocket connections.
-// Connections are keyed by the raw pointer of the WebSocketConnection — the
-// shared_ptr is held in the set so it never goes away while connected.
+// Per-process hub: which user IDs currently have which WebSocket connections,
+// and which posts each connection has subscribed to for live comments.
+// Connections are keyed by their shared_ptr identity so the set entries keep
+// the connection alive while it's open.
 std::mutex                                                                       g_mu;
 std::unordered_map<int, std::unordered_set<WebSocketConnectionPtr>>              g_byUser;
+std::unordered_map<int, std::unordered_set<WebSocketConnectionPtr>>              g_byPost;
 
 struct ConnCtx {
-    int userId;
+    int                          userId;
+    std::unordered_set<int>      subscribedPosts;   // protected by g_mu
 };
 
-void addConnection(int userId, const WebSocketConnectionPtr& conn)
+void registerConnection(int userId, const WebSocketConnectionPtr& conn)
 {
     std::lock_guard<std::mutex> lk(g_mu);
     g_byUser[userId].insert(conn);
 }
 
-void removeConnection(const WebSocketConnectionPtr& conn)
+void unregisterConnection(const WebSocketConnectionPtr& conn)
 {
     auto ctx = conn->getContext<ConnCtx>();
     if (!ctx) return;
     std::lock_guard<std::mutex> lk(g_mu);
-    auto it = g_byUser.find(ctx->userId);
-    if (it == g_byUser.end()) return;
-    it->second.erase(conn);
-    if (it->second.empty()) g_byUser.erase(it);
+
+    auto userIt = g_byUser.find(ctx->userId);
+    if (userIt != g_byUser.end()) {
+        userIt->second.erase(conn);
+        if (userIt->second.empty()) g_byUser.erase(userIt);
+    }
+    for (int postId : ctx->subscribedPosts) {
+        auto postIt = g_byPost.find(postId);
+        if (postIt == g_byPost.end()) continue;
+        postIt->second.erase(conn);
+        if (postIt->second.empty()) g_byPost.erase(postIt);
+    }
+    ctx->subscribedPosts.clear();
 }
 
-// Snapshot the live conns for a user so we can send outside the lock.
-std::vector<WebSocketConnectionPtr> connectionsFor(int userId)
+void subscribeToPost(const WebSocketConnectionPtr& conn, int postId)
+{
+    auto ctx = conn->getContext<ConnCtx>();
+    if (!ctx) return;
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (ctx->subscribedPosts.insert(postId).second) {
+        g_byPost[postId].insert(conn);
+    }
+}
+
+void unsubscribeFromPost(const WebSocketConnectionPtr& conn, int postId)
+{
+    auto ctx = conn->getContext<ConnCtx>();
+    if (!ctx) return;
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (ctx->subscribedPosts.erase(postId)) {
+        auto it = g_byPost.find(postId);
+        if (it != g_byPost.end()) {
+            it->second.erase(conn);
+            if (it->second.empty()) g_byPost.erase(it);
+        }
+    }
+}
+
+// Snapshot the live conns for a key so we can send outside the lock.
+std::vector<WebSocketConnectionPtr> connectionsForUser(int userId)
 {
     std::lock_guard<std::mutex> lk(g_mu);
     auto it = g_byUser.find(userId);
     if (it == g_byUser.end()) return {};
+    return {it->second.begin(), it->second.end()};
+}
+
+std::vector<WebSocketConnectionPtr> connectionsForPost(int postId)
+{
+    std::lock_guard<std::mutex> lk(g_mu);
+    auto it = g_byPost.find(postId);
+    if (it == g_byPost.end()) return {};
     return {it->second.begin(), it->second.end()};
 }
 
@@ -84,8 +128,8 @@ void MessageWebSocket::handleNewConnection(const HttpRequestPtr& req,
         return;
     }
 
-    conn->setContext(std::make_shared<ConnCtx>(ConnCtx{userIdOpt.value()}));
-    addConnection(userIdOpt.value(), conn);
+    conn->setContext(std::make_shared<ConnCtx>(ConnCtx{userIdOpt.value(), {}}));
+    registerConnection(userIdOpt.value(), conn);
 
     Json::Value hello;
     hello["type"]    = "ready";
@@ -97,20 +141,36 @@ void MessageWebSocket::handleNewMessage(const WebSocketConnectionPtr& conn,
                                         std::string&& msg,
                                         const WebSocketMessageType& type)
 {
-    // We don't accept client-driven messaging over WS (writes still go
-    // through the REST endpoint so server-side checks stay in one place).
-    // The only thing we honour is a "ping" application-level keepalive.
     if (type == WebSocketMessageType::Pong) return;
     if (msg == "ping") {
         conn->send("pong", WebSocketMessageType::Text);
         return;
     }
-    // Anything else is ignored on purpose.
+    // Lightweight protocol: client may send small JSON control messages to
+    // (un)subscribe from per-post comment feeds. Everything else is ignored
+    // — writes still go through REST so server-side checks live in one place.
+    Json::CharReaderBuilder rb;
+    Json::Value             root;
+    std::string             errs;
+    std::istringstream      iss(msg);
+    if (!Json::parseFromStream(rb, iss, &root, &errs)) return;
+
+    const std::string typ = root.get("type", "").asString();
+    if (typ == "subscribe_post" && root.isMember("post_id") &&
+        root["post_id"].isInt())
+    {
+        subscribeToPost(conn, root["post_id"].asInt());
+    }
+    else if (typ == "unsubscribe_post" && root.isMember("post_id") &&
+             root["post_id"].isInt())
+    {
+        unsubscribeFromPost(conn, root["post_id"].asInt());
+    }
 }
 
 void MessageWebSocket::handleConnectionClosed(const WebSocketConnectionPtr& conn)
 {
-    removeConnection(conn);
+    unregisterConnection(conn);
 }
 
 void MessageWebSocket::pushNewMessage(int receiverId,
@@ -122,12 +182,19 @@ void MessageWebSocket::pushNewMessage(int receiverId,
     envelope["message"] = msg;
     const std::string payload = toJsonLine(envelope);
 
-    // Receiver gets the live notification; the sender's other clients also
-    // get a copy so their UI updates without a round-trip.
-    sendOnAll(connectionsFor(receiverId), payload);
+    sendOnAll(connectionsForUser(receiverId), payload);
     if (senderId != receiverId) {
-        sendOnAll(connectionsFor(senderId), payload);
+        sendOnAll(connectionsForUser(senderId), payload);
     }
+}
+
+void MessageWebSocket::pushNewComment(int postId, const Json::Value& comment)
+{
+    Json::Value envelope;
+    envelope["type"]    = "comment";
+    envelope["post_id"] = postId;
+    envelope["comment"] = comment;
+    sendOnAll(connectionsForPost(postId), toJsonLine(envelope));
 }
 
 std::size_t MessageWebSocket::connectionCount()

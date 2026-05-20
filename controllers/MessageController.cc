@@ -1,5 +1,4 @@
 #include "MessageController.h"
-#include "MessageWebSocket.h"
 #include "../models/Messages.h"
 #include "../models/Users.h"
 #include <drogon/orm/Mapper.h>
@@ -257,10 +256,10 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
         msgJson["is_read"]     = newMessage.getValueOfIsRead();
         msgJson["created_at"]  = newMessage.getValueOfCreatedAt().toDbStringLocal();
 
-        // Push the freshly persisted message to any open WebSocket fan-outs
-        // for both peers. Fire-and-forget; failures here don't undo the DB
-        // insert and the REST response still confirms success.
-        MessageWebSocket::pushNewMessage(receiverId, userIdOpt.value(), msgJson);
+        // No in-process WS push here on purpose: the trg_messages_notify
+        // trigger fires pg_notify on `blog_event`, the PgListener picks it
+        // up and fans out to MessageWebSocket subscribers. Same path on
+        // every node in a multi-instance deployment.
 
         Json::Value ret;
         ret["message"] = "Message sent successfully";

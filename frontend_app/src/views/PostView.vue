@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { postsApi, type Post } from '@/api/posts'
 import { commentsApi, type Comment } from '@/api/comments'
 import { useAuthStore } from '@/stores/auth'
+import { useMessagesStore } from '@/stores/messages'
 import { useToastStore } from '@/stores/toast'
 
 const props = defineProps<{ id: number }>()
@@ -15,9 +16,10 @@ const newComment = ref('')
 const loading = ref(true)
 const error = ref('')
 
-const auth = useAuthStore()
-const router = useRouter()
-const toasts = useToastStore()
+const auth     = useAuthStore()
+const router   = useRouter()
+const toasts   = useToastStore()
+const live     = useMessagesStore()
 
 const isOwner = computed(() => auth.isAuthed && post.value?.author?.id === auth.user!.id)
 
@@ -40,8 +42,37 @@ async function load() {
   }
 }
 
-onMounted(load)
-watch(() => props.id, load)
+onMounted(() => { load(); subscribeLive(props.id) })
+watch(() => props.id, (newId, oldId) => {
+  if (oldId) live.unsubscribePost(oldId)
+  load()
+  subscribeLive(newId)
+})
+onBeforeUnmount(() => { live.unsubscribePost(props.id) })
+
+function subscribeLive(postId: number) {
+  // Connect the WS lazily if the user happens to be authed; anonymous viewers
+  // will see the snapshot only.
+  if (auth.isAuthed) live.connectSocket()
+  live.subscribePost(postId)
+}
+
+// Merge server-pushed live comments into the local list, dedup by id. The
+// initial fetch + this watcher together guarantee we never miss one and
+// never show duplicates if the REST roundtrip lands first.
+watch(
+  () => live.liveCommentsByPost.get(props.id)?.length ?? 0,
+  () => {
+    const incoming = live.liveCommentsByPost.get(props.id) ?? []
+    const seen = new Set(comments.value.map(c => c.id))
+    for (const c of incoming) {
+      if (!seen.has(c.id)) {
+        comments.value.push(c)
+        seen.add(c.id)
+      }
+    }
+  }
+)
 
 function formatDate(s: string) {
   return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''

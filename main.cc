@@ -6,7 +6,9 @@
 #include "helpers/ImageProcessor.h"
 #include "helpers/Markdown.h"
 #include "helpers/Ops.h"
+#include "helpers/PgListener.h"
 #include "helpers/Security.h"
+#include "controllers/MessageWebSocket.h"
 
 #include <iostream>
 #include <fstream>
@@ -136,7 +138,38 @@ int main()
     }
 
     EmailHelper::start();
+
+    // Cross-process WebSocket fan-out: a dedicated libpq connection LISTENs
+    // on `blog_event` and routes every notification into the in-process
+    // MessageWebSocket hub. New comments / new messages are produced by
+    // INSERT-time triggers in the DB so this code path works the same on a
+    // single node and across a horizontally-scaled fleet.
+    pglisten::start("blog_event",
+        [](const std::string& /*channel*/, const std::string& payload) {
+            Json::CharReaderBuilder rb;
+            Json::Value             root;
+            std::string             errs;
+            std::istringstream      iss(payload);
+            if (!Json::parseFromStream(rb, iss, &root, &errs)) return;
+
+            const std::string kind = root.get("kind", "").asString();
+            if (kind == "message" &&
+                root["sender_id"].isInt() && root["receiver_id"].isInt())
+            {
+                MessageWebSocket::pushNewMessage(
+                    root["receiver_id"].asInt(),
+                    root["sender_id"].asInt(),
+                    root);
+            }
+            else if (kind == "comment" && root["post_id"].isInt())
+            {
+                MessageWebSocket::pushNewComment(
+                    root["post_id"].asInt(), root);
+            }
+        });
+
     drogon::app().getLoop()->runOnQuit([] {
+        pglisten::stop();
         EmailHelper::stop();
         image::shutdownLibrary();
     });

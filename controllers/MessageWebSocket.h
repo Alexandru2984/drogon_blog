@@ -20,11 +20,18 @@ public:
 
     // Fan-out a freshly-persisted message to any live WebSocket connections
     // belonging to the receiver (and the sender, so other tabs / devices stay
-    // in sync). The payload mirrors what /messages would return. Called from
-    // MessageController::sendMessage after the DB row is committed.
+    // in sync). The payload mirrors what /messages would return.
+    //
+    // Invoked by the PgListener bridge when an INSERT into `messages` fires
+    // the trg_messages_notify trigger — never called by request handlers.
     static void pushNewMessage(int receiverId,
                                int senderId,
                                const Json::Value& msg);
+
+    // Push a freshly-persisted comment to every WebSocket connection that
+    // has subscribed to `postId` via {"type":"subscribe_post"} from the
+    // client. Invoked by the PgListener bridge on trg_comments_notify.
+    static void pushNewComment(int postId, const Json::Value& comment);
 
     // Number of currently-connected sockets (for /metrics). Cheap mutex-only.
     static std::size_t connectionCount();

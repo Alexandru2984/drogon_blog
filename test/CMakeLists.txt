@@ -29,12 +29,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../models
     ${SODIUM_INCLUDE_DIRS}
     ${VIPS_CPP_INCLUDE_DIRS}
-    ${CMARK_GFM_INCLUDE_DIRS})
+    ${CMARK_GFM_INCLUDE_DIRS}
+    ${LIBPQ_INCLUDE_DIRS})
 
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
     ${VIPS_CPP_LIBRARY_DIRS}
-    ${CMARK_GFM_LIBRARY_DIRS})
+    ${CMARK_GFM_LIBRARY_DIRS}
+    ${LIBPQ_LIBRARY_DIRS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
@@ -44,6 +46,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${VIPS_CPP_LIBRARIES}
     ${CMARK_GFM_LIBRARIES}
     cmark-gfm-extensions
+    ${LIBPQ_LIBRARIES}
     brotlidec brotlienc)
 
 ParseAndAddDrogonTests(${PROJECT_NAME})

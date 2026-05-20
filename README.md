@@ -290,25 +290,35 @@ Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopbac
 
 If processing fails after the tmp save, the half-cooked file is removed. If the DB update fails after a successful conversion, the produced JPEG is removed so the disk doesn't accumulate orphans.
 
-## Real-time messages (WebSocket)
+## Real-time fan-out (LISTEN/NOTIFY → WebSocket)
 
-The private-message endpoints have a live counterpart at `ws://<host>/ws/messages` (or `wss://` in production). The handshake is gated by the same `JSESSIONID` cookie as the REST endpoints — anonymous clients are closed with code `1008` and the reason `"auth required"`.
+The private-message endpoints — plus live comments on the post page — have a real-time counterpart at `ws://<host>/ws/messages` (or `wss://` in production). The handshake is gated by the same `JSESSIONID` cookie as the REST endpoints — anonymous clients are closed with code `1008` and the reason `"auth required"`.
 
 ```
-       browser ──── HTTP POST /messages ────►  Drogon
-          ▲                                     │
-          │                                     │ INSERT
-          │                                     ▼
-          │                                  Postgres
-          │
-          └──── ws://…/ws/messages ◄───── MessageHub.pushNewMessage(receiver, sender, msg)
+              ┌──── HTTP POST /messages ─────────┐
+              │     HTTP POST /posts/{id}/...    │
+              ▼                                  │
+            Drogon                          INSERT
+              │                                  │
+              │                                  ▼
+              │                              Postgres
+              │                                  │   AFTER INSERT trigger
+              │                                  ▼
+              │                          NOTIFY blog_event
+              │                                  │
+              │     ┌───── helpers/PgListener ◄──┘
+              │     │       (dedicated libpq conn + LISTEN)
+              ▼     ▼
+       MessageWebSocket hub  ──────►  every subscribed client
+                                       (per-user for messages,
+                                        per-post for comments)
 ```
 
-The hub is an in-process `unordered_map<user_id, set<WebSocketConnectionPtr>>` guarded by a mutex. `MessageController::sendMessage` fans the freshly-persisted row out to:
-- every open socket belonging to the receiver, and
-- every open socket belonging to the sender (so additional tabs / devices see the message without polling).
+**Why route through the database?** The in-process push (`MessageHub.pushNewMessage(...)`) only works inside one process. By moving the fan-out trigger to a Postgres `AFTER INSERT` that calls `pg_notify('blog_event', json_build_object(...)::text)`, *every* instance of the app that's `LISTEN`-ing on the channel receives the event — so the same code scales to a horizontal deployment without sharing state between nodes. The trigger joins the sender (or comment author) inline so the payload arrives at the WS hub already enriched and no extra DB round-trip is needed.
 
-The frontend store (`stores/messages.ts`) auto-connects on login, reconnects with exponential backoff (1 s → 30 s cap), and keeps a per-peer conversation map plus an aggregate unread counter shown as a navbar badge. The number of live subscribers is exposed in Prometheus metrics as `blog_ws_connections`.
+The C++ side is `helpers/PgListener` — a single background thread that owns a dedicated libpq connection, runs `select()` on its socket, and dispatches each notification's JSON payload to a callback. The callback in `main.cc` parses `kind` and routes to either `MessageWebSocket::pushNewMessage` (one-to-one delivery, keyed by `receiver_id`) or `MessageWebSocket::pushNewComment` (broadcast to anyone who sent `{"type":"subscribe_post","post_id":X}` over the WS).
+
+Frontend (`stores/messages.ts`) auto-connects on login, reconnects with exponential backoff (1 s → 30 s cap), keeps a per-peer conversation map plus an aggregate unread counter shown as a navbar badge, and exposes `subscribePost`/`unsubscribePost` so `PostView` can stream live comments while the user is reading. Live subscribers are exposed in Prometheus metrics as `blog_ws_connections`.
 
 ## Observability
 

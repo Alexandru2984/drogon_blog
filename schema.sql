@@ -114,3 +114,74 @@ CREATE INDEX IF NOT EXISTS idx_messages_receiver       ON messages(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_token    ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user     ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_posts_search            ON posts USING GIN(search);
+
+-- LISTEN/NOTIFY fan-out. Triggers on INSERT into messages and comments
+-- emit a single NOTIFY on channel `blog_event` with the row enriched
+-- (sender / author joined inline) so the C++ listener can push to WS
+-- clients without an extra round-trip. Decoupling write -> fan-out via
+-- the database makes the architecture multi-instance-ready: any process
+-- LISTEN-ing on `blog_event` receives the event regardless of which
+-- instance accepted the original POST. Defined at the very end of the
+-- schema so the referenced tables (`messages`, `comments`) already exist.
+
+CREATE OR REPLACE FUNCTION notify_new_message() RETURNS TRIGGER AS $$
+DECLARE
+    sender_row RECORD;
+BEGIN
+    SELECT id, username, profile_image
+      INTO sender_row
+      FROM users
+     WHERE id = NEW.sender_id;
+
+    PERFORM pg_notify('blog_event', json_build_object(
+        'kind',        'message',
+        'id',          NEW.id,
+        'sender_id',   NEW.sender_id,
+        'receiver_id', NEW.receiver_id,
+        'content',     NEW.content,
+        'is_read',     NEW.is_read,
+        'created_at',  NEW.created_at::text,
+        'sender', json_build_object(
+            'id',            sender_row.id,
+            'username',      sender_row.username,
+            'profile_image', sender_row.profile_image
+        )
+    )::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_messages_notify ON messages;
+CREATE TRIGGER trg_messages_notify
+AFTER INSERT ON messages
+FOR EACH ROW EXECUTE FUNCTION notify_new_message();
+
+CREATE OR REPLACE FUNCTION notify_new_comment() RETURNS TRIGGER AS $$
+DECLARE
+    author_row RECORD;
+BEGIN
+    SELECT id, username, profile_image
+      INTO author_row
+      FROM users
+     WHERE id = NEW.user_id;
+
+    PERFORM pg_notify('blog_event', json_build_object(
+        'kind',       'comment',
+        'id',         NEW.id,
+        'post_id',    NEW.post_id,
+        'content',    NEW.content,
+        'created_at', NEW.created_at::text,
+        'author', json_build_object(
+            'id',            author_row.id,
+            'username',      author_row.username,
+            'profile_image', author_row.profile_image
+        )
+    )::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_comments_notify ON comments;
+CREATE TRIGGER trg_comments_notify
+AFTER INSERT ON comments
+FOR EACH ROW EXECUTE FUNCTION notify_new_comment();

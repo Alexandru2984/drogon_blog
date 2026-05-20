@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { messagesApi, type MessageRow } from '@/api/messages'
+import type { Comment } from '@/api/comments'
 import { useAuthStore } from './auth'
 
 export interface ConversationPeer {
@@ -25,6 +26,11 @@ let manualClose = false
 export const useMessagesStore = defineStore('messages', () => {
   const conversations = ref<Map<number, Conversation>>(new Map())
   const connected     = ref(false)
+  // Live comments pushed from the server, keyed by post id. PostView watches
+  // its own slice and appends entries that aren't already on screen. The
+  // store doesn't try to be the source of truth for the full comment list —
+  // it's a one-way delivery surface.
+  const liveCommentsByPost = ref<Map<number, Comment[]>>(new Map())
   const auth = useAuthStore()
 
   const totalUnread = computed(() => {
@@ -154,6 +160,10 @@ export const useMessagesStore = defineStore('messages', () => {
       try { env = JSON.parse(data) } catch { return }
       if (env?.type === 'message' && env.message) {
         ingest(env.message as MessageRow)
+      } else if (env?.type === 'comment' && env.comment && typeof env.post_id === 'number') {
+        const arr = liveCommentsByPost.value.get(env.post_id) ?? []
+        arr.push(env.comment as Comment)
+        liveCommentsByPost.value.set(env.post_id, arr)
       }
     }
 
@@ -179,15 +189,29 @@ export const useMessagesStore = defineStore('messages', () => {
     connected.value = false
   }
 
+  function subscribePost(postId: number) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'subscribe_post', post_id: postId }))
+  }
+
+  function unsubscribePost(postId: number) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'unsubscribe_post', post_id: postId }))
+    liveCommentsByPost.value.delete(postId)
+  }
+
   return {
     conversations,
     connected,
     totalUnread,
+    liveCommentsByPost,
     refreshInbox,
     openConversation,
     send,
     connectSocket,
     disconnectSocket,
+    subscribePost,
+    unsubscribePost,
     clear,
   }
 })
