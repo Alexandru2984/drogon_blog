@@ -3,6 +3,7 @@
 #include <sodium.h>
 #include "helpers/AccessLog.h"
 #include "helpers/EmailHelper.h"
+#include "helpers/ImageProcessor.h"
 #include "helpers/Ops.h"
 #include "helpers/Security.h"
 
@@ -112,6 +113,12 @@ int main()
         return 1;
     }
 
+    if (!image::initLibrary())
+    {
+        std::cerr << "libvips init failed" << std::endl;
+        return 1;
+    }
+
     try
     {
         drogon::app().loadConfigJson(cfgJson);
@@ -124,7 +131,10 @@ int main()
     }
 
     EmailHelper::start();
-    drogon::app().getLoop()->runOnQuit([] { EmailHelper::stop(); });
+    drogon::app().getLoop()->runOnQuit([] {
+        EmailHelper::stop();
+        image::shutdownLibrary();
+    });
 
     // Rate limiting, CSRF (double-submit), and response security headers.
     security::registerAdvices();

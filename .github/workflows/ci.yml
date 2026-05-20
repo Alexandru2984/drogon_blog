@@ -38,6 +38,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential pkg-config \
             libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
+            libvips-dev \
             postgresql-client
 
       - name: Configure

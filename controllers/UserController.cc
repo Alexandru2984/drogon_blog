@@ -1,11 +1,13 @@
 #include "UserController.h"
 #include "../models/Users.h"
 #include "../helpers/EmailHelper.h"
+#include "../helpers/ImageProcessor.h"
 #include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/MultiPart.h>
 #include <trantor/utils/Logger.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -171,24 +173,19 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
     }
 
     auto &file = files[0];
-    
-    // Generate unique filename
-    auto fileExtension = file.getFileName();
-    auto dotPos = fileExtension.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        fileExtension = fileExtension.substr(dotPos);
-    } else {
-        fileExtension = ".jpg";
-    }
-    
-    std::string filename = "profile_" + std::to_string(userIdOpt.value()) + 
-                          "_" + std::to_string(std::time(nullptr)) + fileExtension;
-    std::string uploadPath = "uploads/profiles/";
 
+    // Both source and destination directories. The upload first lands in
+    // `uploads/tmp/` so it doesn't pollute the served `profiles/` dir when
+    // processing fails halfway. The "./" prefix tells Drogon's MultiPartParser
+    // to use the path as-is instead of prepending app().getUploadPath() —
+    // otherwise saveAs("uploads/tmp/foo") lands in uploads/uploads/tmp/foo.
+    const std::string profilesDir = "./uploads/profiles/";
+    const std::string tmpDir      = "./uploads/tmp/";
     std::error_code ec;
-    std::filesystem::create_directories(uploadPath, ec);
+    std::filesystem::create_directories(profilesDir, ec);
+    std::filesystem::create_directories(tmpDir,      ec);
     if (ec) {
-        LOG_ERROR << "Failed to create upload dir " << uploadPath << ": " << ec.message();
+        LOG_ERROR << "Failed to create upload dirs: " << ec.message();
         Json::Value ret;
         ret["error"] = "Failed to save upload";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
@@ -197,28 +194,63 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
         return;
     }
 
-    std::string fullPath = uploadPath + filename;
-    
-    // Save file
-    file.saveAs(fullPath);
+    // Stamp the filename server-side; the user-supplied filename is never
+    // trusted for path construction. ".jpg" is the final extension regardless
+    // of input format — the image pipeline always emits JPEG.
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string stem = "profile_" + std::to_string(userIdOpt.value())
+                           + "_" + std::to_string(now);
+    const std::string tmpPath   = tmpDir      + stem + ".upload";
+    const std::string finalPath = profilesDir + stem + ".jpg";
+    // Same on-disk file, addressed via a clean URL path served by Drogon's
+    // document_root → public/uploads symlink.
+    const std::string publicPath = "/uploads/profiles/" + stem + ".jpg";
 
-    // Update database
+    file.saveAs(tmpPath);
+
+    // Validate + resize + EXIF-strip via libvips.
+    const auto result = image::processAvatar(tmpPath, finalPath);
+
+    std::error_code rmEc;
+    std::filesystem::remove(tmpPath, rmEc);                // best effort
+
+    if (!result.ok) {
+        Json::Value ret;
+        ret["error"] = result.error;
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
+        callback(resp);
+        return;
+    }
+
+    // Persist the public path on the user row.
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
-        user.setProfileImage("/" + fullPath);
+        user.setProfileImage(publicPath);
         mapper.update(user);
 
         Json::Value ret;
-        ret["message"] = "Profile image uploaded successfully";
-        ret["profile_image"] = "/" + fullPath;
+        ret["message"]       = "Profile image uploaded successfully";
+        ret["profile_image"] = publicPath;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);
+    } catch (const UnexpectedRows &) {
+        // The user row vanished between session creation and now — clean up
+        // the orphaned upload before responding.
+        std::filesystem::remove(finalPath, rmEc);
+        Json::Value ret;
+        ret["error"] = "User not found";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
+        callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
+        std::filesystem::remove(finalPath, rmEc);
         Json::Value ret;
         ret["error"] = "Failed to update profile image";
         auto resp = HttpResponse::newHttpJsonResponse(ret);

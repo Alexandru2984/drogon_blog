@@ -32,14 +32,20 @@ find_package(Drogon CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SODIUM REQUIRED libsodium)
-target_include_directories(${PROJECT_NAME} PRIVATE ${SODIUM_INCLUDE_DIRS})
-target_link_directories(${PROJECT_NAME} PRIVATE ${SODIUM_LIBRARY_DIRS})
+pkg_check_modules(SODIUM   REQUIRED libsodium)
+pkg_check_modules(VIPS_CPP REQUIRED vips-cpp)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${SODIUM_INCLUDE_DIRS}
+    ${VIPS_CPP_INCLUDE_DIRS})
+target_link_directories(${PROJECT_NAME} PRIVATE
+    ${SODIUM_LIBRARY_DIRS}
+    ${VIPS_CPP_LIBRARY_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     CURL::libcurl
     OpenSSL::SSL OpenSSL::Crypto
     ${SODIUM_LIBRARIES}
+    ${VIPS_CPP_LIBRARIES}
     brotlidec brotlienc)
 
 # ##############################################################################

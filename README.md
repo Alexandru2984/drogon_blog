@@ -257,6 +257,19 @@ cmake --build build --target blog_test
 
 Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopback port, and hit it with the framework's HTTP client. Tests target a real PostgreSQL database (`blog_test_db`, see `test/setup.sql`) rather than mocks, so SQL behaviour and trigger logic are exercised end-to-end.
 
+## Profile-image pipeline (libvips)
+
+`POST /users/profile/image` runs every upload through `helpers/ImageProcessor`, which is built on **libvips**. The endpoint never trusts the upload's filename or MIME type:
+
+1. The bytes are written to `uploads/tmp/profile_<id>_<ms>.upload`.
+2. A magic-byte sniffer reads the first 12 bytes and only accepts JPEG / PNG / WebP — anything else (SVG, BMP, ICO, GIF, raw, arbitrary binary) returns `415 Unsupported image type`.
+3. libvips opens the image with `access=sequential` so a malicious file can't keep the whole pixel buffer in memory; inputs larger than `6000×6000` are rejected with `413 Image too large` (decompression-bomb defense).
+4. `VImage::thumbnail` resizes to a `256×256` square using `VIPS_INTERESTING_ATTENTION` (salience-aware center crop) so portraits land on the face.
+5. Every metadata field is removed before saving — `exif-data`, `xmp-data`, `iptc-data`, `icc-profile-data`, `photoshop-data`, plus the `orientation` derivative — so GPS coordinates, camera serial numbers and embedded preview thumbnails never reach disk.
+6. Output is a progressive JPEG at quality 85 with optimised Huffman tables, atomically moved into `uploads/profiles/profile_<id>_<ms>.jpg`. The DB stores the public path `/uploads/profiles/…` (served via Drogon's `document_root → public/uploads` symlink).
+
+If processing fails after the tmp save, the half-cooked file is removed. If the DB update fails after a successful conversion, the produced JPEG is removed so the disk doesn't accumulate orphans.
+
 ## Real-time messages (WebSocket)
 
 The private-message endpoints have a live counterpart at `ws://<host>/ws/messages` (or `wss://` in production). The handshake is gated by the same `JSESSIONID` cookie as the REST endpoints — anonymous clients are closed with code `1008` and the reason `"auth required"`.

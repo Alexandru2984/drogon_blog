@@ -7,7 +7,8 @@ set(TEST_SOURCES
     test_posts.cc
     test_password_hashing.cc
     test_search.cc
-    test_security.cc)
+    test_security.cc
+    test_image_pipeline.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 
@@ -25,15 +26,19 @@ target_sources(${PROJECT_NAME} PRIVATE
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../models
-    ${SODIUM_INCLUDE_DIRS})
+    ${SODIUM_INCLUDE_DIRS}
+    ${VIPS_CPP_INCLUDE_DIRS})
 
-target_link_directories(${PROJECT_NAME} PRIVATE ${SODIUM_LIBRARY_DIRS})
+target_link_directories(${PROJECT_NAME} PRIVATE
+    ${SODIUM_LIBRARY_DIRS}
+    ${VIPS_CPP_LIBRARY_DIRS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     CURL::libcurl
     OpenSSL::SSL OpenSSL::Crypto
     ${SODIUM_LIBRARIES}
+    ${VIPS_CPP_LIBRARIES}
     brotlidec brotlienc)
 
 ParseAndAddDrogonTests(${PROJECT_NAME})

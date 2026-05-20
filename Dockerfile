@@ -17,6 +17,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config \
         libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
+        libvips-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -41,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libbrotli1 libjsoncpp25 libpq5 \
         libuuid1 zlib1g libc-ares2 \
         libmariadb3 libsqlite3-0 libhiredis0.14 \
+        libvips42 \
         postgresql-client \
         tini \
     && rm -rf /var/lib/apt/lists/* \
