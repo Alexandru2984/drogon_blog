@@ -61,7 +61,7 @@ jobs:
         run: ./build/test/blog_test
 
   frontend:
-    name: Frontend (typecheck + build)
+    name: Frontend (lint + typecheck + build)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -78,8 +78,46 @@ jobs:
       - name: Install
         run: npm ci --no-audit --no-fund
 
+      - name: Lint
+        run: npm run lint
+
       - name: Build (typecheck + bundle)
         run: npm run build
+
+  static-analysis:
+    name: Static analysis (clang-tidy + cppcheck)
+    runs-on: ubuntu-24.04
+    container:
+      image: drogonframework/drogon:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake \
+            libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
+            libvips-dev \
+            libcmark-gfm-dev libcmark-gfm-extensions-dev \
+            clang-tidy cppcheck
+
+      - name: Generate compile_commands.json
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: clang-tidy
+        run: |
+          # The HeaderFilterRegex in .clang-tidy keeps reports limited to our
+          # own controllers/ + helpers/ tree. Exit code reflects findings.
+          find controllers helpers -name '*.cc' -print0 \
+            | xargs -0 clang-tidy -p build --quiet --warnings-as-errors='*'
+
+      - name: cppcheck
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+            --suppressions-list=.cppcheck-suppress --inline-suppr \
+            --error-exitcode=1 --quiet \
+            controllers/ helpers/ main.cc
 
   e2e:
     name: E2E (Playwright vs docker-compose)
@@ -140,16 +178,29 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 
   docker:
-    name: Docker image builds
+    name: Docker image build + Trivy scan
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+
       - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: false
+          load: true
           tags: drogon-blog:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trivy scan (image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref:    drogon-blog:ci
+          severity:     'HIGH,CRITICAL'
+          exit-code:    '1'
+          # Don't fail the whole pipeline when the vuln DB itself is
+          # unreachable — that's an infra issue, not our code.
+          ignore-unfixed: true
+          vuln-type:    'os,library'

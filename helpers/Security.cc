@@ -26,13 +26,18 @@ bool isTrustedProxy(const std::string& ip)
     return false;
 }
 
-std::string firstHop(const std::string& xff)
+// X-Forwarded-For is chained `client, proxy1, proxy2, …`. The first entry is
+// user-controlled (nginx default appends to whatever the client supplied)
+// and trusting it would let an attacker rotate rate-limit buckets by sending
+// arbitrary headers. The LAST entry is the IP that the most recent trusted
+// proxy actually observed connecting to it — much harder to forge.
+std::string lastHop(const std::string& xff)
 {
-    auto comma = xff.find(',');
-    std::string first = (comma == std::string::npos) ? xff : xff.substr(0, comma);
-    while (!first.empty() && std::isspace(static_cast<unsigned char>(first.front()))) first.erase(first.begin());
-    while (!first.empty() && std::isspace(static_cast<unsigned char>(first.back())))  first.pop_back();
-    return first;
+    auto comma = xff.rfind(',');
+    std::string last = (comma == std::string::npos) ? xff : xff.substr(comma + 1);
+    while (!last.empty() && std::isspace(static_cast<unsigned char>(last.front()))) last.erase(last.begin());
+    while (!last.empty() && std::isspace(static_cast<unsigned char>(last.back())))  last.pop_back();
+    return last;
 }
 
 const std::string kCsrfCookieName = "csrf_token";
@@ -49,14 +54,27 @@ std::unordered_map<std::string, Bucket> g_buckets;
 
 std::string clientIp(const drogon::HttpRequestPtr& req)
 {
-    const std::string peer = req->getPeerAddr().toIp();
+    std::string peer = req->getPeerAddr().toIp();
+    const bool trustedPeer = isTrustedProxy(peer);
 
-    // Cloudflare wins outright in production.
+    // Production runs behind Cloudflare → nginx → Drogon. CF-Connecting-IP is
+    // unspoofable (Cloudflare sets it and overwrites whatever the client
+    // sent), so it wins outright when the immediate peer is a trusted proxy.
     const auto& cf = req->getHeader("CF-Connecting-IP");
-    if (!cf.empty() && isTrustedProxy(peer)) return cf;
+    if (!cf.empty() && trustedPeer) return cf;
 
+    // X-Real-IP is what nginx sets via `proxy_set_header X-Real-IP $remote_addr`
+    // — a single value, the IP nginx itself observed. Trusted because nginx
+    // strips any inbound copy before re-emitting it. Recommended over XFF.
+    const auto& realIp = req->getHeader("X-Real-IP");
+    if (!realIp.empty() && trustedPeer) return realIp;
+
+    // Last resort: X-Forwarded-For. Take the LAST hop, not the first — nginx's
+    // default `$proxy_add_x_forwarded_for` appends to whatever the client
+    // already sent, so the first entry is attacker-controlled. The last
+    // entry is the IP the most recent trusted proxy actually saw.
     const auto& xff = req->getHeader("X-Forwarded-For");
-    if (!xff.empty() && isTrustedProxy(peer)) return firstHop(xff);
+    if (!xff.empty() && trustedPeer) return lastHop(xff);
 
     return peer;
 }

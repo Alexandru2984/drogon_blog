@@ -31,7 +31,9 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
             commentJson["content"] = comment.getValueOfContent();
             commentJson["created_at"] = comment.getValueOfCreatedAt().toDbStringLocal();
             
-            // Get author info
+            // Best-effort author enrichment. If the author was deleted
+            // concurrently we still surface the comment row without their
+            // metadata rather than failing the whole list.
             try {
                 auto author = userMapper.findByPrimaryKey(comment.getValueOfUserId());
                 commentJson["author"]["id"] = author.getValueOfId();
@@ -39,7 +41,11 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                 if (!author.getValueOfProfileImage().empty()) {
                     commentJson["author"]["profile_image"] = author.getValueOfProfileImage();
                 }
-            } catch (...) {}
+            } catch (const DrogonDbException& e) {
+                LOG_DEBUG << "author lookup for comment "
+                          << comment.getValueOfId() << " failed: "
+                          << e.base().what();
+            }
 
             ret["comments"].append(commentJson);
         }

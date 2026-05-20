@@ -56,10 +56,11 @@ std::string renderToSafeHtml(const std::string& src)
     cmark_parser_feed(parser, src.data(), src.size());
     cmark_node* doc = cmark_parser_finish(parser);
 
+    // Render options mirror parse-time. SAFE in particular has to be set on
+    // both sides for raw-HTML escaping and URL-scheme filtering to apply.
     const int opts = CMARK_OPT_SAFE
                    | CMARK_OPT_GITHUB_PRE_LANG
-                   | CMARK_OPT_HARDBREAKS
-                   | CMARK_OPT_UNSAFE * 0;     // belt-and-braces: keep SAFE on
+                   | CMARK_OPT_HARDBREAKS;
     char* html = cmark_render_html(doc, opts, cmark_parser_get_syntax_extensions(parser));
 
     std::string out = html ? std::string(html) : std::string{};

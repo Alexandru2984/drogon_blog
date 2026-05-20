@@ -1,0 +1,56 @@
+# Static-analysis ruleset for the Drogon blog.
+#
+# Scope: only our own code (controllers/, helpers/, main.cc). The Drogon
+# auto-generated ORM models under models/ are excluded via HeaderFilterRegex
+# below — they have their own conventions and re-checking them adds noise
+# without bug-finding value.
+#
+# Checks chosen for signal-to-noise:
+#   bugprone-*    catches actual defects (use-after-move, narrowing casts,
+#                 sizeof-on-wrong-type, etc.)
+#   cert-*        CERT C++ secure-coding rules; overlaps with bugprone but
+#                 catches a few extras (e.g. cert-msc51-cpp on bad RNG seeds).
+#   clang-analyzer-*  the LLVM static analyser (path-sensitive).
+#   performance-* spots O(n²) and avoidable copies that matter at our RPS.
+#   cppcoreguidelines-pro-type-member-init / -slicing — uninitialised
+#                 members and silent slicing have bit us in past projects.
+#   misc-unused-*, misc-redundant-*  — clean-up checks that keep the diff small.
+#
+# Disabled subchecks:
+#   bugprone-easily-swappable-parameters  noisy across small handlers.
+#   cert-err58-cpp                        warns on every static-with-non-trivial
+#                                         initialiser (e.g. our dummyHash()).
+#   cert-dcl21-cpp                        deprecated; replaced by modernize-*.
+#   performance-no-int-to-ptr             irrelevant for our typed APIs.
+
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  -cert-err58-cpp,
+  -cert-dcl21-cpp,
+  -cert-err33-c,
+  -cert-err34-c,
+  clang-analyzer-*,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-slicing,
+  misc-redundant-expression,
+  performance-*,
+  -performance-no-int-to-ptr,
+  -performance-unnecessary-value-param,
+  -performance-enum-size
+
+# Suppressed checks (rationale):
+#   cert-err33-c / cert-err34-c        — setenv/sscanf failure on kernel-stable
+#                                        formats is not a defect we can act on
+#                                        without complicating control flow.
+#   performance-unnecessary-value-param — thread entry-points need by-value
+#                                        captures to outlive caller's locals.
+#   performance-enum-size              — cosmetic; not a hot path.
+#   misc-unused-parameters dropped     — Drogon handler signatures mandate
+#                                        `req` even when ignored.
+
+WarningsAsErrors:  ''
+HeaderFilterRegex: '(controllers|helpers)/'
+FormatStyle:       file

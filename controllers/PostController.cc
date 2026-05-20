@@ -50,6 +50,8 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
     const int  limit  = clampLimit(req->getParameter("limit"));
     const int  cursor = parseCursor(req->getParameter("before"));
 
+    // cppcheck-suppress variableScope ; kept at function scope so both
+    // branches resolve to the same string literal.
     static const char* kSqlWithCursor =
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
@@ -58,6 +60,7 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         "WHERE p.id < $1 "
         "ORDER BY p.id DESC "
         "LIMIT $2";
+    // cppcheck-suppress variableScope ; ditto
     static const char* kSqlFirstPage =
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "

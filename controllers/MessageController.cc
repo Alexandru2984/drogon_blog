@@ -43,7 +43,10 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
             msgJson["is_read"] = message.getValueOfIsRead();
             msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
             
-            // Get sender info
+            // Best-effort sender enrichment. The author row may have been
+            // deleted between the message SELECT and now (ON DELETE CASCADE
+            // wipes their messages but the in-flight read can still race);
+            // returning the message without sender info beats failing the list.
             try {
                 auto sender = userMapper.findByPrimaryKey(message.getValueOfSenderId());
                 msgJson["sender"]["id"] = sender.getValueOfId();
@@ -51,7 +54,11 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
                 if (!sender.getValueOfProfileImage().empty()) {
                     msgJson["sender"]["profile_image"] = sender.getValueOfProfileImage();
                 }
-            } catch (...) {}
+            } catch (const DrogonDbException& e) {
+                LOG_DEBUG << "sender lookup for message "
+                          << message.getValueOfId() << " failed: "
+                          << e.base().what();
+            }
 
             ret["messages"].append(msgJson);
         }
@@ -103,7 +110,7 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
             msgJson["is_read"] = message.getValueOfIsRead();
             msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
             
-            // Get receiver info
+            // Best-effort receiver enrichment; see getReceivedMessages.
             try {
                 auto receiver = userMapper.findByPrimaryKey(message.getValueOfReceiverId());
                 msgJson["receiver"]["id"] = receiver.getValueOfId();
@@ -111,7 +118,11 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
                 if (!receiver.getValueOfProfileImage().empty()) {
                     msgJson["receiver"]["profile_image"] = receiver.getValueOfProfileImage();
                 }
-            } catch (...) {}
+            } catch (const DrogonDbException& e) {
+                LOG_DEBUG << "receiver lookup for message "
+                          << message.getValueOfId() << " failed: "
+                          << e.base().what();
+            }
 
             ret["messages"].append(msgJson);
         }
@@ -178,7 +189,8 @@ void MessageController::getConversation(const HttpRequestPtr &req,
             ret["messages"].append(msgJson);
         }
 
-        // Get other user info
+        // Best-effort peer enrichment; the conversation rows still come back
+        // even if the other user was deleted concurrently.
         try {
             auto otherUser = userMapper.findByPrimaryKey(otherUserId);
             ret["other_user"]["id"] = otherUser.getValueOfId();
@@ -186,7 +198,10 @@ void MessageController::getConversation(const HttpRequestPtr &req,
             if (!otherUser.getValueOfProfileImage().empty()) {
                 ret["other_user"]["profile_image"] = otherUser.getValueOfProfileImage();
             }
-        } catch (...) {}
+        } catch (const DrogonDbException& e) {
+            LOG_DEBUG << "other_user lookup for " << otherUserId
+                      << " failed: " << e.base().what();
+        }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);

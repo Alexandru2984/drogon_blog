@@ -1,0 +1,15 @@
+# cppcheck suppressions for the Drogon blog. Each line is either a check id
+# or a `<check_id>:<path-glob>` to silence findings outside our source tree.
+
+# Findings inside system / framework headers we don't own.
+*:/usr/include/*
+*:/usr/local/include/*
+
+# Drogon-generated ORM models are not hand-maintained.
+*:models/*
+
+# Cppcheck noise that doesn't reflect real defects in this codebase.
+useStlAlgorithm
+unusedFunction
+missingIncludeSystem
+unmatchedSuppression

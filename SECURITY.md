@@ -53,6 +53,7 @@ unless noted otherwise.
 | 12| **Low**  | **Open redirect via `?next=` after login.** The frontend pushed the raw value into the router; `//evil.example` would have leaked the user off-origin. | `LoginView.safeNext()` rejects anything that is not a single-leading-slash path. |
 | 13| **Low**  | **Logout only `erased` two session keys.** The underlying session record lived on with any other keys the app might add. | `session->clear()` + `changeSessionIdToClient()`. |
 | 14| **Low**  | **No backend password length floor.** The frontend asked for ≥ 8 chars but the API would accept anything non-empty. | Backend rejects `< 8` or `> 256` chars on register / reset. |
+| 15| **Med**  | **XFF spoofing bypassed the per-IP rate limit.** The previous `clientIp()` took the *first* hop of `X-Forwarded-For`, but nginx's default `$proxy_add_x_forwarded_for` appends to whatever the client sent — so the first entry is user-controlled. Each spoofed header rotated the rate-limit bucket. | Prefer `X-Real-IP` (single-value, nginx-set, stripped of inbound copies), fall back to `CF-Connecting-IP`, and only when reaching XFF take the **last** hop instead of the first. Verified in `test/test_security.cc` and live against `/auth/login`. |
 
 ### Vectors verified clean
 
@@ -90,6 +91,31 @@ HTTPS-only (Cloudflare + Let's Encrypt)
 ```
 
 ---
+
+## Automated security tooling
+
+The CI pipeline runs every push through four security-relevant gates:
+
+| Gate           | What it does                                                                                                         |
+|----------------|----------------------------------------------------------------------------------------------------------------------|
+| `clang-tidy`   | bugprone-*, cert-*, clang-analyzer-*, performance-*, plus a few cppcoreguidelines checks. Failures are CI errors.    |
+| `cppcheck`     | warning/style/performance/portability checks over `controllers/ helpers/ main.cc`. Suppressions are explicit in `.cppcheck-suppress`. |
+| ESLint         | flat-config Vue 3 + TypeScript essentials. `--max-warnings 0`, run as part of the frontend job.                       |
+| Trivy          | scans the produced Docker image for `HIGH`/`CRITICAL` OS + library vulnerabilities; fails the build on any hit.       |
+| Dependabot     | weekly PRs for npm (frontend + e2e), GitHub Actions, and Docker base images. Grouped by stack to keep noise low.      |
+
+Each runs in its own job (`static-analysis`, `frontend` extended with `npm run lint`, `docker` extended with Trivy). The aggregate config lives in [`.clang-tidy`](.clang-tidy), [`.cppcheck-suppress`](.cppcheck-suppress), [`frontend_app/eslint.config.js`](frontend_app/eslint.config.js), and [`.github/dependabot.yml`](.github/dependabot.yml).
+
+## Threat model — STRIDE summary
+
+| Threat                  | Asset / Surface              | Primary control                                                                |
+|-------------------------|------------------------------|--------------------------------------------------------------------------------|
+| **S**poofing            | User identity at login       | Argon2id verify with dummy-hash branch; session ID rotated on login; SameSite=Lax, Secure, HttpOnly cookies; XFF / `X-Real-IP` trusted only behind the proxy chain. |
+| **T**ampering           | Request payloads             | All mutations require a matching CSRF double-submit; `frame-ancestors 'none'` denies clickjacking framing. |
+| **R**epudiation         | Account actions              | Structured JSON access log with `req_id` per request + journald aggregation; covered for login / password reset / verify in code paths.       |
+| **I**nformation disclosure | Auth flows + DB           | Email-collision masking on `/auth/register`; `/auth/login` returns identical body+timing for "no such user" vs "wrong pw"; `pg_notify` payloads stay on-host (channel is internal). |
+| **D**enial of service   | Auth + uploads + DB          | Per-IP + per-username rate limiting; libvips decompression-bomb cap (≤ 6000×6000); body size limit (1 MB); DB has GIN-indexed FTS so search is sublinear. |
+| **E**levation of privilege | Mutation endpoints        | Per-row owner check before update / delete on posts / comments / messages; profile email change requires `current_password`; reset token consumed atomically (`DELETE … RETURNING`). |
 
 ## Reporting a vulnerability
 

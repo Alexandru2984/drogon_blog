@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Frontend SPA — Vue 3 + Vite + Pinia stack.
+  - package-ecosystem: "npm"
+    directory:         "/frontend_app"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+    groups:
+      vue:        { patterns: ["vue", "vue-router", "pinia", "@vitejs/*", "vite", "vue-tsc"] }
+      types:      { patterns: ["@types/*", "typescript"] }
+
+  # End-to-end test harness — Playwright + TS.
+  - package-ecosystem: "npm"
+    directory:         "/e2e"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 3
+
+  # CI itself.
+  - package-ecosystem: "github-actions"
+    directory:         "/"
+    schedule: { interval: "weekly" }
+
+  # Docker base images — picks up CVE-fix releases for ubuntu:22.04 /
+  # postgres:17-alpine / node:22-alpine / drogonframework/drogon.
+  - package-ecosystem: "docker"
+    directory:         "/"
+    schedule: { interval: "weekly" }
