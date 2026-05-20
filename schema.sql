@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS posts (
     user_id     INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title       TEXT        NOT NULL,
     content     TEXT        NOT NULL,
+    content_html TEXT,
     created_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
     search      TSVECTOR    GENERATED ALWAYS AS (
@@ -52,6 +53,12 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS search TSVECTOR
         setweight(to_tsvector('english', coalesce(title,   '')), 'A') ||
         setweight(to_tsvector('english', coalesce(content, '')), 'B')
     ) STORED;
+
+-- Rendered HTML for posts. Populated server-side at write time by the
+-- Markdown helper (cmark-gfm, safe mode). Nullable so existing rows from
+-- pre-markdown deployments keep working — the API falls back to escaped
+-- plain text when the column is NULL.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS content_html TEXT;
 
 DROP TRIGGER IF EXISTS trg_posts_updated_at ON posts;
 CREATE TRIGGER trg_posts_updated_at

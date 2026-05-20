@@ -32,20 +32,28 @@ find_package(Drogon CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SODIUM   REQUIRED libsodium)
-pkg_check_modules(VIPS_CPP REQUIRED vips-cpp)
+pkg_check_modules(SODIUM    REQUIRED libsodium)
+pkg_check_modules(VIPS_CPP  REQUIRED vips-cpp)
+pkg_check_modules(CMARK_GFM REQUIRED libcmark-gfm)
+# cmark-gfm-extensions ships without a .pc file in Debian/Ubuntu; we link
+# it explicitly so the GFM extensions registry (tables, autolink, …)
+# resolves at load time.
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_INCLUDE_DIRS}
-    ${VIPS_CPP_INCLUDE_DIRS})
+    ${VIPS_CPP_INCLUDE_DIRS}
+    ${CMARK_GFM_INCLUDE_DIRS})
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
-    ${VIPS_CPP_LIBRARY_DIRS})
+    ${VIPS_CPP_LIBRARY_DIRS}
+    ${CMARK_GFM_LIBRARY_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     CURL::libcurl
     OpenSSL::SSL OpenSSL::Crypto
     ${SODIUM_LIBRARIES}
     ${VIPS_CPP_LIBRARIES}
+    ${CMARK_GFM_LIBRARIES}
+    cmark-gfm-extensions
     brotlidec brotlienc)
 
 # ##############################################################################

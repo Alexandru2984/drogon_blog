@@ -39,6 +39,7 @@ jobs:
             build-essential pkg-config \
             libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
             libvips-dev \
+            libcmark-gfm-dev libcmark-gfm-extensions-dev \
             postgresql-client
 
       - name: Configure

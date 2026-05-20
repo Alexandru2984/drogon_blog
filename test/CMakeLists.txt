@@ -8,7 +8,8 @@ set(TEST_SOURCES
     test_password_hashing.cc
     test_search.cc
     test_security.cc
-    test_image_pipeline.cc)
+    test_image_pipeline.cc
+    test_markdown.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 
@@ -27,11 +28,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../models
     ${SODIUM_INCLUDE_DIRS}
-    ${VIPS_CPP_INCLUDE_DIRS})
+    ${VIPS_CPP_INCLUDE_DIRS}
+    ${CMARK_GFM_INCLUDE_DIRS})
 
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
-    ${VIPS_CPP_LIBRARY_DIRS})
+    ${VIPS_CPP_LIBRARY_DIRS}
+    ${CMARK_GFM_LIBRARY_DIRS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
@@ -39,6 +42,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     OpenSSL::SSL OpenSSL::Crypto
     ${SODIUM_LIBRARIES}
     ${VIPS_CPP_LIBRARIES}
+    ${CMARK_GFM_LIBRARIES}
+    cmark-gfm-extensions
     brotlidec brotlienc)
 
 ParseAndAddDrogonTests(${PROJECT_NAME})

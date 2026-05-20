@@ -205,6 +205,26 @@ drogon_blog/
 
 See `controllers/CommentController.h`, `UserController.h`, `MessageController.h` — same shape.
 
+## Markdown & cursor pagination
+
+Posts are authored as Markdown and rendered server-side by [`cmark-gfm`](https://github.com/github/cmark-gfm) at write time. The rendered HTML is stored in `posts.content_html` so reads stay cheap. Rendering uses `CMARK_OPT_SAFE` — raw HTML is escaped, `javascript:` / `data:` / `vbscript:` URLs in links are filtered, and the GFM extensions whitelisted are tables, strikethrough, autolinks and task lists.
+
+```jsonc
+// POST /posts with content "[click](javascript:bad)"
+// -> stored content_html:
+"content_html": "<p><a href=\"\">click</a></p>\n"
+//                          ^^ dangerous URL stripped by cmark-gfm safe mode
+```
+
+The feed is paginated via a cursor:
+
+```
+GET /posts?limit=20             -> first page
+GET /posts?limit=20&before=42   -> next page, oldest known id was 42
+```
+
+`?limit` is clamped to `[1, 50]`, default `20`. The response includes `next_cursor` (smallest `id` returned, or `null` when the page didn't fill the limit). The SPA's `HomeView` uses an `IntersectionObserver` on a sentinel element to fetch the next page when the user scrolls near the bottom.
+
 ## Full-text search
 
 `posts.search` is a `tsvector` column maintained as `GENERATED ALWAYS … STORED` from the title (weight `A`) and content (weight `B`), backed by a GIN index `idx_posts_search`. Because it's a generated column, every `INSERT`/`UPDATE` keeps the index live with no application logic and no triggers to babysit.

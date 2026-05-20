@@ -19,6 +19,8 @@ const std::string Posts::Cols::_title = "\"title\"";
 const std::string Posts::Cols::_content = "\"content\"";
 const std::string Posts::Cols::_created_at = "\"created_at\"";
 const std::string Posts::Cols::_updated_at = "\"updated_at\"";
+const std::string Posts::Cols::_search = "\"search\"";
+const std::string Posts::Cols::_content_html = "\"content_html\"";
 const std::string Posts::primaryKeyName = "id";
 const bool Posts::hasPrimaryKey = true;
 const std::string Posts::tableName = "\"posts\"";
@@ -29,7 +31,9 @@ const std::vector<typename Posts::MetaData> Posts::metaData_={
 {"title","std::string","text",0,0,0,1},
 {"content","std::string","text",0,0,0,1},
 {"created_at","::trantor::Date","timestamp without time zone",0,0,0,1},
-{"updated_at","::trantor::Date","timestamp without time zone",0,0,0,1}
+{"updated_at","::trantor::Date","timestamp without time zone",0,0,0,1},
+{"search","std::string","tsvector",0,0,0,0},
+{"content_html","std::string","text",0,0,0,0}
 };
 const std::string &Posts::getColumnName(size_t index) noexcept(false)
 {
@@ -100,11 +104,19 @@ Posts::Posts(const Row &r, const ssize_t indexOffset) noexcept
                 updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
+        if(!r["search"].isNull())
+        {
+            search_=std::make_shared<std::string>(r["search"].as<std::string>());
+        }
+        if(!r["content_html"].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(r["content_html"].as<std::string>());
+        }
     }
     else
     {
         size_t offset = (size_t)indexOffset;
-        if(offset + 6 > r.size())
+        if(offset + 8 > r.size())
         {
             LOG_FATAL << "Invalid SQL result for this model";
             return;
@@ -176,13 +188,23 @@ Posts::Posts(const Row &r, const ssize_t indexOffset) noexcept
                 updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
         }
+        index = offset + 6;
+        if(!r[index].isNull())
+        {
+            search_=std::make_shared<std::string>(r[index].as<std::string>());
+        }
+        index = offset + 7;
+        if(!r[index].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(r[index].as<std::string>());
+        }
     }
 
 }
 
 Posts::Posts(const Json::Value &pJson, const std::vector<std::string> &pMasqueradingVector) noexcept(false)
 {
-    if(pMasqueradingVector.size() != 6)
+    if(pMasqueradingVector.size() != 8)
     {
         LOG_ERROR << "Bad masquerading vector";
         return;
@@ -269,6 +291,22 @@ Posts::Posts(const Json::Value &pJson, const std::vector<std::string> &pMasquera
                 }
                 updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
+        }
+    }
+    if(!pMasqueradingVector[6].empty() && pJson.isMember(pMasqueradingVector[6]))
+    {
+        dirtyFlag_[6] = true;
+        if(!pJson[pMasqueradingVector[6]].isNull())
+        {
+            search_=std::make_shared<std::string>(pJson[pMasqueradingVector[6]].asString());
+        }
+    }
+    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson[pMasqueradingVector[7]].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(pJson[pMasqueradingVector[7]].asString());
         }
     }
 }
@@ -359,12 +397,28 @@ Posts::Posts(const Json::Value &pJson) noexcept(false)
             }
         }
     }
+    if(pJson.isMember("search"))
+    {
+        dirtyFlag_[6]=true;
+        if(!pJson["search"].isNull())
+        {
+            search_=std::make_shared<std::string>(pJson["search"].asString());
+        }
+    }
+    if(pJson.isMember("content_html"))
+    {
+        dirtyFlag_[7]=true;
+        if(!pJson["content_html"].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(pJson["content_html"].asString());
+        }
+    }
 }
 
 void Posts::updateByMasqueradedJson(const Json::Value &pJson,
                                             const std::vector<std::string> &pMasqueradingVector) noexcept(false)
 {
-    if(pMasqueradingVector.size() != 6)
+    if(pMasqueradingVector.size() != 8)
     {
         LOG_ERROR << "Bad masquerading vector";
         return;
@@ -452,6 +506,22 @@ void Posts::updateByMasqueradedJson(const Json::Value &pJson,
             }
         }
     }
+    if(!pMasqueradingVector[6].empty() && pJson.isMember(pMasqueradingVector[6]))
+    {
+        dirtyFlag_[6] = true;
+        if(!pJson[pMasqueradingVector[6]].isNull())
+        {
+            search_=std::make_shared<std::string>(pJson[pMasqueradingVector[6]].asString());
+        }
+    }
+    if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson[pMasqueradingVector[7]].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(pJson[pMasqueradingVector[7]].asString());
+        }
+    }
 }
 
 void Posts::updateByJson(const Json::Value &pJson) noexcept(false)
@@ -537,6 +607,22 @@ void Posts::updateByJson(const Json::Value &pJson) noexcept(false)
                 }
                 updatedAt_=std::make_shared<::trantor::Date>(t*1000000+decimalNum);
             }
+        }
+    }
+    if(pJson.isMember("search"))
+    {
+        dirtyFlag_[6] = true;
+        if(!pJson["search"].isNull())
+        {
+            search_=std::make_shared<std::string>(pJson["search"].asString());
+        }
+    }
+    if(pJson.isMember("content_html"))
+    {
+        dirtyFlag_[7] = true;
+        if(!pJson["content_html"].isNull())
+        {
+            contentHtml_=std::make_shared<std::string>(pJson["content_html"].asString());
         }
     }
 }
@@ -658,6 +744,60 @@ void Posts::setUpdatedAt(const ::trantor::Date &pUpdatedAt) noexcept
     dirtyFlag_[5] = true;
 }
 
+const std::string &Posts::getValueOfSearch() const noexcept
+{
+    static const std::string defaultValue = std::string();
+    if(search_)
+        return *search_;
+    return defaultValue;
+}
+const std::shared_ptr<std::string> &Posts::getSearch() const noexcept
+{
+    return search_;
+}
+void Posts::setSearch(const std::string &pSearch) noexcept
+{
+    search_ = std::make_shared<std::string>(pSearch);
+    dirtyFlag_[6] = true;
+}
+void Posts::setSearch(std::string &&pSearch) noexcept
+{
+    search_ = std::make_shared<std::string>(std::move(pSearch));
+    dirtyFlag_[6] = true;
+}
+void Posts::setSearchToNull() noexcept
+{
+    search_.reset();
+    dirtyFlag_[6] = true;
+}
+
+const std::string &Posts::getValueOfContentHtml() const noexcept
+{
+    static const std::string defaultValue = std::string();
+    if(contentHtml_)
+        return *contentHtml_;
+    return defaultValue;
+}
+const std::shared_ptr<std::string> &Posts::getContentHtml() const noexcept
+{
+    return contentHtml_;
+}
+void Posts::setContentHtml(const std::string &pContentHtml) noexcept
+{
+    contentHtml_ = std::make_shared<std::string>(pContentHtml);
+    dirtyFlag_[7] = true;
+}
+void Posts::setContentHtml(std::string &&pContentHtml) noexcept
+{
+    contentHtml_ = std::make_shared<std::string>(std::move(pContentHtml));
+    dirtyFlag_[7] = true;
+}
+void Posts::setContentHtmlToNull() noexcept
+{
+    contentHtml_.reset();
+    dirtyFlag_[7] = true;
+}
+
 void Posts::updateId(const uint64_t id)
 {
 }
@@ -669,7 +809,9 @@ const std::vector<std::string> &Posts::insertColumns() noexcept
         "title",
         "content",
         "created_at",
-        "updated_at"
+        "updated_at",
+        "search",
+        "content_html"
     };
     return inCols;
 }
@@ -731,6 +873,28 @@ void Posts::outputArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
+    if(dirtyFlag_[6])
+    {
+        if(getSearch())
+        {
+            binder << getValueOfSearch();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[7])
+    {
+        if(getContentHtml())
+        {
+            binder << getValueOfContentHtml();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
 }
 
 const std::vector<std::string> Posts::updateColumns() const
@@ -755,6 +919,14 @@ const std::vector<std::string> Posts::updateColumns() const
     if(dirtyFlag_[5])
     {
         ret.push_back(getColumnName(5));
+    }
+    if(dirtyFlag_[6])
+    {
+        ret.push_back(getColumnName(6));
+    }
+    if(dirtyFlag_[7])
+    {
+        ret.push_back(getColumnName(7));
     }
     return ret;
 }
@@ -816,6 +988,28 @@ void Posts::updateArgs(drogon::orm::internal::SqlBinder &binder) const
             binder << nullptr;
         }
     }
+    if(dirtyFlag_[6])
+    {
+        if(getSearch())
+        {
+            binder << getValueOfSearch();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
+    if(dirtyFlag_[7])
+    {
+        if(getContentHtml())
+        {
+            binder << getValueOfContentHtml();
+        }
+        else
+        {
+            binder << nullptr;
+        }
+    }
 }
 Json::Value Posts::toJson() const
 {
@@ -868,6 +1062,22 @@ Json::Value Posts::toJson() const
     {
         ret["updated_at"]=Json::Value();
     }
+    if(getSearch())
+    {
+        ret["search"]=getValueOfSearch();
+    }
+    else
+    {
+        ret["search"]=Json::Value();
+    }
+    if(getContentHtml())
+    {
+        ret["content_html"]=getValueOfContentHtml();
+    }
+    else
+    {
+        ret["content_html"]=Json::Value();
+    }
     return ret;
 }
 
@@ -880,7 +1090,7 @@ Json::Value Posts::toMasqueradedJson(
     const std::vector<std::string> &pMasqueradingVector) const
 {
     Json::Value ret;
-    if(pMasqueradingVector.size() == 6)
+    if(pMasqueradingVector.size() == 8)
     {
         if(!pMasqueradingVector[0].empty())
         {
@@ -948,6 +1158,28 @@ Json::Value Posts::toMasqueradedJson(
                 ret[pMasqueradingVector[5]]=Json::Value();
             }
         }
+        if(!pMasqueradingVector[6].empty())
+        {
+            if(getSearch())
+            {
+                ret[pMasqueradingVector[6]]=getValueOfSearch();
+            }
+            else
+            {
+                ret[pMasqueradingVector[6]]=Json::Value();
+            }
+        }
+        if(!pMasqueradingVector[7].empty())
+        {
+            if(getContentHtml())
+            {
+                ret[pMasqueradingVector[7]]=getValueOfContentHtml();
+            }
+            else
+            {
+                ret[pMasqueradingVector[7]]=Json::Value();
+            }
+        }
         return ret;
     }
     LOG_ERROR << "Masquerade failed";
@@ -999,6 +1231,22 @@ Json::Value Posts::toMasqueradedJson(
     {
         ret["updated_at"]=Json::Value();
     }
+    if(getSearch())
+    {
+        ret["search"]=getValueOfSearch();
+    }
+    else
+    {
+        ret["search"]=Json::Value();
+    }
+    if(getContentHtml())
+    {
+        ret["content_html"]=getValueOfContentHtml();
+    }
+    else
+    {
+        ret["content_html"]=Json::Value();
+    }
     return ret;
 }
 
@@ -1049,13 +1297,23 @@ bool Posts::validateJsonForCreation(const Json::Value &pJson, std::string &err)
         if(!validJsonOfField(5, "updated_at", pJson["updated_at"], err, true))
             return false;
     }
+    if(pJson.isMember("search"))
+    {
+        if(!validJsonOfField(6, "search", pJson["search"], err, true))
+            return false;
+    }
+    if(pJson.isMember("content_html"))
+    {
+        if(!validJsonOfField(7, "content_html", pJson["content_html"], err, true))
+            return false;
+    }
     return true;
 }
 bool Posts::validateMasqueradedJsonForCreation(const Json::Value &pJson,
                                                const std::vector<std::string> &pMasqueradingVector,
                                                std::string &err)
 {
-    if(pMasqueradingVector.size() != 6)
+    if(pMasqueradingVector.size() != 8)
     {
         err = "Bad masquerading vector";
         return false;
@@ -1124,6 +1382,22 @@ bool Posts::validateMasqueradedJsonForCreation(const Json::Value &pJson,
                   return false;
           }
       }
+      if(!pMasqueradingVector[6].empty())
+      {
+          if(pJson.isMember(pMasqueradingVector[6]))
+          {
+              if(!validJsonOfField(6, pMasqueradingVector[6], pJson[pMasqueradingVector[6]], err, true))
+                  return false;
+          }
+      }
+      if(!pMasqueradingVector[7].empty())
+      {
+          if(pJson.isMember(pMasqueradingVector[7]))
+          {
+              if(!validJsonOfField(7, pMasqueradingVector[7], pJson[pMasqueradingVector[7]], err, true))
+                  return false;
+          }
+      }
     }
     catch(const Json::LogicError &e)
     {
@@ -1169,13 +1443,23 @@ bool Posts::validateJsonForUpdate(const Json::Value &pJson, std::string &err)
         if(!validJsonOfField(5, "updated_at", pJson["updated_at"], err, false))
             return false;
     }
+    if(pJson.isMember("search"))
+    {
+        if(!validJsonOfField(6, "search", pJson["search"], err, false))
+            return false;
+    }
+    if(pJson.isMember("content_html"))
+    {
+        if(!validJsonOfField(7, "content_html", pJson["content_html"], err, false))
+            return false;
+    }
     return true;
 }
 bool Posts::validateMasqueradedJsonForUpdate(const Json::Value &pJson,
                                              const std::vector<std::string> &pMasqueradingVector,
                                              std::string &err)
 {
-    if(pMasqueradingVector.size() != 6)
+    if(pMasqueradingVector.size() != 8)
     {
         err = "Bad masquerading vector";
         return false;
@@ -1214,6 +1498,16 @@ bool Posts::validateMasqueradedJsonForUpdate(const Json::Value &pJson,
       if(!pMasqueradingVector[5].empty() && pJson.isMember(pMasqueradingVector[5]))
       {
           if(!validJsonOfField(5, pMasqueradingVector[5], pJson[pMasqueradingVector[5]], err, false))
+              return false;
+      }
+      if(!pMasqueradingVector[6].empty() && pJson.isMember(pMasqueradingVector[6]))
+      {
+          if(!validJsonOfField(6, pMasqueradingVector[6], pJson[pMasqueradingVector[6]], err, false))
+              return false;
+      }
+      if(!pMasqueradingVector[7].empty() && pJson.isMember(pMasqueradingVector[7]))
+      {
+          if(!validJsonOfField(7, pMasqueradingVector[7], pJson[pMasqueradingVector[7]], err, false))
               return false;
       }
     }
@@ -1302,6 +1596,28 @@ bool Posts::validJsonOfField(size_t index,
             {
                 err="The " + fieldName + " column cannot be null";
                 return false;
+            }
+            if(!pJson.isString())
+            {
+                err="Type error in the "+fieldName+" field";
+                return false;
+            }
+            break;
+        case 6:
+            if(pJson.isNull())
+            {
+                return true;
+            }
+            if(!pJson.isString())
+            {
+                err="Type error in the "+fieldName+" field";
+                return false;
+            }
+            break;
+        case 7:
+            if(pJson.isNull())
+            {
+                return true;
             }
             if(!pJson.isString())
             {

@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config \
         libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
         libvips-dev \
+        libcmark-gfm-dev libcmark-gfm-extensions-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -43,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libuuid1 zlib1g libc-ares2 \
         libmariadb3 libsqlite3-0 libhiredis0.14 \
         libvips42 \
+        libcmark-gfm0.29.0.gfm.13 libcmark-gfm-extensions0.29.0.gfm.13 \
         postgresql-client \
         tini \
     && rm -rf /var/lib/apt/lists/* \

@@ -4,6 +4,7 @@
 #include "helpers/AccessLog.h"
 #include "helpers/EmailHelper.h"
 #include "helpers/ImageProcessor.h"
+#include "helpers/Markdown.h"
 #include "helpers/Ops.h"
 #include "helpers/Security.h"
 
@@ -118,6 +119,10 @@ int main()
         std::cerr << "libvips init failed" << std::endl;
         return 1;
     }
+
+    // Register cmark-gfm core extensions (tables, strikethrough, autolinks,
+    // tasklists). Safe to call before app().run().
+    markdown::initOnce();
 
     try
     {

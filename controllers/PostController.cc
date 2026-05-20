@@ -2,61 +2,128 @@
 #include "../models/Posts.h"
 #include "../models/Users.h"
 #include "../models/Likes.h"
+#include "../helpers/Markdown.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
 
+#include <algorithm>
+
 using namespace drogon;
 using namespace drogon::orm;
+
+namespace {
+
+constexpr int kDefaultPageSize = 20;
+constexpr int kMaxPageSize     = 50;
+
+int clampLimit(const std::string& raw)
+{
+    if (raw.empty()) return kDefaultPageSize;
+    try {
+        int v = std::stoi(raw);
+        if (v < 1) return kDefaultPageSize;
+        return std::min(v, kMaxPageSize);
+    } catch (...) { return kDefaultPageSize; }
+}
+
+int parseCursor(const std::string& raw)
+{
+    if (raw.empty()) return 0;
+    try {
+        int v = std::stoi(raw);
+        return v > 0 ? v : 0;
+    } catch (...) { return 0; }
+}
+
+} // namespace
 
 void PostController::getAllPosts(const HttpRequestPtr &req,
                                 std::function<void(const HttpResponsePtr &)> &&callback)
 {
     auto dbClient = drogon::app().getDbClient();
 
-    // Single JOIN — author resolved in one round-trip instead of N+1.
-    static const char* kSql =
-        "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
+    // Cursor-based pagination. `before` is the id of the oldest post the
+    // client already has — we return rows strictly older than it. IDs are
+    // monotonic (IDENTITY) so ordering by id DESC matches created_at DESC
+    // and gives a stable cursor.
+    const int  limit  = clampLimit(req->getParameter("limit"));
+    const int  cursor = parseCursor(req->getParameter("before"));
+
+    static const char* kSqlWithCursor =
+        "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "ORDER BY p.created_at DESC";
+        "WHERE p.id < $1 "
+        "ORDER BY p.id DESC "
+        "LIMIT $2";
+    static const char* kSqlFirstPage =
+        "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
+        "FROM posts p "
+        "LEFT JOIN users u ON u.id = p.user_id "
+        "ORDER BY p.id DESC "
+        "LIMIT $1";
 
-    dbClient->execSqlAsync(
-        kSql,
-        [callback](const Result& r) {
-            Json::Value ret;
-            ret["posts"] = Json::Value(Json::arrayValue);
+    auto onOk = [callback, limit](const Result& r) {
+        Json::Value ret;
+        ret["posts"] = Json::Value(Json::arrayValue);
 
-            for (const auto& row : r) {
-                Json::Value post;
-                post["id"]         = row["id"].as<int64_t>();
-                post["title"]      = row["title"].as<std::string>();
-                post["content"]    = row["content"].as<std::string>();
-                post["created_at"] = row["created_at"].as<std::string>();
-                post["updated_at"] = row["updated_at"].as<std::string>();
+        int64_t minId = 0;
+        for (const auto& row : r) {
+            Json::Value post;
+            const auto id      = row["id"].as<int64_t>();
+            post["id"]         = id;
+            post["title"]      = row["title"].as<std::string>();
+            post["content"]    = row["content"].as<std::string>();
+            if (!row["content_html"].isNull())
+                post["content_html"] = row["content_html"].as<std::string>();
+            post["created_at"] = row["created_at"].as<std::string>();
+            post["updated_at"] = row["updated_at"].as<std::string>();
 
-                if (!row["author_id"].isNull()) {
-                    post["author"]["id"]       = row["author_id"].as<int64_t>();
-                    post["author"]["username"] = row["author_username"].as<std::string>();
-                    if (!row["author_profile_image"].isNull()) {
-                        auto img = row["author_profile_image"].as<std::string>();
-                        if (!img.empty()) post["author"]["profile_image"] = img;
-                    }
+            if (!row["author_id"].isNull()) {
+                post["author"]["id"]       = row["author_id"].as<int64_t>();
+                post["author"]["username"] = row["author_username"].as<std::string>();
+                if (!row["author_profile_image"].isNull()) {
+                    auto img = row["author_profile_image"].as<std::string>();
+                    if (!img.empty()) post["author"]["profile_image"] = img;
                 }
-                ret["posts"].append(post);
             }
+            ret["posts"].append(post);
 
-            callback(HttpResponse::newHttpJsonResponse(ret));
-        },
-        [callback](const DrogonDbException& e) {
-            LOG_ERROR << "DB Error (getAllPosts): " << e.base().what();
-            Json::Value ret;
-            ret["error"] = "Failed to fetch posts";
-            auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k500InternalServerError);
-            callback(resp);
-        });
+            if (minId == 0 || id < minId) minId = id;
+        }
+
+        // Only emit a cursor when this page filled the limit; otherwise the
+        // client knows there's nothing more to fetch.
+        if (static_cast<int>(r.size()) == limit && minId > 0) {
+            ret["next_cursor"] = static_cast<Json::Int64>(minId);
+        } else {
+            ret["next_cursor"] = Json::nullValue;
+        }
+
+        callback(HttpResponse::newHttpJsonResponse(ret));
+    };
+    auto onErr = [callback](const DrogonDbException& e) {
+        LOG_ERROR << "DB Error (getAllPosts): " << e.base().what();
+        Json::Value ret;
+        ret["error"] = "Failed to fetch posts";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k500InternalServerError);
+        callback(resp);
+    };
+
+    // PG infers parameter types from the prepared statement context: cursor
+    // is compared against posts.id (int4) so it must bind as int32; LIMIT is
+    // bigint internally so it must bind as int64. Mixing them up triggers
+    // "insufficient data left in message" at parse time.
+    const int64_t limit64 = limit;
+    if (cursor > 0) {
+        dbClient->execSqlAsync(kSqlWithCursor, onOk, onErr, cursor, limit64);
+    } else {
+        dbClient->execSqlAsync(kSqlFirstPage,  onOk, onErr, limit64);
+    }
 }
 
 void PostController::searchPosts(const HttpRequestPtr &req,
@@ -140,7 +207,7 @@ void PostController::getPost(const HttpRequestPtr &req,
     auto dbClient = drogon::app().getDbClient();
 
     static const char* kSql =
-        "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
+        "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
@@ -162,6 +229,8 @@ void PostController::getPost(const HttpRequestPtr &req,
             ret["id"]         = row["id"].as<int64_t>();
             ret["title"]      = row["title"].as<std::string>();
             ret["content"]    = row["content"].as<std::string>();
+            if (!row["content_html"].isNull())
+                ret["content_html"] = row["content_html"].as<std::string>();
             ret["created_at"] = row["created_at"].as<std::string>();
             ret["updated_at"] = row["updated_at"].as<std::string>();
 
@@ -225,19 +294,26 @@ void PostController::createPost(const HttpRequestPtr &req,
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
+    // Render markdown once at write-time and store both the raw source (so
+    // we can re-render if rendering policy changes) and the resulting safe
+    // HTML (so reads stay cheap).
+    const std::string contentHtml = markdown::renderToSafeHtml(content);
+
     drogon_model::blog_db::Posts newPost;
     newPost.setUserId(userIdOpt.value());
     newPost.setTitle(title);
     newPost.setContent(content);
+    newPost.setContentHtml(contentHtml);
 
     try {
         mapper.insert(newPost);
 
         Json::Value ret;
         ret["message"] = "Post created successfully";
-        ret["post"]["id"] = newPost.getValueOfId();
-        ret["post"]["title"] = newPost.getValueOfTitle();
-        ret["post"]["content"] = newPost.getValueOfContent();
+        ret["post"]["id"]           = newPost.getValueOfId();
+        ret["post"]["title"]        = newPost.getValueOfTitle();
+        ret["post"]["content"]      = newPost.getValueOfContent();
+        ret["post"]["content_html"] = newPost.getValueOfContentHtml();
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k201Created);
@@ -297,7 +373,9 @@ void PostController::updatePost(const HttpRequestPtr &req,
             post.setTitle((*json)["title"].asString());
         }
         if (json->isMember("content")) {
-            post.setContent((*json)["content"].asString());
+            const std::string newContent = (*json)["content"].asString();
+            post.setContent(newContent);
+            post.setContentHtml(markdown::renderToSafeHtml(newContent));
         }
 
         mapper.update(post);

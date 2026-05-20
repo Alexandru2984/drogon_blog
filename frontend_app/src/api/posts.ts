@@ -9,10 +9,16 @@ export interface PostAuthor {
 export interface Post {
   id: number
   title: string
-  content: string
+  content: string             // raw markdown source as authored
+  content_html?: string       // sanitized HTML rendered server-side (cmark-gfm SAFE)
   created_at: string
   updated_at: string
   author?: PostAuthor
+}
+
+export interface FeedPage {
+  posts:       Post[]
+  next_cursor: number | null
 }
 
 export interface SearchHit {
@@ -32,8 +38,11 @@ export interface SearchResponse {
 }
 
 export const postsApi = {
-  list() {
-    return api.get<{ posts: Post[] }>('/posts').then(r => r.data.posts)
+  list(opts: { before?: number; limit?: number } = {}) {
+    const params: Record<string, string> = {}
+    if (opts.before) params.before = String(opts.before)
+    if (opts.limit)  params.limit  = String(opts.limit)
+    return api.get<FeedPage>('/posts', { params }).then(r => r.data)
   },
   search(q: string) {
     return api.get<SearchResponse>('/posts/search', { params: { q } }).then(r => r.data)
