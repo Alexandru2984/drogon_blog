@@ -1,0 +1,12 @@
+# Grafana provisioning: declare the Prometheus datasource at startup so that
+# the dashboard JSON can reference it by name without manual UI clicking.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

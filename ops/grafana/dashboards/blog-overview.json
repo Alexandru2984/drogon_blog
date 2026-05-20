@@ -1,0 +1,235 @@
+{
+  "title": "Blog — Overview",
+  "uid": "blog-overview",
+  "tags": ["blog", "drogon"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "refresh": "15s",
+  "annotations": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROM",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Requests / s (1m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 20 },
+            { "color": "red", "value": 100 }
+          ]}
+        }
+      },
+      "targets": [{
+        "refId": "A",
+        "expr": "sum(rate(blog_http_requests_total[1m]))"
+      }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "5xx ratio (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.005 },
+            { "color": "red", "value": 0.01 }
+          ]}
+        }
+      },
+      "targets": [{
+        "refId": "A",
+        "expr": "sum(rate(blog_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(blog_http_requests_total[5m])), 0.001)"
+      }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p99 latency (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "decimals": 3,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.5 },
+            { "color": "red", "value": 1.0 }
+          ]}
+        }
+      },
+      "targets": [{
+        "refId": "A",
+        "expr": "histogram_quantile(0.99, sum by (le) (rate(blog_http_request_duration_seconds_bucket[5m])))"
+      }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "In-flight",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 50 },
+            { "color": "red", "value": 100 }
+          ]}
+        }
+      },
+      "targets": [{
+        "refId": "A",
+        "expr": "blog_http_requests_in_flight"
+      }]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Open WebSockets",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [{
+        "refId": "A",
+        "expr": "blog_ws_connections"
+      }]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Email queue depth",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto", "graphMode": "area", "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 25 },
+            { "color": "red", "value": 100 }
+          ]}
+        }
+      },
+      "targets": [{
+        "refId": "A",
+        "expr": "blog_email_queue_depth"
+      }]
+    },
+
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Request rate by route",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right" } },
+      "targets": [{
+        "refId": "A",
+        "expr": "sum by (route) (rate(blog_http_requests_total[1m]))",
+        "legendFormat": "{{route}}"
+      }]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Latency percentiles (overall)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "legend": { "calcs": ["mean"], "displayMode": "table", "placement": "right" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5,  sum by (le) (rate(blog_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(blog_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(blog_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Status code mix",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "calcs": ["mean"], "displayMode": "table", "placement": "right" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(blog_http_requests_total[1m]))", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Resident memory",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [{
+        "refId": "A",
+        "expr": "blog_process_resident_memory_bytes",
+        "legendFormat": "RSS"
+      }]
+    },
+
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Top 5xx routes (last 15m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "options": { "showHeader": true },
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true }, "indexByName": {}, "renameByName": { "Value": "errors/s" } } }
+      ],
+      "targets": [{
+        "refId": "A",
+        "instant": true,
+        "expr": "topk(10, sum by (route, status, method) (rate(blog_http_requests_total{status=~\"5..\"}[15m])))",
+        "format": "table"
+      }]
+    }
+  ]
+}

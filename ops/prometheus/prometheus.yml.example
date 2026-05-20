@@ -1,0 +1,39 @@
+# Example Prometheus scrape config for the Drogon blog.
+#
+# In production the `/metrics` endpoint is gated by METRICS_TOKEN (bearer
+# auth). Set the same value here under bearer_token_file or bearer_token.
+# The blog itself binds to loopback only — Prometheus must run on the same
+# host or be reachable through an authenticated reverse proxy.
+#
+# Companion files:
+#   alerts.yml            Alert rule definitions; load via rule_files below.
+#   docker-compose.observability.yml  Drops a working Prometheus + Grafana
+#                                     stack next to the blog for local demos.
+
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    service: blog
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: blog
+    metrics_path: /metrics
+    scheme: http
+    # Replace with your real path/file. Never commit this token to git.
+    # bearer_token_file: /etc/prometheus/blog_metrics_token
+    bearer_token: replace-with-METRICS_TOKEN-from-blog-.env
+    static_configs:
+      - targets:
+          - 127.0.0.1:8092   # blog
+        labels:
+          env: prod
+
+  # Self-scrape so the BlogDown alert can fire on `up == 0`.
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - 127.0.0.1:9090

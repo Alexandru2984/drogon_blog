@@ -56,6 +56,7 @@ std::array<std::atomic<std::uint64_t>, kBuckets.size()>          g_buckets{};
 std::atomic<std::uint64_t>                                       g_inf{0};
 std::atomic<double>                                              g_sum{0.0};
 std::atomic<std::uint64_t>                                       g_count{0};
+std::atomic<std::int64_t>                                        g_inFlight{0};
 
 const auto g_started = std::chrono::steady_clock::now();
 
@@ -123,6 +124,9 @@ void observeRequest(const std::string& route,
     g_count.fetch_add(1, std::memory_order_relaxed);
 }
 
+void incInFlight() { g_inFlight.fetch_add(1, std::memory_order_relaxed); }
+void decInFlight() { g_inFlight.fetch_sub(1, std::memory_order_relaxed); }
+
 std::string renderPrometheus()
 {
     std::ostringstream out;
@@ -160,6 +164,23 @@ std::string renderPrometheus()
     out << "# HELP blog_ws_connections Open WebSocket connections (live message subscribers).\n"
         << "# TYPE blog_ws_connections gauge\n"
         << "blog_ws_connections " << MessageWebSocket::connectionCount() << '\n';
+
+    out << "# HELP blog_http_requests_in_flight Requests currently being processed.\n"
+        << "# TYPE blog_http_requests_in_flight gauge\n"
+        << "blog_http_requests_in_flight "
+        << g_inFlight.load(std::memory_order_relaxed) << '\n';
+
+    // Build info as a constant gauge of value 1 with version labels. Standard
+    // Prometheus pattern for static service metadata (lets dashboards switch
+    // queries by version, alerts annotate which build started misbehaving).
+    const char* ver = std::getenv("BLOG_VERSION");
+    const char* rev = std::getenv("BLOG_GIT_REV");
+    out << "# HELP blog_build_info Static service build metadata (always 1).\n"
+        << "# TYPE blog_build_info gauge\n"
+        << "blog_build_info{"
+        << "version=\""  << escapeLabel(ver ? ver : "dev") << "\","
+        << "git_rev=\""  << escapeLabel(rev ? rev : "unknown") << "\""
+        << "} 1\n";
 
     out << "# HELP blog_process_resident_memory_bytes Resident memory of the process.\n"
         << "# TYPE blog_process_resident_memory_bytes gauge\n"

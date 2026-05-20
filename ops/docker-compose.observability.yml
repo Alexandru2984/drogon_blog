@@ -1,0 +1,57 @@
+# Stand-alone Prometheus + Grafana stack for the blog.
+#
+# Bring it up from this directory:
+#
+#     # one-time: copy + edit the example with your METRICS_TOKEN
+#     cp prometheus/prometheus.yml.example prometheus/prometheus.yml
+#
+#     # then
+#     docker compose -f docker-compose.observability.yml up -d
+#
+# Grafana is published on :3000 (admin / admin), Prometheus on :9090. Both
+# read from the local repo by bind-mount, so a `git pull` re-applies the
+# alerts.yml and dashboard JSON automatically (Grafana provisioner refreshes
+# every 30s; Prometheus reloads on SIGHUP — `docker kill -s HUP prometheus`).
+#
+# In production we run the same Prometheus binary as a systemd unit; this
+# compose file is the demo/dev path.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prom_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER:       admin
+      GF_SECURITY_ADMIN_PASSWORD:   admin
+      GF_USERS_ALLOW_SIGN_UP:       "false"
+      GF_INSTALL_PLUGINS:           ""
+      GF_FEATURE_TOGGLES_ENABLE:    ""
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prom_data:
+  grafana_data:

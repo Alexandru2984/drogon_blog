@@ -1,6 +1,7 @@
 #include "AccessLog.h"
 #include "Metrics.h"
 #include "Security.h"
+#include "Tracing.h"
 
 #include <drogon/drogon.h>
 
@@ -92,8 +93,9 @@ void install()
 {
     using namespace drogon;
 
-    // Stamp every incoming request: generate (or honour) a request ID, and
-    // record the start time so the post-handling hook can compute latency.
+    // Stamp every incoming request: generate (or honour) a request ID, start
+    // the W3C trace context, increment the in-flight gauge, and record the
+    // start time so the post-handling hook can compute latency.
     app().registerPreRoutingAdvice(
         [](const HttpRequestPtr& req) {
             auto incoming = req->getHeader(kReqIdHeader);
@@ -101,6 +103,8 @@ void install()
             req->attributes()->insert(kReqIdAttr, id);
             req->attributes()->insert(
                 kStartAttr, std::chrono::steady_clock::now());
+            tracing::startServerSpan(req);
+            metrics::incInFlight();
         });
 
     app().registerPostHandlingAdvice(
@@ -113,9 +117,6 @@ void install()
             // correlate logs.
             if (!id.empty()) resp->addHeader(kReqIdHeader, id);
 
-            const std::string path = req->getPath();
-            if (mutedPaths().count(path)) return;
-
             std::chrono::steady_clock::time_point start{};
             if (attrs->find(kStartAttr))
                 start = attrs->get<std::chrono::steady_clock::time_point>(kStartAttr);
@@ -124,6 +125,15 @@ void install()
             const double latencySec =
                 std::chrono::duration<double>(elapsed).count();
             const double latencyMs = latencySec * 1000.0;
+
+            // Close the trace span (emits OTLP-shaped JSON to stderr when
+            // BLOG_TRACE_LOG=1; always sets the traceparent response header).
+            // Done unconditionally so even muted paths propagate context.
+            tracing::finishServerSpan(req, resp, latencySec);
+            metrics::decInFlight();
+
+            const std::string path = req->getPath();
+            if (mutedPaths().count(path)) return;
 
             const std::string method = methodName(req->getMethod());
             const std::string ip     = security::clientIp(
@@ -138,14 +148,22 @@ void install()
 
             metrics::observeRequest(route, method, status, latencySec);
 
-            char line[1024];
+            // Trace correlation: a log line plus the matching span share the
+            // same trace_id, which is what makes "click a slow request → see
+            // its span tree" work in Grafana / Tempo.
+            const std::string traceId = tracing::traceIdOf(req);
+            const std::string spanId  = tracing::spanIdOf(req);
+
+            char line[1280];
             int n = std::snprintf(
                 line, sizeof(line),
-                "{\"ts\":\"%s\",\"req_id\":\"%s\",\"method\":\"%s\",\"path\":\"%s\","
-                "\"route\":\"%s\",\"status\":%d,\"latency_ms\":%.3f,\"bytes\":%zu,"
-                "\"ip\":\"%s\"}\n",
+                "{\"ts\":\"%s\",\"req_id\":\"%s\",\"trace_id\":\"%s\",\"span_id\":\"%s\","
+                "\"method\":\"%s\",\"path\":\"%s\",\"route\":\"%s\",\"status\":%d,"
+                "\"latency_ms\":%.3f,\"bytes\":%zu,\"ip\":\"%s\"}\n",
                 nowIsoUtc().c_str(),
                 jsonEscape(id).c_str(),
+                traceId.c_str(),
+                spanId.c_str(),
                 method.c_str(),
                 jsonEscape(path).c_str(),
                 jsonEscape(route).c_str(),

@@ -352,14 +352,18 @@ Frontend (`stores/messages.ts`) auto-connects on login, reconnects with exponent
 **Structured access log.** Every request emits a single JSON line to stdout (captured by journald in production):
 
 ```json
-{"ts":"2026-05-19T19:54:49.707Z","req_id":"2EfFX5Bt8f6-ehXx","method":"GET","path":"/posts","route":"/posts","status":200,"latency_ms":2.500,"bytes":12,"ip":"127.0.0.1"}
+{"ts":"2026-05-20T18:26:10.279Z","req_id":"qGf37Qo_GXQl-tzk","trace_id":"0620ccc464116379bc12e30efba1ba04","span_id":"c01d16292c007f0e","method":"POST","path":"/auth/register","route":"/auth/register","status":201,"latency_ms":122.033,"bytes":104,"ip":"127.0.0.1"}
 ```
 
 Request IDs are generated on entry (or honoured if the client supplied an `X-Request-Id` header) and echoed back in the response. `route` is the matched Drogon route pattern, so cardinality stays bounded across path parameters.
 
-**Metrics** include per-route request counters (`blog_http_requests_total{route,method,status}`), a latency histogram (`blog_http_request_duration_seconds`), the in-flight email queue depth, resident memory, and process uptime.
+**Tracing.** The HTTP layer parses the W3C `traceparent` header on the way in and propagates it on the way out, generating a fresh trace + span when none is supplied. `trace_id` and `span_id` are stamped onto every access log line for log↔trace correlation. With `BLOG_TRACE_LOG=1` the service additionally emits an OTLP-shaped JSON span on stderr per sampled request — a collector like Vector or fluent-bit can convert these to OTLP/HTTP for Tempo / Jaeger / Honeycomb without any code change. Sampling rate is `BLOG_TRACE_SAMPLE_RATE` (default `1.0`).
+
+**Metrics** include per-route request counters (`blog_http_requests_total{route,method,status}`), a latency histogram (`blog_http_request_duration_seconds`), an in-flight gauge (`blog_http_requests_in_flight`), the outbound email queue depth, open WebSocket subscribers, resident memory, process uptime, and a `blog_build_info{version,git_rev}` info gauge.
 
 By default `/metrics` is reachable only from the loopback interface; set `METRICS_TOKEN=<secret>` to require `Authorization: Bearer <secret>` instead, which is what production deployments behind nginx should use.
+
+**Dashboard + alerts.** A Grafana dashboard (`ops/grafana/dashboards/blog-overview.json`) and a set of Prometheus alert rules (`ops/prometheus/alerts.yml`) ship in this repo, together with a ready-to-run `ops/docker-compose.observability.yml` that brings up Prometheus + Grafana with everything provisioned. See [`ops/README.md`](ops/README.md) for the walk-through.
 
 ## Benchmarks
 

@@ -1,0 +1,116 @@
+# Prometheus alert rules for the Drogon blog.
+#
+# Thresholds tuned for a small single-instance deployment (CV-grade project,
+# not a fleet). They favour signal over silence: alerts fire on conditions
+# that an operator should look at within minutes, and stay quiet for the
+# kind of bursty traffic patterns a small blog will see.
+
+groups:
+  - name: blog-availability
+    interval: 30s
+    rules:
+      - alert: BlogDown
+        # `up` is 1 when Prometheus successfully scraped the target in the
+        # last interval, 0 otherwise. 1 minute = two missed scrapes at 15s.
+        expr: up{job="blog"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Blog target is not reachable
+          description: |
+            Prometheus has not scraped {{ $labels.instance }} for 1 minute.
+            Either the systemd unit died or /metrics started returning 401.
+
+      - alert: BlogHighErrorRate
+        # 5xx ratio over the last 5 minutes. We accept the occasional 5xx
+        # (e.g. transient DB blip) but anything sustained > 1% is on us.
+        expr: |
+          (
+            sum(rate(blog_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(blog_http_requests_total[5m])), 0.01)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            5xx error rate above 1% for 5 minutes
+            ({{ humanizePercentage $value }})
+          description: |
+            Look at recent journalctl logs for the blog service. Likely
+            culprits: DB connection pool starvation, an unhandled exception
+            in a controller, or an upstream (SMTP / Cloudflare) timing out.
+
+  - name: blog-latency
+    interval: 30s
+    rules:
+      - alert: BlogHighP99Latency
+        # histogram_quantile against the seconds histogram. Threshold is 1s
+        # — generous for a public web app with DB+template rendering, but
+        # anything beyond that on a small dataset signals a slow query or
+        # contention on the worker thread pool.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(blog_http_request_duration_seconds_bucket[5m]))
+          ) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: p99 request latency > 1s for 10 minutes
+          description: |
+            Probably a slow PostgreSQL query (check pg_stat_statements) or
+            an unbounded scan that lost its index after a migration.
+
+  - name: blog-workers
+    interval: 30s
+    rules:
+      - alert: BlogEmailQueueBackup
+        # The in-process EmailHelper queue. Anything > 100 sustained means
+        # the SMTP relay is rejecting / slow and verification mail is
+        # backing up.
+        expr: blog_email_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbound email queue depth > 100
+          description: |
+            Investigate mailcow / Postfix relay health. Users trying to
+            register or reset passwords are currently waiting longer than
+            they should for verification mail.
+
+      - alert: BlogHighInFlight
+        # If many requests pile up in-flight, the event loop is saturated.
+        # Drogon's default worker count is ~CPU; > 100 concurrent means we
+        # are either being slow-DoSed or have an upstream pinning workers.
+        expr: blog_http_requests_in_flight > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: In-flight HTTP requests > 100
+          description: |
+            Check for slow downstream calls (DB, SMTP, libvips on huge
+            uploads) or an attacker tying up workers with slowloris-style
+            traffic.
+
+  - name: blog-resources
+    interval: 1m
+    rules:
+      - alert: BlogMemoryGrowth
+        # 1.5 GiB on this VPS = we are leaking something. Normal steady
+        # state is ~80–150 MiB.
+        expr: blog_process_resident_memory_bytes > 1.5e9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Blog RSS above 1.5 GiB for 15 minutes
+          description: |
+            Suspect an upload pipeline leak (libvips images, message
+            attachments) or a slow leak from the request handlers. Dump
+            with `gcore $(pidof blog)` and inspect.
