@@ -310,11 +310,50 @@ Request IDs are generated on entry (or honoured if the client supplied an `X-Req
 
 By default `/metrics` is reachable only from the loopback interface; set `METRICS_TOKEN=<secret>` to require `Authorization: Bearer <secret>` instead, which is what production deployments behind nginx should use.
 
-## Performance notes
+## Benchmarks
 
-- **Read feed (`GET /posts`)** — one round-trip via `execSqlAsync`, no per-row author lookup. Drogon's connection pool is sized at 16 for default workloads.
-- **Register (`POST /auth/register`)** — ~135 ms median; dominated by the deliberate Argon2id cost (`OPSLIMIT_INTERACTIVE`). SMTP latency is removed from the response path by the worker thread.
-- **Login (`POST /auth/login`)** — ~120 ms median, same Argon2id cost (`crypto_pwhash_str_verify`).
+Reproducible load-test harness lives in [`bench/`](bench/) (k6 + a small Python seeder). The numbers below come from a 20 s, 30-VU run against the production binary on the same VPS that serves [`blog.micutu.com`](https://blog.micutu.com).
+
+**Host:** Intel "Haswell" 12 vCPU · 48 GB RAM · Linux 6.14 · PostgreSQL 17 on the same node. Loopback connection; Cloudflare / nginx / TLS termination are out of the loop for these numbers.
+
+### Read-side throughput
+
+| Scenario                              | RPS  | p50    | p95    | p99    | errors |
+|---------------------------------------|-----:|-------:|-------:|-------:|-------:|
+| GET `/posts/{id}`                     | 5915 | 3.0 ms | 10.8 ms| 23.2 ms| 0.00 % |
+| GET `/auth/me` (warm session)         | 5443 | 3.4 ms | 13.6 ms| 27.6 ms| 0.00 % |
+| GET `/posts/search?q=…` (FTS + ts_rank)| 4406 | 4.7 ms | 15.1 ms| 27.5 ms| 0.00 % |
+| GET `/posts` (feed, JOIN authors)     | 3469 | 5.5 ms | 19.7 ms| 40.8 ms| 0.00 % |
+
+A few takeaways:
+
+- The **single-query feed** sustains ~3.5 k req/s with p95 under 20 ms. Before the JOIN refactor this endpoint was N+1 — every post triggered an extra `findByPrimaryKey` against `users`, which would have multiplied work per request by the author cardinality.
+- **Full-text search** runs faster than the feed at p50 (4.7 ms vs 5.5 ms) thanks to the GIN index on `posts.search`; `ts_headline` shows up in the tail but stays under 30 ms at p99.
+- **`/auth/me` warm** has almost no DB cost — it's a single primary-key lookup and the response is a few hundred bytes — so it's mostly a measure of Drogon's HTTP path itself.
+
+### Argon2id-bound endpoints (out of the matrix on purpose)
+
+Login and register are intentionally slow — they spend ~120 ms running Argon2id under `OPSLIMIT_INTERACTIVE` (m=64 MiB, t=2) — and they're rate-limited (5 burst / min on `/auth/login`, 3 burst / 10 min on `/auth/register`), so concurrent load testing them isn't meaningful. Single-shot wall-clock samples on this host:
+
+| Endpoint            | n  | median   | p95      |
+|---------------------|---:|---------:|---------:|
+| `POST /auth/login`  | 10 | 141 ms   | 163 ms   |
+| `POST /auth/register`| 3 | 139 ms   | 141 ms   |
+
+The cost is the security feature; the response time is independent of SMTP because the email worker is on its own thread (see [Real-time messages] for the same pattern applied to chat fan-out).
+
+### Reproducing
+
+```bash
+# Disable rate limiting in the running service first, otherwise the
+# seed phase will trip /auth/register's per-IP budget.
+echo BLOG_DISABLE_RATE_LIMIT=1 >> .env
+sudo systemctl restart drogon-blog
+
+cd bench
+VUS=30 DURATION=20s ./run.sh
+# results land in bench/results/<UTC timestamp>/summary.md
+```
 
 ## Deployment
 
