@@ -257,6 +257,26 @@ cmake --build build --target blog_test
 
 Integration tests use Drogon's `drogon-test` harness, spawn the app on a loopback port, and hit it with the framework's HTTP client. Tests target a real PostgreSQL database (`blog_test_db`, see `test/setup.sql`) rather than mocks, so SQL behaviour and trigger logic are exercised end-to-end.
 
+## Real-time messages (WebSocket)
+
+The private-message endpoints have a live counterpart at `ws://<host>/ws/messages` (or `wss://` in production). The handshake is gated by the same `JSESSIONID` cookie as the REST endpoints — anonymous clients are closed with code `1008` and the reason `"auth required"`.
+
+```
+       browser ──── HTTP POST /messages ────►  Drogon
+          ▲                                     │
+          │                                     │ INSERT
+          │                                     ▼
+          │                                  Postgres
+          │
+          └──── ws://…/ws/messages ◄───── MessageHub.pushNewMessage(receiver, sender, msg)
+```
+
+The hub is an in-process `unordered_map<user_id, set<WebSocketConnectionPtr>>` guarded by a mutex. `MessageController::sendMessage` fans the freshly-persisted row out to:
+- every open socket belonging to the receiver, and
+- every open socket belonging to the sender (so additional tabs / devices see the message without polling).
+
+The frontend store (`stores/messages.ts`) auto-connects on login, reconnects with exponential backoff (1 s → 30 s cap), and keeps a per-peer conversation map plus an aggregate unread counter shown as a navbar badge. The number of live subscribers is exposed in Prometheus metrics as `blog_ws_connections`.
+
 ## Observability
 
 | Endpoint   | Purpose                                                                    |

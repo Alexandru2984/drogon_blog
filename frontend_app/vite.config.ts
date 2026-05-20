@@ -34,6 +34,8 @@ export default defineConfig({
       '/comments': 'http://127.0.0.1:8092',
       '/messages': 'http://127.0.0.1:8092',
       '/uploads':  'http://127.0.0.1:8092',
+      // WebSocket: needs ws:true so Vite proxies the Upgrade handshake.
+      '/ws':       { target: 'ws://127.0.0.1:8092', ws: true },
     },
   },
 })

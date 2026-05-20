@@ -1,4 +1,5 @@
 #include "MessageController.h"
+#include "MessageWebSocket.h"
 #include "../models/Messages.h"
 #include "../models/Users.h"
 #include <drogon/orm/Mapper.h>
@@ -248,11 +249,22 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
     try {
         mapper.insert(newMessage);
 
+        Json::Value msgJson;
+        msgJson["id"]          = newMessage.getValueOfId();
+        msgJson["sender_id"]   = newMessage.getValueOfSenderId();
+        msgJson["receiver_id"] = newMessage.getValueOfReceiverId();
+        msgJson["content"]     = newMessage.getValueOfContent();
+        msgJson["is_read"]     = newMessage.getValueOfIsRead();
+        msgJson["created_at"]  = newMessage.getValueOfCreatedAt().toDbStringLocal();
+
+        // Push the freshly persisted message to any open WebSocket fan-outs
+        // for both peers. Fire-and-forget; failures here don't undo the DB
+        // insert and the REST response still confirms success.
+        MessageWebSocket::pushNewMessage(receiverId, userIdOpt.value(), msgJson);
+
         Json::Value ret;
         ret["message"] = "Message sent successfully";
-        ret["msg"]["id"] = newMessage.getValueOfId();
-        ret["msg"]["content"] = newMessage.getValueOfContent();
-        ret["msg"]["created_at"] = newMessage.getValueOfCreatedAt().toDbStringLocal();
+        ret["msg"]     = msgJson;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k201Created);

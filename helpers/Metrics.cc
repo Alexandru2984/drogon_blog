@@ -1,5 +1,6 @@
 #include "Metrics.h"
 #include "EmailHelper.h"
+#include "../controllers/MessageWebSocket.h"
 
 #include <algorithm>
 #include <array>
@@ -155,6 +156,10 @@ std::string renderPrometheus()
     out << "# HELP blog_email_queue_depth Outstanding entries in the email worker queue.\n"
         << "# TYPE blog_email_queue_depth gauge\n"
         << "blog_email_queue_depth " << EmailHelper::queueDepth() << '\n';
+
+    out << "# HELP blog_ws_connections Open WebSocket connections (live message subscribers).\n"
+        << "# TYPE blog_ws_connections gauge\n"
+        << "blog_ws_connections " << MessageWebSocket::connectionCount() << '\n';
 
     out << "# HELP blog_process_resident_memory_bytes Resident memory of the process.\n"
         << "# TYPE blog_process_resident_memory_bytes gauge\n"
