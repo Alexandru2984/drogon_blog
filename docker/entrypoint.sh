@@ -19,9 +19,13 @@ until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -
     sleep 1
 done
 
-echo "Applying schema..."
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-    -v ON_ERROR_STOP=1 -f /app/schema.sql
+echo "Applying migrations..."
+# Forward-only migrations tracked via /app/migrations/applied_migrations.
+# Each file commits together with its bookkeeping row; rerunning the
+# entrypoint on an already-current DB is a cheap no-op.
+DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" \
+DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
+    sh /app/migrations/apply.sh
 
 echo "Starting Drogon blog..."
 exec /app/blog

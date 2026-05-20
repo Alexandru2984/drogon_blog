@@ -27,7 +27,7 @@ COPY controllers/ ./controllers/
 COPY models/      ./models/
 COPY helpers/     ./helpers/
 COPY test/        ./test/
-COPY schema.sql   ./schema.sql
+COPY migrations/  ./migrations/
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)" --target blog
@@ -52,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --from=backend  /src/build/blog /app/blog
-COPY --from=backend  /src/schema.sql /app/schema.sql
+COPY --from=backend  /src/migrations /app/migrations
 COPY --from=backend  /src/config.json /app/config.json
 COPY --from=frontend /app/../public/ /app/public/
 COPY docker/entrypoint.sh /app/entrypoint.sh

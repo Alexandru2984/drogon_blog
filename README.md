@@ -94,8 +94,11 @@ CREATE DATABASE blog_db OWNER blog_user;
 GRANT ALL ON SCHEMA public TO blog_user;
 SQL
 
-PGPASSWORD='change-me' psql -h 127.0.0.1 -U blog_user -d blog_db -f schema.sql
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=blog_db DB_USER=blog_user \
+DB_PASSWORD='change-me' ./migrations/apply.sh
 ```
+
+Schema changes are versioned forward-only under [`migrations/`](migrations/) and tracked in an `applied_migrations` table inside the database. See [`migrations/README.md`](migrations/README.md) for the full workflow.
 
 ### Environment
 
@@ -142,7 +145,7 @@ npm run build        # outputs to ../public/
 drogon_blog/
 ├── main.cc                       # entry point; loads .env, expands ${VAR}, starts EmailHelper
 ├── config.json                   # Drogon config (port, DB, sessions); secrets via ${ENV}
-├── schema.sql                    # PostgreSQL DDL + updated_at trigger function
+├── migrations/                   # Versioned forward-only SQL + apply.sh runner
 ├── CMakeLists.txt
 │
 ├── controllers/                  # HTTP routes

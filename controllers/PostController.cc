@@ -2,6 +2,7 @@
 #include "../models/Posts.h"
 #include "../models/Users.h"
 #include "../models/Likes.h"
+#include "../helpers/AuditLog.h"
 #include "../helpers/Markdown.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
@@ -440,6 +441,13 @@ void PostController::deletePost(const HttpRequestPtr &req,
         }
 
         mapper.deleteByPrimaryKey(postId);
+
+        Json::Value meta;
+        meta["title"] = post.getValueOfTitle();
+        audit_log::record(req, {"post.delete", userIdOpt,
+                                std::string{"post"},
+                                static_cast<std::int64_t>(postId),
+                                std::move(meta)});
 
         Json::Value ret;
         ret["message"] = "Post deleted successfully";

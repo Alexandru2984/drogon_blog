@@ -51,13 +51,15 @@ jobs:
       - name: Run integration tests
         # When the job runs inside a container, services are reachable by their
         # service name on the bridge network, not via the runner's loopback.
+        # test_main.cc drops `public` and re-runs migrations/apply.sh before
+        # every test pass — same code path production uses.
         env:
-          TEST_DB_HOST:     postgres
-          TEST_DB_PORT:     5432
-          TEST_DB_USER:     blog_user
-          TEST_DB_PASSWORD: blog_ci_password
-          TEST_DB_NAME:     blog_test_db
-          TEST_SCHEMA_PATH: ${{ github.workspace }}/schema.sql
+          TEST_DB_HOST:        postgres
+          TEST_DB_PORT:        5432
+          TEST_DB_USER:        blog_user
+          TEST_DB_PASSWORD:    blog_ci_password
+          TEST_DB_NAME:        blog_test_db
+          TEST_MIGRATIONS_DIR: ${{ github.workspace }}/migrations
         run: ./build/test/blog_test
 
   frontend:

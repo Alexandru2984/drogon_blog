@@ -23,9 +23,10 @@ std::string env(const char* name, const char* fallback)
     return (v && *v) ? std::string(v) : std::string(fallback);
 }
 
-// Resets the test database to a known empty state by replaying schema.sql
-// over a freshly dropped public schema. Shelled out to psql for parity with
-// what `docker compose up` does at startup.
+// Resets the test database to a known empty state by dropping `public` and
+// then driving migrations/apply.sh against it. We exercise the same code
+// path production uses to land schema changes, so a broken migration
+// surfaces in CI before it surfaces in prod.
 bool resetDatabase()
 {
     const std::string host = env("TEST_DB_HOST",     "127.0.0.1");
@@ -33,21 +34,31 @@ bool resetDatabase()
     const std::string user = env("TEST_DB_USER",     "blog_user");
     const std::string pass = env("TEST_DB_PASSWORD", "");
     const std::string name = env("TEST_DB_NAME",     "blog_test_db");
-    const std::string schemaPath = env("TEST_SCHEMA_PATH", "../schema.sql");
+    const std::string migrations = env("TEST_MIGRATIONS_DIR", "../migrations");
 
-    std::ostringstream cmd;
-    cmd << "PGPASSWORD='" << pass << "' psql"
-        << " -h " << host
-        << " -p " << port
-        << " -U " << user
-        << " -d " << name
-        << " -v ON_ERROR_STOP=1"
-        << " -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
-           "    GRANT ALL ON SCHEMA public TO " << user << ";'"
-        << " -f " << schemaPath
-        << " >/dev/null";
+    std::ostringstream drop;
+    drop << "PGPASSWORD='" << pass << "' psql"
+         << " -h " << host
+         << " -p " << port
+         << " -U " << user
+         << " -d " << name
+         << " -v ON_ERROR_STOP=1"
+         << " -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+            "    GRANT ALL ON SCHEMA public TO " << user << ";'"
+         << " >/dev/null";
+    if (std::system(drop.str().c_str()) != 0) return false;
 
-    return std::system(cmd.str().c_str()) == 0;
+    // Drive the production migration runner. Failure here would mean a
+    // newly-added migration file is broken — same outcome as a broken
+    // schema.sql used to give us.
+    std::ostringstream mig;
+    mig << "DB_HOST='"     << host << "' "
+        << "DB_PORT='"     << port << "' "
+        << "DB_NAME='"     << name << "' "
+        << "DB_USER='"     << user << "' "
+        << "DB_PASSWORD='" << pass << "' "
+        << "sh " << migrations << "/apply.sh >/dev/null";
+    return std::system(mig.str().c_str()) == 0;
 }
 
 Json::Value buildConfig()

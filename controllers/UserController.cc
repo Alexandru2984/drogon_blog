@@ -1,5 +1,6 @@
 #include "UserController.h"
 #include "../models/Users.h"
+#include "../helpers/AuditLog.h"
 #include "../helpers/EmailHelper.h"
 #include "../helpers/ImageProcessor.h"
 #include "../helpers/Security.h"
@@ -95,6 +96,15 @@ void UserController::updateProfile(const HttpRequestPtr &req,
                     callback(resp);
                     return;
                 }
+                Json::Value meta;
+                meta["old_email"] = user.getValueOfEmail();
+                meta["new_email"] = newEmail;
+                audit_log::record(req, {"profile.email.change",
+                                        userIdOpt,
+                                        std::string{"user"},
+                                        static_cast<std::int64_t>(userIdOpt.value()),
+                                        std::move(meta)});
+
                 user.setEmail(newEmail);
                 user.setEmailVerified(0);
                 const std::string verificationToken = EmailHelper::generateToken();

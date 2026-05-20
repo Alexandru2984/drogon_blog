@@ -1,6 +1,7 @@
 #include "AuthController.h"
 #include "../models/Users.h"
 #include "../models/PasswordResetTokens.h"
+#include "../helpers/AuditLog.h"
 #include "../helpers/EmailHelper.h"
 #include "../helpers/Security.h"
 
@@ -154,6 +155,9 @@ void AuthController::registerUser(const HttpRequestPtr &req,
 
     try {
         mapper.insert(newUser);
+        audit_log::record(req, {"register",
+                                static_cast<int>(newUser.getValueOfId()),
+                                std::nullopt, std::nullopt, Json::objectValue});
         EmailHelper::sendVerificationEmail(email, username, verificationToken);
         callback(successResp());
     } catch (const DrogonDbException &e) {
@@ -216,6 +220,14 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         const bool valid = verifyPassword(hash, password) && exists;
 
         if (!valid) {
+            // Audit failed attempt. metadata.username is intentionally the
+            // *attempted* username, which may be made up — we want to spot
+            // patterns of probing, not just hits on real accounts.
+            Json::Value meta;
+            meta["username"]      = username;
+            meta["account_found"] = exists;
+            audit_log::record(req, {"login.fail", std::nullopt,
+                                    std::nullopt, std::nullopt, std::move(meta)});
             callback(jsonError(k401Unauthorized, "Invalid credentials"));
             return;
         }
@@ -229,6 +241,10 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         session->changeSessionIdToClient();
         session->insert("user_id",  static_cast<int>(user.getValueOfId()));
         session->insert("username", user.getValueOfUsername());
+
+        audit_log::record(req, {"login.ok",
+                                static_cast<int>(user.getValueOfId()),
+                                std::nullopt, std::nullopt, Json::objectValue});
 
         Json::Value ret;
         ret["message"]          = "Login successful";
@@ -248,11 +264,16 @@ void AuthController::loginUser(const HttpRequestPtr &req,
 void AuthController::logoutUser(const HttpRequestPtr &req,
                                 std::function<void(const HttpResponsePtr &)> &&callback)
 {
+    auto session = req->session();
+    auto userIdOpt = session->getOptional<int>("user_id");
+
     // Wipe everything from the session and rotate the ID so any captured
     // cookie is useless after this call.
-    auto session = req->session();
     session->clear();
     session->changeSessionIdToClient();
+
+    audit_log::record(req, {"logout", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
 
     Json::Value ret;
     ret["message"] = "Logout successful";
@@ -322,11 +343,14 @@ void AuthController::verifyEmail(const HttpRequestPtr &req,
 
     dbClient->execSqlAsync(
         kSql,
-        [callback](const Result& r) {
+        [callback, req](const Result& r) {
             if (r.empty()) {
                 callback(jsonError(k400BadRequest, "Invalid or expired token"));
                 return;
             }
+            const int userId = r[0]["id"].as<int>();
+            audit_log::record(req, {"email.verify", userId,
+                                    std::nullopt, std::nullopt, Json::objectValue});
             Json::Value ret;
             ret["message"] = "Email verified successfully";
             callback(HttpResponse::newHttpJsonResponse(ret));
@@ -372,6 +396,9 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
 
         const auto& user = users[0];
         const auto userId = static_cast<int>(user.getValueOfId());
+
+        audit_log::record(req, {"password.reset.request", userId,
+                                std::nullopt, std::nullopt, Json::objectValue});
 
         // Invalidate any reset tokens still outstanding for this user — a fresh
         // request supersedes earlier ones to prevent stolen-mailbox replay.
@@ -435,7 +462,7 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
         "DELETE FROM password_reset_tokens "
         " WHERE token = $1 AND expires_at > NOW() "
         "RETURNING user_id",
-        [dbClient, newPassword, callback](const Result& r) {
+        [dbClient, newPassword, callback, req](const Result& r) {
             if (r.empty()) {
                 callback(jsonError(k400BadRequest, "Invalid or expired token"));
                 return;
@@ -445,7 +472,10 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
 
             dbClient->execSqlAsync(
                 "UPDATE users SET password_hash = $1 WHERE id = $2",
-                [callback](const Result&) {
+                [callback, req, userId](const Result&) {
+                    audit_log::record(req, {"password.reset", userId,
+                                            std::nullopt, std::nullopt,
+                                            Json::objectValue});
                     Json::Value ret;
                     ret["message"] = "Password reset successfully";
                     callback(HttpResponse::newHttpJsonResponse(ret));
