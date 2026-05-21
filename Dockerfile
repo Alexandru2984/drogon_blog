@@ -35,7 +35,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 3: runtime ----------
 # Match the build base (Ubuntu 22.04) so libstdc++ matches; libdrogon is
 # statically linked, so we only need the third-party shared deps.
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:26.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
