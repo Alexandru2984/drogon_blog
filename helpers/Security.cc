@@ -158,6 +158,16 @@ void registerAdvices()
         "/auth/login", "/auth/register",
         "/auth/request-reset", "/auth/reset-password",
         "/auth/verify-email", "/auth/resend-verification",
+        // Two-step login completion: the user is mid-flow and does not
+        // hold an authenticated session yet, so they cannot present a
+        // CSRF cookie/header pair. Each of these endpoints is bound to
+        // the `pending_user_id` session key planted by /auth/login,
+        // which is the actual CSRF mitigation (an off-origin attacker
+        // cannot create that pending state).
+        "/auth/login/verify-totp",
+        "/auth/login/verify-recovery",
+        "/auth/login/verify-webauthn/begin",
+        "/auth/login/verify-webauthn/finish",
     };
     (void)kCsrfExempt;  // referenced below; kept extracted for clarity
 

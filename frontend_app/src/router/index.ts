@@ -13,6 +13,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true } },
   { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },
+  { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue') },
+  { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true } },
   { path: '/:catchAll(.*)',     redirect: '/' },
 ]
 

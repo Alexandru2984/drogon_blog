@@ -26,7 +26,14 @@ async function submit() {
   error.value = ''
   loading.value = true
   try {
-    await auth.login(username.value, password.value)
+    const outcome = await auth.login(username.value, password.value)
+    if (outcome === 'pending_2fa') {
+      // The backend gated us on a second factor — hop to the verification
+      // view, preserving the original `next` redirect.
+      const next = safeNext(route.query.next)
+      router.push({ path: '/login/2fa', query: { next } })
+      return
+    }
     toasts.push(`Welcome back, ${auth.user!.username}`, 'ok')
     router.push(safeNext(route.query.next))
   } catch (e: any) {

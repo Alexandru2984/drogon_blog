@@ -70,6 +70,7 @@ watch(isAuthed, (now, prev) => {
           <router-link :to="{ name: 'profile', params: { id: user!.id } }" class="username">
             {{ user!.username }}
           </router-link>
+          <router-link to="/account/security" class="ghost-link" title="Two-factor authentication">2FA</router-link>
           <button class="ghost" @click="doLogout">Logout</button>
         </template>
         <template v-else>

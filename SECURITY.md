@@ -110,12 +110,55 @@ Each runs in its own job (`static-analysis`, `frontend` extended with `npm run l
 
 | Threat                  | Asset / Surface              | Primary control                                                                |
 |-------------------------|------------------------------|--------------------------------------------------------------------------------|
-| **S**poofing            | User identity at login       | Argon2id verify with dummy-hash branch; session ID rotated on login; SameSite=Lax, Secure, HttpOnly cookies; XFF / `X-Real-IP` trusted only behind the proxy chain. |
+| **S**poofing            | User identity at login       | Argon2id verify with dummy-hash branch; session ID rotated on login; SameSite=Lax, Secure, HttpOnly cookies; XFF / `X-Real-IP` trusted only behind the proxy chain. Optional 2FA (TOTP / WebAuthn / recovery codes) gates the session even after a correct password. |
 | **T**ampering           | Request payloads             | All mutations require a matching CSRF double-submit; `frame-ancestors 'none'` denies clickjacking framing. |
 | **R**epudiation         | Account actions              | Structured JSON access log with `req_id` per request + journald aggregation; covered for login / password reset / verify in code paths.       |
 | **I**nformation disclosure | Auth flows + DB           | Email-collision masking on `/auth/register`; `/auth/login` returns identical body+timing for "no such user" vs "wrong pw"; `pg_notify` payloads stay on-host (channel is internal). |
 | **D**enial of service   | Auth + uploads + DB          | Per-IP + per-username rate limiting; libvips decompression-bomb cap (≤ 6000×6000); body size limit (1 MB); DB has GIN-indexed FTS so search is sublinear. |
 | **E**levation of privilege | Mutation endpoints        | Per-row owner check before update / delete on posts / comments / messages; profile email change requires `current_password`; reset token consumed atomically (`DELETE … RETURNING`). |
+
+## Two-factor authentication
+
+Account-takeover protection beyond the password. Three orthogonal factors,
+any of which the user can enrol — they all complete the same two-step
+login (`/auth/login` returns `requires_2fa: true`, then one of the
+`/auth/login/verify-*` endpoints completes the session).
+
+| Factor                | Implementation                                                                                                          |
+|-----------------------|-------------------------------------------------------------------------------------------------------------------------|
+| TOTP (RFC 6238)       | HMAC-SHA1, 30-second step, 6-digit codes, ±1 step verification window. Implemented in `helpers/Totp.cc` directly on top of OpenSSL HMAC + base32; no external library. Verified against the RFC 6238 Appendix B vectors in `test/test_2fa.cc`. Constant-time code comparison via `sodium_memcmp`. |
+| WebAuthn passkeys     | FIDO2 with `none` attestation, supports COSE algorithms ES256 (-7) and EdDSA (-8) — together that covers ~all platform authenticators and security keys in 2026. `helpers/WebAuthn.cc` implements the minimal CBOR + COSE + signature paths against OpenSSL 3 `OSSL_PARAM` APIs. Sign-count regression is a hard reject (cloned-authenticator detection). |
+| Recovery codes        | Ten single-use codes per batch, generated from a Crockford-style alphabet that skips visually ambiguous characters (no 0/O, 1/I/L). Stored as Argon2id hashes — same parameters as account passwords. A consumed code stays in the table with `used_at` set so forensics can answer "which code unlocked this account."  |
+
+**Two-step gating.** A correct password alone never sets `session.user_id`
+when 2FA is enrolled; instead the server plants `session.pending_user_id`,
+returns `requires_2fa: true`, and waits for a matching factor on
+`/auth/login/verify-totp`, `/auth/login/verify-recovery`, or the
+`/auth/login/verify-webauthn/{begin,finish}` pair. The pending state is
+attached to the session ID (which was just rotated for fixation defense
+by the password step), so an off-origin attacker cannot bootstrap one.
+
+**Disable requires re-proof.** `/auth/2fa/disable` demands both the
+current password and a fresh TOTP code so a hijacked session by itself
+cannot turn 2FA off.
+
+**Per-account rate limit on verify endpoints.** Each `/auth/login/verify-*`
+takes a 5-burst / 5-per-minute bucket keyed on the pending user ID,
+independent of the per-IP bucket on `/auth/login`. After 5 fails the
+user has to wait — defeats brute force on the 6-digit code space.
+
+**Recovery code consumption is atomic.** A `UPDATE … SET used_at = NOW()
+WHERE id = $1` on a row that already had `used_at IS NULL` filtered
+during selection serialises any concurrent attempts; two parallel
+requests with the same code cannot both succeed.
+
+**Audit hooks** for 2FA events: `2fa.totp.setup`, `2fa.totp.enable`,
+`2fa.totp.confirm.fail`, `2fa.disable`, `2fa.recovery.regenerate`,
+`2fa.webauthn.add`, `2fa.webauthn.remove`, `2fa.verify.totp.fail`,
+`2fa.verify.recovery.used`, `2fa.verify.recovery.fail`,
+`2fa.verify.webauthn.ok`, `2fa.verify.webauthn.fail`, and `login.password_ok`
+for the in-between state where the password was correct but 2FA still
+needs to complete.
 
 ## Reporting a vulnerability
 

@@ -1,0 +1,686 @@
+// 2FA management endpoints + two-step login completion. Lives in its own
+// translation unit to keep AuthController.cc readable; same class, just
+// other handlers.
+
+#include "AuthController.h"
+
+#include "../helpers/AuditLog.h"
+#include "../helpers/RecoveryCodes.h"
+#include "../helpers/Security.h"
+#include "../helpers/Totp.h"
+#include "../helpers/WebAuthn.h"
+#include "../models/Users.h"
+
+#include <drogon/orm/Exception.h>
+#include <drogon/orm/Mapper.h>
+#include <trantor/utils/Logger.h>
+
+#include <cstdlib>
+#include <optional>
+#include <string>
+#include <vector>
+
+using namespace drogon;
+using namespace drogon::orm;
+
+namespace {
+
+drogon::HttpResponsePtr jsonError(drogon::HttpStatusCode code,
+                                  const std::string&    message)
+{
+    Json::Value body;
+    body["error"] = message;
+    auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+    resp->setStatusCode(code);
+    return resp;
+}
+
+std::optional<int> currentUserId(const HttpRequestPtr& req)
+{
+    return req->session()->getOptional<int>("user_id");
+}
+
+std::optional<int> pendingUserId(const HttpRequestPtr& req)
+{
+    return req->session()->getOptional<int>("pending_user_id");
+}
+
+std::string envOr(const char* name, const char* fallback)
+{
+    const char* v = std::getenv(name);
+    return (v && *v) ? std::string(v) : std::string(fallback);
+}
+
+std::string siteOrigin()
+{
+    return envOr("BLOG_SITE_ORIGIN", "https://blog.micutu.com");
+}
+
+// RP ID is the registrable domain (no scheme, no port). Defaults to a
+// stripped version of BLOG_SITE_ORIGIN; override with BLOG_WEBAUTHN_RP_ID
+// when running behind a different domain in dev / staging.
+std::string rpId()
+{
+    auto raw = envOr("BLOG_WEBAUTHN_RP_ID", "");
+    if (!raw.empty()) return raw;
+    std::string o = siteOrigin();
+    const auto schemeEnd = o.find("://");
+    if (schemeEnd != std::string::npos) o.erase(0, schemeEnd + 3);
+    const auto slash = o.find('/');
+    if (slash != std::string::npos)     o.erase(slash);
+    const auto colon = o.find(':');
+    if (colon != std::string::npos)     o.erase(colon);
+    return o;
+}
+
+std::string rpName()
+{
+    return envOr("BLOG_SITE_NAME", "Blog");
+}
+
+bool verifyCurrentPassword(int userId, const std::string& candidate)
+{
+    auto db = drogon::app().getDbClient();
+    auto r  = db->execSqlSync(
+        "SELECT password_hash FROM users WHERE id = $1", userId);
+    if (r.empty()) return false;
+    return security::verifyPassword(r[0]["password_hash"].as<std::string>(), candidate);
+}
+
+// Best-effort delete and recreate of the recovery codes batch. Called when
+// 2FA is enrolled the first time and on user-initiated regenerate.
+std::vector<std::string> issueFreshRecoveryCodes(int userId)
+{
+    auto db = drogon::app().getDbClient();
+    db->execSqlSync("DELETE FROM user_recovery_codes WHERE user_id = $1", userId);
+    auto plaintext = recovery_codes::generateBatch();
+    for (const auto& code : plaintext) {
+        db->execSqlSync(
+            "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)",
+            userId, recovery_codes::hashOne(code));
+    }
+    return plaintext;
+}
+
+void completeTwoStepLogin(const HttpRequestPtr& req,
+                          std::function<void(const HttpResponsePtr&)>& callback,
+                          int userId)
+{
+    auto db   = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT username, email FROM users WHERE id = $1", userId);
+    if (rows.empty()) {
+        callback(jsonError(k401Unauthorized, "Account not found"));
+        return;
+    }
+
+    auto session = req->session();
+    session->erase("pending_user_id");
+    session->erase("pending_webauthn_challenge");
+    session->insert("user_id",  userId);
+    session->insert("username", rows[0]["username"].as<std::string>());
+
+    Json::Value ret;
+    ret["message"]          = "Login successful";
+    ret["user"]["id"]       = userId;
+    ret["user"]["username"] = rows[0]["username"].as<std::string>();
+    ret["user"]["email"]    = rows[0]["email"].as<std::string>();
+
+    auto resp = HttpResponse::newHttpJsonResponse(ret);
+    // The login handler issued the CSRF cookie earlier in the password
+    // step; we don't reissue here so the frontend's first authenticated
+    // request finds the same token. The session already exists.
+    callback(resp);
+}
+
+} // namespace
+
+// =========================================================================
+// /auth/2fa/status — what's enrolled for the current user
+// =========================================================================
+void AuthController::status2fa(const HttpRequestPtr& req,
+                               std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+
+    auto db = drogon::app().getDbClient();
+    bool totpEnabled = false;
+    {
+        auto r = db->execSqlSync(
+            "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
+        if (!r.empty()) totpEnabled = r[0]["enabled"].as<bool>();
+    }
+    int passkeys = db->execSqlSync(
+        "SELECT count(*) AS n FROM user_webauthn_credentials WHERE user_id = $1",
+        *userIdOpt)[0]["n"].as<int>();
+    int recoveryLeft = db->execSqlSync(
+        "SELECT count(*) AS n FROM user_recovery_codes "
+        "WHERE user_id = $1 AND used_at IS NULL",
+        *userIdOpt)[0]["n"].as<int>();
+
+    Json::Value ret;
+    ret["totp_enabled"]       = totpEnabled;
+    ret["passkeys_count"]     = passkeys;
+    ret["recovery_codes_left"]= recoveryLeft;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/totp/setup — generate (or re-use unconfirmed) TOTP secret
+// =========================================================================
+void AuthController::setupTotp(const HttpRequestPtr& req,
+                               std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
+    if (!rows.empty() && rows[0]["enabled"].as<bool>()) {
+        callback(jsonError(k409Conflict, "TOTP already enabled"));
+        return;
+    }
+
+    // Fresh secret on every setup — re-running the flow rotates the seed
+    // so an abandoned half-enrolment can't be reactivated by a stranger.
+    const std::string secret = totp::generateSecret();
+    db->execSqlSync(
+        "INSERT INTO user_totp_secrets (user_id, secret_b32, enabled) "
+        "VALUES ($1, $2, FALSE) "
+        "ON CONFLICT (user_id) DO UPDATE "
+        "  SET secret_b32 = EXCLUDED.secret_b32, enabled = FALSE, confirmed_at = NULL",
+        *userIdOpt, secret);
+
+    const auto username =
+        db->execSqlSync("SELECT username FROM users WHERE id = $1", *userIdOpt)
+          [0]["username"].as<std::string>();
+
+    Json::Value ret;
+    ret["secret"]       = secret;
+    ret["otpauth_url"]  = totp::otpAuthUrl(secret, username, rpName());
+    audit_log::record(req, {"2fa.totp.setup", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/totp/confirm — finalise enrolment with a valid 6-digit code,
+// issues 10 recovery codes on success.
+// =========================================================================
+void AuthController::confirmTotp(const HttpRequestPtr& req,
+                                 std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string code = (*json)["code"].asString();
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT secret_b32, enabled FROM user_totp_secrets WHERE user_id = $1",
+        *userIdOpt);
+    if (rows.empty()) {
+        callback(jsonError(k400BadRequest, "No pending TOTP setup")); return;
+    }
+    if (rows[0]["enabled"].as<bool>()) {
+        callback(jsonError(k409Conflict, "TOTP already enabled")); return;
+    }
+    const auto secret = rows[0]["secret_b32"].as<std::string>();
+    if (!totp::verify(secret, code)) {
+        audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
+                                std::nullopt, std::nullopt, Json::objectValue});
+        callback(jsonError(k400BadRequest, "Invalid code")); return;
+    }
+
+    db->execSqlSync(
+        "UPDATE user_totp_secrets SET enabled = TRUE, confirmed_at = NOW() "
+        "WHERE user_id = $1", *userIdOpt);
+    auto codes = issueFreshRecoveryCodes(*userIdOpt);
+
+    audit_log::record(req, {"2fa.totp.enable", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+
+    Json::Value ret;
+    ret["enabled"] = true;
+    Json::Value arr(Json::arrayValue);
+    for (auto& c : codes) arr.append(c);
+    ret["recovery_codes"] = arr;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/disable — remove TOTP + recovery codes + all passkeys. Requires
+// password AND a fresh TOTP / recovery / passkey factor to prove the
+// caller is genuinely the account owner.
+// =========================================================================
+void AuthController::disable2fa(const HttpRequestPtr& req,
+                                std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+
+    const std::string password = (*json)["password"].asString();
+    if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
+        callback(jsonError(k403Forbidden, "Password check failed"));
+        return;
+    }
+
+    // Either a current TOTP code or a recovery code is required so a
+    // hijacked session alone cannot rip 2FA back off.
+    auto db = drogon::app().getDbClient();
+    bool factorOk = false;
+    if (json->isMember("totp_code")) {
+        const std::string code = (*json)["totp_code"].asString();
+        auto r = db->execSqlSync(
+            "SELECT secret_b32 FROM user_totp_secrets WHERE user_id = $1 AND enabled = TRUE",
+            *userIdOpt);
+        if (!r.empty() && totp::verify(r[0]["secret_b32"].as<std::string>(), code)) {
+            factorOk = true;
+        }
+    }
+    if (!factorOk) {
+        callback(jsonError(k403Forbidden, "2FA factor required"));
+        return;
+    }
+
+    db->execSqlSync("DELETE FROM user_totp_secrets        WHERE user_id = $1", *userIdOpt);
+    db->execSqlSync("DELETE FROM user_recovery_codes      WHERE user_id = $1", *userIdOpt);
+    db->execSqlSync("DELETE FROM user_webauthn_credentials WHERE user_id = $1", *userIdOpt);
+
+    audit_log::record(req, {"2fa.disable", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+
+    Json::Value ret;
+    ret["enabled"] = false;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/recovery-codes/regenerate — issues a fresh batch, invalidates
+// the previous one. Requires password.
+// =========================================================================
+void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
+                                             std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string password = (*json)["password"].asString();
+    if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
+        callback(jsonError(k403Forbidden, "Password check failed"));
+        return;
+    }
+    auto codes = issueFreshRecoveryCodes(*userIdOpt);
+    audit_log::record(req, {"2fa.recovery.regenerate", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+    Json::Value ret;
+    Json::Value arr(Json::arrayValue);
+    for (auto& c : codes) arr.append(c);
+    ret["recovery_codes"] = arr;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/webauthn/register/begin — fresh challenge for navigator.credentials.create
+// =========================================================================
+void AuthController::webauthnRegisterBegin(const HttpRequestPtr& req,
+                                           std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT username FROM users WHERE id = $1", *userIdOpt);
+    if (rows.empty()) { callback(jsonError(k404NotFound, "User not found")); return; }
+    const auto username = rows[0]["username"].as<std::string>();
+
+    const std::string challenge = webauthn::makeChallenge();
+    req->session()->insert("pending_webauthn_register_challenge", challenge);
+
+    Json::Value ret;
+    ret["challenge"]       = challenge;
+    ret["rp"]["id"]        = rpId();
+    ret["rp"]["name"]      = rpName();
+    ret["user"]["id"]      = webauthn::base64UrlEncode(
+        reinterpret_cast<const unsigned char*>(&*userIdOpt), sizeof(int));
+    ret["user"]["name"]    = username;
+    ret["user"]["displayName"] = username;
+    Json::Value algs(Json::arrayValue);
+    Json::Value a1; a1["type"] = "public-key"; a1["alg"] = -7; algs.append(a1);
+    Json::Value a2; a2["type"] = "public-key"; a2["alg"] = -8; algs.append(a2);
+    ret["pubKeyCredParams"] = algs;
+    ret["attestation"]      = "none";
+
+    // List existing credentials so the browser can refuse to enrol the
+    // same authenticator twice on this account.
+    auto existing = db->execSqlSync(
+        "SELECT credential_id FROM user_webauthn_credentials WHERE user_id = $1",
+        *userIdOpt);
+    Json::Value exclude(Json::arrayValue);
+    for (const auto& row : existing) {
+        Json::Value e;
+        e["type"] = "public-key";
+        e["id"]   = row["credential_id"].as<std::string>();
+        exclude.append(e);
+    }
+    ret["excludeCredentials"] = exclude;
+
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/webauthn/register/finish — store the new credential after
+// verifying the attestation against the challenge we just minted.
+// =========================================================================
+void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
+                                            std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+
+    auto chalOpt = req->session()->getOptional<std::string>("pending_webauthn_register_challenge");
+    if (!chalOpt) { callback(jsonError(k400BadRequest, "No pending challenge")); return; }
+
+    const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
+    const std::string attestationObj = (*json)["attestationObject"].asString();
+    const std::string nickname       = (*json).get("nickname", "").asString();
+
+    std::string err;
+    auto res = webauthn::finishRegistration(
+        clientDataJSON, attestationObj, *chalOpt, rpId(), siteOrigin(), err);
+    req->session()->erase("pending_webauthn_register_challenge");
+    if (!res) {
+        LOG_INFO << "webauthn register rejected: " << err;
+        callback(jsonError(k400BadRequest, "Registration failed: " + err));
+        return;
+    }
+
+    auto db = drogon::app().getDbClient();
+
+    // Issue recovery codes the first time the user enrols any 2FA factor.
+    auto existingCodes = db->execSqlSync(
+        "SELECT count(*) AS n FROM user_recovery_codes WHERE user_id = $1",
+        *userIdOpt)[0]["n"].as<int>();
+    std::vector<std::string> freshCodes;
+    if (existingCodes == 0) freshCodes = issueFreshRecoveryCodes(*userIdOpt);
+
+    db->execSqlSync(
+        "INSERT INTO user_webauthn_credentials "
+        "(user_id, credential_id, public_key, sign_count, nickname) "
+        "VALUES ($1, $2, $3, $4, $5)",
+        *userIdOpt, res->credential_id_b64u,
+        std::string(res->cose_public_key.begin(), res->cose_public_key.end()),
+        static_cast<std::int64_t>(res->sign_count),
+        nickname);
+
+    audit_log::record(req, {"2fa.webauthn.add", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+
+    Json::Value ret;
+    ret["credential_id"] = res->credential_id_b64u;
+    if (!freshCodes.empty()) {
+        Json::Value arr(Json::arrayValue);
+        for (auto& c : freshCodes) arr.append(c);
+        ret["recovery_codes"] = arr;
+    }
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/webauthn/list — current passkeys (id, nickname, dates)
+// =========================================================================
+void AuthController::webauthnList(const HttpRequestPtr& req,
+                                  std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT id, nickname, created_at, last_used_at "
+        "FROM user_webauthn_credentials WHERE user_id = $1 "
+        "ORDER BY created_at",
+        *userIdOpt);
+    Json::Value list(Json::arrayValue);
+    for (const auto& row : rows) {
+        Json::Value e;
+        e["id"]         = row["id"].as<std::int64_t>();
+        e["nickname"]   = row["nickname"].as<std::string>();
+        e["created_at"] = row["created_at"].as<std::string>();
+        e["last_used_at"] = row["last_used_at"].isNull()
+                            ? Json::Value(Json::nullValue)
+                            : Json::Value(row["last_used_at"].as<std::string>());
+        list.append(e);
+    }
+    Json::Value ret;
+    ret["credentials"] = list;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/2fa/webauthn/remove/{id} — delete one passkey by row id
+// =========================================================================
+void AuthController::webauthnRemove(const HttpRequestPtr& req,
+                                    std::function<void(const HttpResponsePtr&)>&& callback,
+                                    std::int64_t credentialId)
+{
+    auto userIdOpt = currentUserId(req);
+    if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+    auto db = drogon::app().getDbClient();
+    auto r = db->execSqlSync(
+        "DELETE FROM user_webauthn_credentials "
+        "WHERE id = $1 AND user_id = $2 RETURNING id",
+        credentialId, *userIdOpt);
+    if (r.empty()) { callback(jsonError(k404NotFound, "Passkey not found")); return; }
+
+    audit_log::record(req, {"2fa.webauthn.remove", userIdOpt,
+                            std::string{"webauthn_credential"}, credentialId,
+                            Json::objectValue});
+    Json::Value ret;
+    ret["removed"] = true;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/login/verify-totp — complete the two-step login with a TOTP code
+// =========================================================================
+void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
+                                     std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto pendingOpt = pendingUserId(req);
+    if (!pendingOpt) { callback(jsonError(k401Unauthorized, "No pending login")); return; }
+
+    // Per-pending-user rate limit; per-IP is already applied in
+    // helpers/Security.cc's SyncAdvice for the parent /auth/* prefix.
+    auto d = security::rateLimitTake("login_2fa", std::to_string(*pendingOpt),
+                                     5.0, 5.0 / 60.0);
+    if (!d.allowed) {
+        callback(jsonError(k429TooManyRequests, "Too many 2FA attempts"));
+        return;
+    }
+
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string code = (*json)["code"].asString();
+
+    auto db = drogon::app().getDbClient();
+    auto r = db->execSqlSync(
+        "SELECT secret_b32 FROM user_totp_secrets "
+        "WHERE user_id = $1 AND enabled = TRUE",
+        *pendingOpt);
+    if (r.empty() || !totp::verify(r[0]["secret_b32"].as<std::string>(), code)) {
+        audit_log::record(req, {"2fa.verify.totp.fail", pendingOpt,
+                                std::nullopt, std::nullopt, Json::objectValue});
+        callback(jsonError(k401Unauthorized, "Invalid code"));
+        return;
+    }
+
+    audit_log::record(req, {"login.ok", pendingOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+    completeTwoStepLogin(req, callback, *pendingOpt);
+}
+
+// =========================================================================
+// /auth/login/verify-recovery — single-use recovery code path
+// =========================================================================
+void AuthController::verifyLoginRecovery(const HttpRequestPtr& req,
+                                         std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto pendingOpt = pendingUserId(req);
+    if (!pendingOpt) { callback(jsonError(k401Unauthorized, "No pending login")); return; }
+
+    auto d = security::rateLimitTake("login_2fa_recov", std::to_string(*pendingOpt),
+                                     5.0, 5.0 / 60.0);
+    if (!d.allowed) {
+        callback(jsonError(k429TooManyRequests, "Too many attempts"));
+        return;
+    }
+
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string code = recovery_codes::normalize((*json)["code"].asString());
+    if (code.size() != 9) {  // "XXXX-XXXX"
+        callback(jsonError(k400BadRequest, "Invalid code format"));
+        return;
+    }
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT id, code_hash FROM user_recovery_codes "
+        "WHERE user_id = $1 AND used_at IS NULL",
+        *pendingOpt);
+    std::int64_t matchedId = -1;
+    for (const auto& r : rows) {
+        if (recovery_codes::verifyOne(r["code_hash"].as<std::string>(), code)) {
+            matchedId = r["id"].as<std::int64_t>();
+            break;
+        }
+    }
+    if (matchedId < 0) {
+        audit_log::record(req, {"2fa.verify.recovery.fail", pendingOpt,
+                                std::nullopt, std::nullopt, Json::objectValue});
+        callback(jsonError(k401Unauthorized, "Invalid recovery code"));
+        return;
+    }
+
+    db->execSqlSync(
+        "UPDATE user_recovery_codes SET used_at = NOW() WHERE id = $1", matchedId);
+    audit_log::record(req, {"2fa.verify.recovery.used", pendingOpt,
+                            std::string{"recovery_code"}, matchedId,
+                            Json::objectValue});
+    audit_log::record(req, {"login.ok", pendingOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+    completeTwoStepLogin(req, callback, *pendingOpt);
+}
+
+// =========================================================================
+// /auth/login/verify-webauthn/begin — challenge for navigator.credentials.get
+// =========================================================================
+void AuthController::webauthnLoginBegin(const HttpRequestPtr& req,
+                                        std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto pendingOpt = pendingUserId(req);
+    if (!pendingOpt) { callback(jsonError(k401Unauthorized, "No pending login")); return; }
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT credential_id FROM user_webauthn_credentials WHERE user_id = $1",
+        *pendingOpt);
+    if (rows.empty()) { callback(jsonError(k400BadRequest, "No passkeys")); return; }
+
+    const std::string challenge = webauthn::makeChallenge();
+    req->session()->insert("pending_webauthn_challenge", challenge);
+
+    Json::Value ret;
+    ret["challenge"] = challenge;
+    ret["rp_id"]     = rpId();
+    Json::Value allow(Json::arrayValue);
+    for (const auto& row : rows) {
+        Json::Value e;
+        e["type"] = "public-key";
+        e["id"]   = row["credential_id"].as<std::string>();
+        allow.append(e);
+    }
+    ret["allowCredentials"] = allow;
+    callback(HttpResponse::newHttpJsonResponse(ret));
+}
+
+// =========================================================================
+// /auth/login/verify-webauthn/finish — verify assertion and complete login
+// =========================================================================
+void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
+                                         std::function<void(const HttpResponsePtr&)>&& callback)
+{
+    auto pendingOpt = pendingUserId(req);
+    if (!pendingOpt) { callback(jsonError(k401Unauthorized, "No pending login")); return; }
+
+    auto d = security::rateLimitTake("login_2fa_passkey", std::to_string(*pendingOpt),
+                                     5.0, 5.0 / 60.0);
+    if (!d.allowed) {
+        callback(jsonError(k429TooManyRequests, "Too many attempts"));
+        return;
+    }
+
+    auto chalOpt = req->session()->getOptional<std::string>("pending_webauthn_challenge");
+    if (!chalOpt) { callback(jsonError(k400BadRequest, "No pending challenge")); return; }
+
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+
+    const std::string credentialId = (*json)["credentialId"].asString();
+    const std::string clientData   = (*json)["clientDataJSON"].asString();
+    const std::string authData     = (*json)["authenticatorData"].asString();
+    const std::string signature    = (*json)["signature"].asString();
+
+    auto db = drogon::app().getDbClient();
+    auto rows = db->execSqlSync(
+        "SELECT id, public_key, sign_count "
+        "FROM user_webauthn_credentials "
+        "WHERE user_id = $1 AND credential_id = $2",
+        *pendingOpt, credentialId);
+    if (rows.empty()) {
+        callback(jsonError(k401Unauthorized, "Unknown credential"));
+        return;
+    }
+    const std::int64_t  credRowId  = rows[0]["id"].as<std::int64_t>();
+    const auto          storedKey  = rows[0]["public_key"].as<std::string>();
+    const std::int64_t  storedCnt  = rows[0]["sign_count"].as<std::int64_t>();
+
+    std::string err;
+    auto res = webauthn::finishAuthentication(
+        clientData, authData, signature,
+        *chalOpt, rpId(), siteOrigin(),
+        std::vector<unsigned char>(storedKey.begin(), storedKey.end()),
+        static_cast<std::uint32_t>(storedCnt),
+        err);
+    req->session()->erase("pending_webauthn_challenge");
+    if (!res) {
+        LOG_INFO << "webauthn assertion rejected: " << err;
+        audit_log::record(req, {"2fa.verify.webauthn.fail", pendingOpt,
+                                std::string{"webauthn_credential"}, credRowId,
+                                Json::objectValue});
+        callback(jsonError(k401Unauthorized, "Authentication failed"));
+        return;
+    }
+
+    db->execSqlSync(
+        "UPDATE user_webauthn_credentials "
+        "SET sign_count = $1, last_used_at = NOW() WHERE id = $2",
+        static_cast<std::int64_t>(res->new_sign_count), credRowId);
+
+    audit_log::record(req, {"2fa.verify.webauthn.ok", pendingOpt,
+                            std::string{"webauthn_credential"}, credRowId,
+                            Json::objectValue});
+    audit_log::record(req, {"login.ok", pendingOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+    completeTwoStepLogin(req, callback, *pendingOpt);
+}

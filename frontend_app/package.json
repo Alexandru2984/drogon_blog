@@ -13,12 +13,14 @@
   "dependencies": {
     "axios": "^1.7.7",
     "pinia": "^2.2.4",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.12",
     "vue-router": "^4.4.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.0",
+    "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-vue": "^5.1.4",
     "eslint": "^10.4.0",
     "eslint-plugin-vue": "^10.9.1",

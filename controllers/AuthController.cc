@@ -233,17 +233,59 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         }
 
         const auto& user = users[0];
+        const int  userId = static_cast<int>(user.getValueOfId());
 
-        // Defeat session fixation: drop any pre-login state and have Drogon
-        // mint a new session ID before we attach the authenticated identity.
+        // Look up 2FA enrolment. The query is synchronous on purpose —
+        // simpler than building an async chain when we already hold the
+        // hot path for the password check, and findOne returns instantly
+        // for a single-row indexed lookup.
+        bool has2fa = false;
+        bool totpEnabled = false;
+        int  passkeysCount = 0;
+        {
+            auto r = dbClient->execSqlSync(
+                "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", userId);
+            if (!r.empty()) totpEnabled = r[0]["enabled"].as<bool>();
+
+            auto r2 = dbClient->execSqlSync(
+                "SELECT count(*) AS n FROM user_webauthn_credentials WHERE user_id = $1",
+                userId);
+            passkeysCount = r2[0]["n"].as<int>();
+            has2fa = totpEnabled || passkeysCount > 0;
+        }
+
+        // Always rotate the session ID after a successful password check —
+        // covers fixation in the no-2FA case AND prevents an attacker from
+        // landing pre-2FA pending state into a victim's session.
         auto session = req->session();
         session->clear();
         session->changeSessionIdToClient();
-        session->insert("user_id",  static_cast<int>(user.getValueOfId()));
+
+        if (has2fa) {
+            // Two-step gate: stash a pending_user_id but DO NOT set user_id.
+            // Anything reading the session before /auth/login/verify-* runs
+            // will see an unauthenticated state.
+            session->insert("pending_user_id", userId);
+
+            Json::Value ret;
+            ret["requires_2fa"] = true;
+            Json::Value methods(Json::arrayValue);
+            if (totpEnabled)       methods.append("totp");
+            if (passkeysCount > 0) methods.append("webauthn");
+            methods.append("recovery");
+            ret["methods"] = methods;
+
+            audit_log::record(req, {"login.password_ok",
+                                    userId, std::nullopt, std::nullopt,
+                                    Json::objectValue});
+            callback(HttpResponse::newHttpJsonResponse(ret));
+            return;
+        }
+
+        session->insert("user_id",  userId);
         session->insert("username", user.getValueOfUsername());
 
-        audit_log::record(req, {"login.ok",
-                                static_cast<int>(user.getValueOfId()),
+        audit_log::record(req, {"login.ok", userId,
                                 std::nullopt, std::nullopt, Json::objectValue});
 
         Json::Value ret;
