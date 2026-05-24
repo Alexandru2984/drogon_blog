@@ -18,8 +18,18 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['vue', 'vue-router', 'pinia', 'axios'],
+        // Vite 8 + Rolldown require the function form of manualChunks (the
+        // record form was dropped). Group runtime libraries into one chunk
+        // so repeat visits get a warm cache for everything framework-side.
+        manualChunks(id) {
+          if (id.includes('/node_modules/vue/')       ||
+              id.includes('/node_modules/vue-router/')||
+              id.includes('/node_modules/@vue/')      ||
+              id.includes('/node_modules/pinia/')     ||
+              id.includes('/node_modules/axios/')) {
+            return 'vendor'
+          }
+          return undefined
         },
       },
     },
