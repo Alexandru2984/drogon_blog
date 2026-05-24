@@ -27,7 +27,7 @@ Fmt sniff(const std::string& path)
     const auto n = f.gcount();
     if (n < 4) return Fmt::Unknown;
 
-    if (n >= 3 && hdr[0] == 0xFF && hdr[1] == 0xD8 && hdr[2] == 0xFF) return Fmt::Jpeg;
+    if (hdr[0] == 0xFF && hdr[1] == 0xD8 && hdr[2] == 0xFF) return Fmt::Jpeg;
     if (n >= 8 && hdr[0] == 0x89 && hdr[1] == 0x50 && hdr[2] == 0x4E && hdr[3] == 0x47 &&
         hdr[4] == 0x0D && hdr[5] == 0x0A && hdr[6] == 0x1A && hdr[7] == 0x0A) return Fmt::Png;
     // RIFF????WEBP

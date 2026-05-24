@@ -51,7 +51,7 @@ std::string buildConnInfo()
          + " application_name='drogon-blog-listener'";
 }
 
-void loop(std::string channel, std::string connInfo, Callback cb)
+void loop(const std::string& channel, const std::string& connInfo, Callback cb)
 {
     using namespace std::chrono_literals;
 

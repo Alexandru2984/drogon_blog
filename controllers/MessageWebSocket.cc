@@ -22,6 +22,7 @@ std::unordered_map<int, std::unordered_set<WebSocketConnectionPtr>>             
 std::unordered_map<int, std::unordered_set<WebSocketConnectionPtr>>              g_byPost;
 
 struct ConnCtx {
+    // cppcheck-suppress unusedStructMember  // read via ctx->userId after shared_ptr deref
     int                          userId;
     std::unordered_set<int>      subscribedPosts;   // protected by g_mu
 };
@@ -201,6 +202,6 @@ std::size_t MessageWebSocket::connectionCount()
 {
     std::lock_guard<std::mutex> lk(g_mu);
     std::size_t total = 0;
-    for (const auto& [_, conns] : g_byUser) total += conns.size();
+    for (const auto& entry : g_byUser) total += entry.second.size();
     return total;
 }

@@ -13,3 +13,7 @@ useStlAlgorithm
 unusedFunction
 missingIncludeSystem
 unmatchedSuppression
+# Newer cppcheck emits this "information" finding on any function with many
+# branches. It's diagnostic, not a defect — and it makes --error-exitcode
+# fail with no actionable output.
+normalCheckLevelMaxBranches

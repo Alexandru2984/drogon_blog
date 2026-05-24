@@ -56,7 +56,7 @@ std::string normalize(const std::string& raw)
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '-') continue;
         out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
     }
-    if (out.size() == 8) out = out.substr(0, 4) + "-" + out.substr(4);
+    if (out.size() == 8) out.insert(4, 1, '-');
     return out;
 }
 

@@ -103,7 +103,7 @@ std::vector<std::string> issueFreshRecoveryCodes(int userId)
 }
 
 void completeTwoStepLogin(const HttpRequestPtr& req,
-                          std::function<void(const HttpResponsePtr&)>& callback,
+                          const std::function<void(const HttpResponsePtr&)>& callback,
                           int userId)
 {
     auto db   = drogon::app().getDbClient();
