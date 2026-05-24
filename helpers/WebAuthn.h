@@ -29,11 +29,11 @@ namespace webauthn {
 struct RegistrationResult {
     std::string credential_id_b64u;   // base64url, suitable for DB
     std::vector<unsigned char> cose_public_key;
-    std::uint32_t sign_count;
+    std::uint32_t sign_count = 0;
 };
 
 struct AuthenticationResult {
-    std::uint32_t new_sign_count;
+    std::uint32_t new_sign_count = 0;
 };
 
 // ---- Begin handlers ----

@@ -197,7 +197,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy scan (image)
-        uses: aquasecurity/trivy-action@0.36.0
+        # Upstream switched to a leading `v` for the v0.36.0 tag; the
+        # un-prefixed 0.36.0 tag doesn't exist on the repo any more.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref:    drogon-blog:ci
           severity:     'HIGH,CRITICAL'
