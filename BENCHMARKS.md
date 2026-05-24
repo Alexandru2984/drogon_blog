@@ -9,7 +9,7 @@ measured before / after on the same hardware against the same data.
 | Role | Host | CPU | RAM | OS |
 |---|---|---|---|---|
 | **App** (Drogon + Postgres + nginx) | OVH VPS  | 12 cores | 45 GiB | Ubuntu 25.04, kernel 6.14 |
-| **Load** (k6) | Hetzner VPS  | — | — | Ubuntu 24.04 |
+| **Load** (k6) | Hetzner VPS  |4 cores | 8 GiB | Ubuntu 24.04 |
 
 The load host's `/etc/hosts` overrides `blog.micutu.com`
 so traffic bypasses Cloudflare and reaches nginx on the origin directly
