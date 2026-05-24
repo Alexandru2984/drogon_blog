@@ -8,6 +8,14 @@
 using namespace drogon;
 using namespace drogon::orm;
 
+namespace {
+// Capped well below PG's 8 KiB pg_notify payload limit. The
+// trg_messages_notify trigger additionally truncates to 200 bytes
+// before json_build_object so the websocket payload stays under that
+// envelope even if this cap is raised later.
+constexpr std::size_t kMaxMessageBytes = 10 * 1024;
+}
+
 void MessageController::getReceivedMessages(const HttpRequestPtr &req,
                                            std::function<void(const HttpResponsePtr &)> &&callback)
 {
@@ -247,6 +255,14 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
         ret["error"] = "Receiver ID and content are required";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+    if (content.size() > kMaxMessageBytes) {
+        Json::Value ret;
+        ret["error"] = "Message too long";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k413RequestEntityTooLarge);
         callback(resp);
         return;
     }

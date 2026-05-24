@@ -97,8 +97,23 @@ void install()
     // start time so the post-handling hook can compute latency.
     app().registerPreRoutingAdvice(
         [](const HttpRequestPtr& req) {
+            // Echo a client-supplied request ID iff it's safe to put back
+            // on the wire: bounded length and printable ASCII only. A
+            // raw header value would be a response-header injection
+            // vector (CR/LF → response splitting) and a log-injection
+            // vector (the access log line would absorb whatever bytes
+            // came in). Drop and regenerate when either check fails.
+            constexpr std::size_t kMaxReqId = 64;
             auto incoming = req->getHeader(kReqIdHeader);
-            std::string id = !incoming.empty() ? incoming : security::randomToken(12);
+            std::string id;
+            if (!incoming.empty() && incoming.size() <= kMaxReqId) {
+                bool ok = true;
+                for (unsigned char c : incoming) {
+                    if (c < 0x21 || c > 0x7E) { ok = false; break; }
+                }
+                if (ok) id = incoming;
+            }
+            if (id.empty()) id = security::randomToken(12);
             req->attributes()->insert(kReqIdAttr, id);
             req->attributes()->insert(
                 kStartAttr, std::chrono::steady_clock::now());

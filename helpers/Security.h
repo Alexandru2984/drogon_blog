@@ -16,6 +16,11 @@ std::string clientIp(const drogon::HttpRequestPtr& req);
 // Cryptographically-random URL-safe token (uses libsodium's RNG).
 std::string randomToken(std::size_t bytes = 32);
 
+// SHA-256 (hex). Used to store opaque tokens at rest hashed so a DB
+// snapshot doesn't leak active verification / password-reset tokens.
+// Not for passwords — those go through Argon2id via hashPassword().
+std::string sha256Hex(const std::string& input);
+
 // Returns the configured CSRF cookie name. Centralized so frontend / backend
 // stay in sync.
 const std::string& csrfCookieName();

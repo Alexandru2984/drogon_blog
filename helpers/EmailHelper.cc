@@ -1,4 +1,5 @@
 #include "EmailHelper.h"
+#include "Security.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -6,7 +7,6 @@
 #include <cstring>
 #include <mutex>
 #include <queue>
-#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -157,16 +157,23 @@ std::size_t EmailHelper::queueDepth()
 
 std::string EmailHelper::generateToken(std::size_t length)
 {
-    static const char chars[] =
-        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, sizeof(chars) - 2);
-
-    std::string out;
-    out.reserve(length);
-    for (std::size_t i = 0; i < length; ++i) out.push_back(chars[dist(gen)]);
-    return out;
+    // libsodium-backed CSPRNG via security::randomToken. The previous
+    // implementation seeded std::mt19937 with a single std::random_device
+    // call (~32 bits of state), which is *not* cryptographically secure:
+    // MT19937 can be backtracked from observed output and brute-forced
+    // when seeded from 32 bits. Verification and password-reset tokens
+    // were guessable in principle.
+    //
+    // `length` is interpreted as the desired character count of the
+    // URL-safe base64 output. randomToken takes a byte count; 3 bytes
+    // produce 4 chars (rounded up), so we ask for ceil(length * 3 / 4)
+    // bytes and then trim. The default callers ask for length=32, which
+    // gives ~24 bytes ≈ 192 bits of entropy — far above the ~128-bit
+    // brute-force floor.
+    const std::size_t bytes = (length * 3 + 3) / 4;
+    std::string raw = security::randomToken(bytes);
+    if (raw.size() > length) raw.resize(length);
+    return raw;
 }
 
 void EmailHelper::sendVerificationEmail(const std::string& email,

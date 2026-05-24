@@ -48,6 +48,12 @@ void initOnce()
 
 std::string renderToSafeHtml(const std::string& src)
 {
+    // Bound the parser; pathological inputs are the documented Markdown
+    // DoS shape. We don't truncate-and-render — silently rendering half
+    // a document would obscure that the caller pushed something out of
+    // policy. Returning empty makes the failure visible.
+    if (src.size() > kMaxMarkdownBytes) return {};
+
     initOnce();
 
     cmark_parser* parser = makeParser();

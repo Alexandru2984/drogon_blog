@@ -2,6 +2,8 @@
 #include <drogon/drogon_test.h>
 #include <drogon/HttpClient.h>
 
+#include "../helpers/Security.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -124,9 +126,13 @@ DROGON_TEST(Security_ResetPasswordTokenIsSingleUse)
     client->sendRequest(jsonPost("/auth/register", reg),
         [TEST_CTX, client, email, username](ReqResult, const HttpResponsePtr&) {
             // Insert a known reset token directly via the DB so we don't have
-            // to scrape email content from the worker thread.
+            // to scrape email content from the worker thread. Storage is the
+            // SHA-256 of the plaintext (see security::sha256Hex); the API
+            // hashes the inbound token before lookup, so we plant the same
+            // hash here and send the plaintext over the wire.
             auto db = app().getDbClient();
-            const std::string token = "test-token-" + uniqueSuffix();
+            const std::string token     = "test-token-" + uniqueSuffix();
+            const std::string tokenHash = security::sha256Hex(token);
             db->execSqlAsync(
                 "INSERT INTO password_reset_tokens (user_id, token, expires_at) "
                 "SELECT id, $2, NOW() + INTERVAL '10 minutes' "
@@ -153,7 +159,7 @@ DROGON_TEST(Security_ResetPasswordTokenIsSingleUse)
                 [TEST_CTX](const orm::DrogonDbException& e) {
                     FAIL(std::string("seed insert failed: ") + e.base().what());
                 },
-                username, token);
+                username, tokenHash);
         });
 }
 
@@ -222,23 +228,26 @@ DROGON_TEST(Security_VerifyEmailIsAtomic)
     client->sendRequest(jsonPost("/auth/register", reg),
         [TEST_CTX, client, username](ReqResult, const HttpResponsePtr&) {
             auto db = app().getDbClient();
-            // Read the token the registration set so we don't need to parse
-            // the outbound email.
+            // The plaintext token registration generated was only ever sent
+            // to the (mock) email; we can't read it back from the DB now
+            // that it's stored hashed. Overwrite with a (hash, plaintext)
+            // pair we control, then exercise the endpoint with the plaintext.
+            const std::string plain = "test-verify-" + uniqueSuffix();
+            const std::string hash  = security::sha256Hex(plain);
             db->execSqlAsync(
-                "SELECT email_verification_token FROM users WHERE username = $1",
-                [TEST_CTX, client](const orm::Result& r) {
-                    REQUIRE(!r.empty());
-                    const auto tok = r[0]["email_verification_token"].as<std::string>();
-                    REQUIRE(!tok.empty());
-
+                "UPDATE users "
+                "   SET email_verification_token   = $2, "
+                "       email_verification_expires = NOW() + INTERVAL '10 minutes' "
+                " WHERE username = $1",
+                [TEST_CTX, client, plain](const orm::Result&) {
                     Json::Value first;
-                    first["token"] = tok;
+                    first["token"] = plain;
                     client->sendRequest(jsonPost("/auth/verify-email", first),
-                        [TEST_CTX, client, tok](ReqResult, const HttpResponsePtr& r1) {
+                        [TEST_CTX, client, plain](ReqResult, const HttpResponsePtr& r1) {
                             REQUIRE(r1->getStatusCode() == k200OK);
 
                             Json::Value second;
-                            second["token"] = tok;
+                            second["token"] = plain;
                             client->sendRequest(jsonPost("/auth/verify-email", second),
                                 [TEST_CTX](ReqResult, const HttpResponsePtr& r2) {
                                     CHECK(r2->getStatusCode() == k400BadRequest);
@@ -246,8 +255,8 @@ DROGON_TEST(Security_VerifyEmailIsAtomic)
                         });
                 },
                 [TEST_CTX](const orm::DrogonDbException& e) {
-                    FAIL(std::string("token fetch failed: ") + e.base().what());
+                    FAIL(std::string("token seed failed: ") + e.base().what());
                 },
-                username);
+                username, hash);
         });
 }

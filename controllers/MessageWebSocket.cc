@@ -3,6 +3,7 @@
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
 
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -10,6 +11,31 @@
 #include <unordered_set>
 
 using namespace drogon;
+
+namespace {
+
+// CSWSH defence: browsers send cookies on cross-origin WebSocket opens
+// the same way they would on a top-level navigation, so the only thing
+// stopping evil.com from hijacking a logged-in session is an explicit
+// Origin check at handshake time. We reject anything that isn't an
+// exact byte-for-byte match for BLOG_SITE_ORIGIN. A missing Origin
+// header (curl, native apps, server-to-server tests) is allowed
+// because those agents don't carry session cookies anyway and the
+// auth check below is the actual gate for them.
+bool originAllowed(const HttpRequestPtr& req)
+{
+    const std::string& origin = req->getHeader("Origin");
+    if (origin.empty()) return true;
+    const char* expected = std::getenv("BLOG_SITE_ORIGIN");
+    if (!expected || !*expected) {
+        // Fail closed: if the operator forgot to set the origin, refuse
+        // every cross-origin handshake rather than allowing all.
+        return false;
+    }
+    return origin == std::string(expected);
+}
+
+} // namespace
 
 namespace {
 
@@ -116,6 +142,16 @@ void sendOnAll(const std::vector<WebSocketConnectionPtr>& conns,
 void MessageWebSocket::handleNewConnection(const HttpRequestPtr& req,
                                            const WebSocketConnectionPtr& conn)
 {
+    // CSWSH guard runs BEFORE the auth check so a hostile origin can't
+    // even learn whether a session is valid via the close code.
+    if (!originAllowed(req)) {
+        LOG_WARN << "rejecting WS handshake from disallowed origin '"
+                 << req->getHeader("Origin") << "' peer="
+                 << req->getPeerAddr().toIpPort();
+        conn->shutdown(CloseCode::kViolation, "origin not allowed");
+        return;
+    }
+
     // Auth-gated handshake: the upgrading HTTP request must carry a valid
     // session cookie. We close 1008 (policy violation) for anonymous peers.
     auto session = req->session();

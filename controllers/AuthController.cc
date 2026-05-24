@@ -64,6 +64,27 @@ bool passwordTooWeak(const std::string& p)
     return p.size() < kMinPasswordLen || p.size() > kMaxPasswordLen;
 }
 
+// Minimal email shape check focused on what we MUST reject for safety:
+// any control byte (CR/LF in particular) lets an attacker inject extra
+// SMTP headers downstream (CWE-93). The structural check is intentionally
+// loose — we want to accept the real-world long tail of legitimate
+// addresses, not validate them — but the presence of `@` plus a `.`
+// somewhere after it filters out obvious junk too. Length is bounded
+// by kMaxEmailLen above.
+bool emailLooksValid(const std::string& e)
+{
+    if (e.empty() || e.size() > kMaxEmailLen) return false;
+    for (unsigned char c : e) {
+        if (c < 0x20 || c == 0x7F) return false;  // any control byte
+        if (c == ' ')               return false;
+    }
+    const auto at = e.find('@');
+    if (at == std::string::npos || at == 0 || at == e.size() - 1) return false;
+    if (e.find('@', at + 1) != std::string::npos) return false;    // second @
+    if (e.find('.', at + 1) == std::string::npos) return false;    // no TLD
+    return true;
+}
+
 HttpResponsePtr jsonError(HttpStatusCode code, const std::string& msg)
 {
     Json::Value body;
@@ -91,6 +112,14 @@ void AuthController::registerUser(const HttpRequestPtr &req,
     }
     if (username.size() > kMaxUsernameLen || email.size() > kMaxEmailLen) {
         callback(jsonError(k400BadRequest, "Field too long"));
+        return;
+    }
+    if (!emailLooksValid(email)) {
+        // Catches CR/LF / spaces / missing @ etc. — important because
+        // the address ends up in the SMTP To: header downstream and a
+        // newline there would let an attacker chain Bcc: / extra
+        // headers (CWE-93 email header injection).
+        callback(jsonError(k400BadRequest, "Invalid email address"));
         return;
     }
     if (passwordTooWeak(password)) {
@@ -127,10 +156,16 @@ void AuthController::registerUser(const HttpRequestPtr &req,
         // Email collisions are silently masked: we return success and notify
         // the legitimate owner out-of-band. The attacker can't tell whether
         // we created a new account or not.
+        //
+        // We run hashPassword on this path even though we throw the hash
+        // away — without it the dup-email reply lands ~135 ms ahead of
+        // the new-account reply (Argon2id at OPSLIMIT_INTERACTIVE), an
+        // obvious timing oracle for account enumeration.
         auto byEmail = mapper.findBy(
             Criteria(drogon_model::blog_db::Users::Cols::_email,
                      CompareOperator::EQ, email));
         if (!byEmail.empty()) {
+            (void)hashPassword(password);
             EmailHelper::sendRegistrationAttemptEmail(
                 email, byEmail[0].getValueOfUsername());
             callback(successResp());
@@ -149,8 +184,14 @@ void AuthController::registerUser(const HttpRequestPtr &req,
     newUser.setBio("");
     newUser.setEmailVerified(0);
 
+    // Store SHA-256 of the verification token, not the raw value. A DB
+    // snapshot won't leak active tokens; the plaintext only exists on
+    // the wire to the user's mailbox and in the verify endpoint's
+    // request body. Same pattern is used for password_reset_tokens
+    // further down. The token is base64-url so each char carries
+    // ~6 bits — 32 chars is ~192 bits of entropy, well past brute force.
     std::string verificationToken = EmailHelper::generateToken();
-    newUser.setEmailVerificationToken(verificationToken);
+    newUser.setEmailVerificationToken(security::sha256Hex(verificationToken));
     newUser.setEmailVerificationExpires(trantor::Date::now().after(24 * 3600));
 
     try {
@@ -383,6 +424,9 @@ void AuthController::verifyEmail(const HttpRequestPtr &req,
         "   AND email_verification_expires > NOW() "
         "RETURNING id";
 
+    // Compare against the stored hash, not the plaintext — the DB only
+    // ever holds the SHA-256 since registration. See the matching write
+    // in registerUser() for the rationale.
     dbClient->execSqlAsync(
         kSql,
         [callback, req](const Result& r) {
@@ -401,7 +445,7 @@ void AuthController::verifyEmail(const HttpRequestPtr &req,
             LOG_ERROR << "DB Error (verifyEmail): " << e.base().what();
             callback(jsonError(k500InternalServerError, "Verification failed"));
         },
-        token);
+        security::sha256Hex(token));
 }
 
 void AuthController::requestPasswordReset(const HttpRequestPtr &req,
@@ -448,9 +492,12 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
             "DELETE FROM password_reset_tokens WHERE user_id = $1",
             [dbClient, userId, email, username = user.getValueOfUsername(), okResp, callback]
             (const Result&) {
+                // Plaintext goes out to the user's mailbox; the DB only
+                // stores the SHA-256 so a snapshot can't replay the
+                // token. resetPassword() rehashes the inbound token
+                // for the same reason.
                 const std::string resetToken = EmailHelper::generateToken();
-                // We rely on the FK ON DELETE CASCADE / unique constraints in
-                // the schema; this is a simple INSERT.
+                const std::string resetTokenHash = security::sha256Hex(resetToken);
                 dbClient->execSqlAsync(
                     "INSERT INTO password_reset_tokens (user_id, token, expires_at) "
                     "VALUES ($1, $2, NOW() + INTERVAL '1 hour')",
@@ -465,7 +512,7 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
                         // state on infra errors.
                         callback(okResp());
                     },
-                    userId, resetToken);
+                    userId, resetTokenHash);
             },
             [okResp, callback](const DrogonDbException& e) {
                 LOG_ERROR << "DB Error (reset wipe): " << e.base().what();
@@ -534,7 +581,7 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
             callback(jsonError(k500InternalServerError,
                                "Failed to reset password"));
         },
-        token);
+        security::sha256Hex(token));
 }
 
 void AuthController::resendVerification(const HttpRequestPtr &req,
@@ -571,8 +618,10 @@ void AuthController::resendVerification(const HttpRequestPtr &req,
         }
 
         auto user = users[0];
+        // Same hash-at-rest pattern as registerUser. Plaintext only
+        // crosses the wire to the user's mailbox.
         const std::string verificationToken = EmailHelper::generateToken();
-        user.setEmailVerificationToken(verificationToken);
+        user.setEmailVerificationToken(security::sha256Hex(verificationToken));
         user.setEmailVerificationExpires(trantor::Date::now().after(24 * 3600));
         mapper.update(user);
 

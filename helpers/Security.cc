@@ -142,16 +142,32 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
 
 void registerAdvices()
 {
-    // Per-IP token buckets for sensitive auth endpoints. Capacity is the burst
-    // budget; refill rate sets the long-run cap. Tuned to be friendly to humans
-    // (5 logins within a few seconds is fine) while killing credential stuffing.
-    struct RateRule { const char* path; double capacity; double refillPerSec; };
+    // Per-IP token buckets for sensitive endpoints. Capacity is the burst
+    // budget; refill rate sets the long-run cap. Tuned to be friendly to
+    // humans (5 logins within a few seconds is fine) while killing credential
+    // stuffing and FTS-DoS.
+    //
+    // method is matched explicitly so a rule's path doesn't pick up unrelated
+    // verbs (e.g. /posts/search is a GET, but mutating endpoints under /auth
+    // share their prefixes with safe GETs).
+    struct RateRule {
+        const char*    path;
+        drogon::HttpMethod method;
+        double         capacity;
+        double         refillPerSec;
+    };
     static const RateRule kRateRules[] = {
-        {"/auth/login",                5.0, 5.0  / 60.0},   // 5 burst, 5 / min
-        {"/auth/register",             3.0, 3.0  / 600.0},  // 3 burst, 3 / 10 min
-        {"/auth/request-reset",        3.0, 3.0  / 600.0},
-        {"/auth/resend-verification",  3.0, 3.0  / 600.0},
-        {"/auth/reset-password",       5.0, 5.0  / 60.0},
+        {"/auth/login",                drogon::Post, 5.0, 5.0  / 60.0},   // 5 burst, 5 / min
+        {"/auth/register",             drogon::Post, 3.0, 3.0  / 600.0},  // 3 burst, 3 / 10 min
+        {"/auth/request-reset",        drogon::Post, 3.0, 3.0  / 600.0},
+        {"/auth/resend-verification",  drogon::Post, 3.0, 3.0  / 600.0},
+        {"/auth/reset-password",       drogon::Post, 5.0, 5.0  / 60.0},
+        // Full-text search runs websearch_to_tsquery + ts_headline server
+        // side and ts_headline is CPU-intensive (it walks the document
+        // text, not just the index). A bot looping on /posts/search with
+        // long crafted terms can saturate Postgres cores; per-IP cap kills
+        // that without affecting human browsing.
+        {"/posts/search",              drogon::Get,  10.0, 10.0 / 60.0},  // 10 burst, 10 / min
     };
 
     static const std::unordered_set<std::string> kCsrfExempt = {
@@ -180,9 +196,9 @@ void registerAdvices()
             const auto method = req->getMethod();
 
             // ---- Rate limit ----
-            if (rateLimitEnabled && method == drogon::Post) {
+            if (rateLimitEnabled) {
                 for (const auto& rule : kRateRules) {
-                    if (path == rule.path) {
+                    if (path == rule.path && method == rule.method) {
                         auto d = rateLimitTake(
                             rule.path, clientIp(req),
                             rule.capacity, rule.refillPerSec);
@@ -246,6 +262,22 @@ bool secureCookies()
 {
     const char* v = std::getenv("BLOG_SECURE_COOKIES");
     return v && std::string(v) == "1";
+}
+
+std::string sha256Hex(const std::string& input)
+{
+    unsigned char digest[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(digest,
+        reinterpret_cast<const unsigned char*>(input.data()),
+        input.size());
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.resize(crypto_hash_sha256_BYTES * 2);
+    for (std::size_t i = 0; i < crypto_hash_sha256_BYTES; ++i) {
+        out[2 * i]     = kHex[digest[i] >> 4];
+        out[2 * i + 1] = kHex[digest[i] & 0xF];
+    }
+    return out;
 }
 
 std::string hashPassword(const std::string& password)

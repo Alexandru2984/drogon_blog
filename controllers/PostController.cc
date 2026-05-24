@@ -20,6 +20,14 @@ namespace {
 constexpr int kDefaultPageSize = 20;
 constexpr int kMaxPageSize     = 50;
 
+// Title bound is generous (5 KiB) — enough for legitimate long headers
+// without giving an adversary room to chain arbitrary markdown into it.
+// Content bound matches the parser cap in helpers/Markdown.h so we
+// reject at the API boundary with a clear 413 instead of returning an
+// empty render later.
+constexpr std::size_t kMaxTitleBytes   = 5 * 1024;
+constexpr std::size_t kMaxContentBytes = 100 * 1024;
+
 int clampLimit(const std::string& raw)
 {
     if (raw.empty()) return kDefaultPageSize;
@@ -365,6 +373,14 @@ void PostController::createPost(const HttpRequestPtr &req,
         callback(resp);
         return;
     }
+    if (title.size() > kMaxTitleBytes || content.size() > kMaxContentBytes) {
+        Json::Value ret;
+        ret["error"] = "Title or content too long";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k413RequestEntityTooLarge);
+        callback(resp);
+        return;
+    }
 
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
@@ -445,10 +461,27 @@ void PostController::updatePost(const HttpRequestPtr &req,
         }
 
         if (json->isMember("title")) {
-            post.setTitle((*json)["title"].asString());
+            const std::string newTitle = (*json)["title"].asString();
+            if (newTitle.size() > kMaxTitleBytes) {
+                Json::Value ret;
+                ret["error"] = "Title too long";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k413RequestEntityTooLarge);
+                callback(resp);
+                return;
+            }
+            post.setTitle(newTitle);
         }
         if (json->isMember("content")) {
             const std::string newContent = (*json)["content"].asString();
+            if (newContent.size() > kMaxContentBytes) {
+                Json::Value ret;
+                ret["error"] = "Content too long";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k413RequestEntityTooLarge);
+                callback(resp);
+                return;
+            }
             post.setContent(newContent);
             post.setContentHtml(markdown::renderToSafeHtml(newContent));
         }

@@ -8,6 +8,15 @@
 using namespace drogon;
 using namespace drogon::orm;
 
+namespace {
+// Comments share their content with the pg_notify(blog_event) payload
+// produced by trg_comments_notify; the trigger truncates to 200 bytes
+// before json_build_object so it stays under PG's 8 KiB NOTIFY limit,
+// but the stored content itself is bounded here so a single comment
+// can't be a DoS vector on subsequent renders / list responses.
+constexpr std::size_t kMaxCommentBytes = 10 * 1024;
+}
+
 void CommentController::getPostComments(const HttpRequestPtr &req,
                                        std::function<void(const HttpResponsePtr &)> &&callback,
                                        int postId)
@@ -97,6 +106,14 @@ void CommentController::createComment(const HttpRequestPtr &req,
         callback(resp);
         return;
     }
+    if (content.size() > kMaxCommentBytes) {
+        Json::Value ret;
+        ret["error"] = "Comment too long";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k413RequestEntityTooLarge);
+        callback(resp);
+        return;
+    }
 
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
@@ -170,7 +187,16 @@ void CommentController::updateComment(const HttpRequestPtr &req,
         }
 
         if (json->isMember("content")) {
-            comment.setContent((*json)["content"].asString());
+            const std::string newContent = (*json)["content"].asString();
+            if (newContent.size() > kMaxCommentBytes) {
+                Json::Value ret;
+                ret["error"] = "Comment too long";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k413RequestEntityTooLarge);
+                callback(resp);
+                return;
+            }
+            comment.setContent(newContent);
         }
 
         mapper.update(comment);

@@ -8,7 +8,6 @@
 #include <drogon/orm/Exception.h>
 #include <drogon/MultiPart.h>
 #include <trantor/utils/Logger.h>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -207,10 +206,15 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
     // Stamp the filename server-side; the user-supplied filename is never
     // trusted for path construction. ".jpg" is the final extension regardless
     // of input format — the image pipeline always emits JPEG.
-    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::system_clock::now().time_since_epoch()).count();
+    //
+    // Random suffix (libsodium-backed, 12 bytes ≈ 96 bits) instead of a
+    // timestamp: a millisecond counter is trivially guessable, and a
+    // racing process could try to interfere with the tmp file between
+    // saveAs() and processAvatar() if it could predict the name. With
+    // a 96-bit token the race is closed against any practical attacker
+    // and the final public URL stops leaking upload time.
     const std::string stem = "profile_" + std::to_string(userIdOpt.value())
-                           + "_" + std::to_string(now);
+                           + "_" + security::randomToken(12);
     const std::string tmpPath   = tmpDir      + stem + ".upload";
     const std::string finalPath = profilesDir + stem + ".jpg";
     // Same on-disk file, addressed via a clean URL path served by Drogon's

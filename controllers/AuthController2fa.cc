@@ -117,6 +117,14 @@ void completeTwoStepLogin(const HttpRequestPtr& req,
     auto session = req->session();
     session->erase("pending_user_id");
     session->erase("pending_webauthn_challenge");
+    // Rotate the session ID again now that the user is fully authenticated.
+    // The password step already rotated once when it dropped pending_user_id
+    // in, but the same session value carried through the 2FA window — so an
+    // attacker who somehow saw the pending_2fa cookie (e.g. via a same-origin
+    // proxy log) would inherit the fully-authenticated session if we kept
+    // the ID. A second rotation gives the new fully-authed state a brand
+    // new identifier the attacker has never observed.
+    session->changeSessionIdToClient();
     session->insert("user_id",  userId);
     session->insert("username", rows[0]["username"].as<std::string>());
 
