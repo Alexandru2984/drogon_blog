@@ -54,6 +54,54 @@ function search() {
   errors.add(!ok)
 }
 
+// "Warm cache" variants: each VU caches the ETag it sees on its first
+// hit and replays it via If-None-Match. The expected hot-path status
+// becomes 304, so the assertion flips. Models a returning client / CDN
+// edge that holds a valid ETag.
+//
+// __VU is a 1-based unique VU index per k6; we keep one ETag per VU
+// per resource so VUs don't fight over a shared variable (and so
+// resources that don't collide — different post ids, different search
+// terms — keep their own tag).
+const cache = {} // { 'kind|key': etag }
+function etagGet(kind, key, url, name) {
+  const ck = `${kind}|${key}`
+  let headers = {}
+  if (cache[ck]) headers['If-None-Match'] = cache[ck]
+  const r = http.get(url, { headers, tags: { name } })
+  // Update only when the server gives us a non-empty ETag (200 or 304
+  // both echo it back). A 200 with a new tag means the resource moved
+  // between two of our requests — fine, we just refresh and continue.
+  const fresh = r.headers['Etag'] || r.headers['ETag']
+  if (fresh) cache[ck] = fresh
+  return r
+}
+
+function getFeedWarm() {
+  const r = etagGet('feed', 'list',
+    `${BASE}/posts`, 'GET /posts (warm)')
+  // First iter is 200 (cache miss), subsequent are 304 unless the
+  // resource was mutated.
+  const ok = check(r, { 'feed 200/304': res => res.status === 200 || res.status === 304 })
+  errors.add(!ok)
+}
+
+function getPostWarm() {
+  const id = pick(seed.post_ids)
+  const r = etagGet('post', String(id),
+    `${BASE}/posts/${id}`, 'GET /posts/{id} (warm)')
+  const ok = check(r, { 'post 200/304': res => res.status === 200 || res.status === 304 })
+  errors.add(!ok)
+}
+
+function searchWarm() {
+  const q = pick(seed.search_terms)
+  const r = etagGet('search', q,
+    `${BASE}/posts/search?q=${encodeURIComponent(q)}`, 'GET /posts/search (warm)')
+  const ok = check(r, { 'search 200/304': res => res.status === 200 || res.status === 304 })
+  errors.add(!ok)
+}
+
 function authMeWarm() {
   const cookie = pick(seed.session_cookies)
   const r = http.get(`${BASE}/auth/me`, {
@@ -65,10 +113,13 @@ function authMeWarm() {
 }
 
 const scenarios = {
-  feed_read:    getFeed,
-  post_view:    getPost,
-  search:       search,
-  auth_me_warm: authMeWarm,
+  feed_read:        getFeed,
+  post_view:        getPost,
+  search:           search,
+  auth_me_warm:     authMeWarm,
+  feed_read_warm:   getFeedWarm,
+  post_view_warm:   getPostWarm,
+  search_warm:      searchWarm,
 }
 
 export default function () {

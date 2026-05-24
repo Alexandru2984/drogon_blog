@@ -3,12 +3,14 @@
 #include "../models/Users.h"
 #include "../models/Likes.h"
 #include "../helpers/AuditLog.h"
+#include "../helpers/HttpCache.h"
 #include "../helpers/Markdown.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
 
 #include <algorithm>
+#include <string>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -70,11 +72,42 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         "ORDER BY p.id DESC "
         "LIMIT $1";
 
-    auto onOk = [callback, limit](const Result& r) {
+    auto onOk = [callback, req, limit, cursor](const Result& r) {
+        // ETag from the page contents: max(updated_at) inside this page
+        // + row count + the pagination keys that defined the page. Any
+        // INSERT/UPDATE that lands inside the cursor window will bump
+        // max(updated_at); rows leaving / entering due to creation will
+        // bump the count or the max id; cache-bypassing parameter
+        // changes get distinct tags. We don't include the JOIN'd author
+        // fields — those don't change without bumping posts.updated_at
+        // because the JOIN is read-only.
+        std::int64_t maxTs = 0;
+        int64_t      maxId = 0;
+        int64_t      minId = 0;
+        for (const auto& row : r) {
+            const auto id  = row["id"].as<int64_t>();
+            const auto ts  = http_cache::parseTimestampMicros(
+                                 row["updated_at"].as<std::string>());
+            if (ts > maxTs)   maxTs = ts;
+            if (id > maxId)   maxId = id;
+            if (minId == 0 || id < minId) minId = id;
+        }
+        const std::string etag = http_cache::makeWeakEtag({
+            "posts",
+            std::to_string(maxTs),
+            std::to_string(maxId),
+            std::to_string(static_cast<int>(r.size())),
+            std::to_string(cursor),
+            std::to_string(limit),
+        });
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag));
+            return;
+        }
+
         Json::Value ret;
         ret["posts"] = Json::Value(Json::arrayValue);
 
-        int64_t minId = 0;
         for (const auto& row : r) {
             Json::Value post;
             const auto id      = row["id"].as<int64_t>();
@@ -95,8 +128,6 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
                 }
             }
             ret["posts"].append(post);
-
-            if (minId == 0 || id < minId) minId = id;
         }
 
         // Only emit a cursor when this page filled the limit; otherwise the
@@ -107,7 +138,9 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
             ret["next_cursor"] = Json::nullValue;
         }
 
-        callback(HttpResponse::newHttpJsonResponse(ret));
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        http_cache::applyCacheHeaders(resp, etag);
+        callback(resp);
     };
     auto onErr = [callback](const DrogonDbException& e) {
         LOG_ERROR << "DB Error (getAllPosts): " << e.base().what();
@@ -166,7 +199,27 @@ void PostController::searchPosts(const HttpRequestPtr &req,
     auto dbClient = drogon::app().getDbClient();
     dbClient->execSqlAsync(
         kSql,
-        [callback, q](const Result& r) {
+        [callback, req, q](const Result& r) {
+            // ETag from (q, max(updated_at over matches), count). Adding
+            // or editing a matching post changes one of those. Editing
+            // a non-matching post outside the result set has no effect,
+            // which is correct.
+            std::int64_t maxTs = 0;
+            for (const auto& row : r) {
+                const auto ts = http_cache::parseTimestampMicros(
+                                    row["updated_at"].as<std::string>());
+                if (ts > maxTs) maxTs = ts;
+            }
+            const std::string etag = http_cache::makeWeakEtag({
+                "search", q,
+                std::to_string(maxTs),
+                std::to_string(static_cast<int>(r.size())),
+            });
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag));
+                return;
+            }
+
             Json::Value ret;
             ret["query"] = q;
             ret["count"] = static_cast<Json::UInt>(r.size());
@@ -191,7 +244,9 @@ void PostController::searchPosts(const HttpRequestPtr &req,
                 }
                 ret["posts"].append(post);
             }
-            callback(HttpResponse::newHttpJsonResponse(ret));
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag);
+            callback(resp);
         },
         [callback](const DrogonDbException& e) {
             LOG_ERROR << "DB Error (searchPosts): " << e.base().what();
@@ -219,7 +274,7 @@ void PostController::getPost(const HttpRequestPtr &req,
 
     dbClient->execSqlAsync(
         kSql,
-        [callback](const Result& r) {
+        [callback, req, postId](const Result& r) {
             if (r.empty()) {
                 Json::Value ret;
                 ret["error"] = "Post not found";
@@ -229,6 +284,20 @@ void PostController::getPost(const HttpRequestPtr &req,
                 return;
             }
             const auto& row = r[0];
+
+            // ETag derives from (id, updated_at). Anything that bumps
+            // updated_at (UPDATE trigger fires on every row write) gives
+            // the resource a new tag; comments/likes don't.
+            const std::string updatedAt = row["updated_at"].as<std::string>();
+            const std::string etag = http_cache::makeWeakEtag({
+                "post", std::to_string(postId),
+                std::to_string(http_cache::parseTimestampMicros(updatedAt)),
+            });
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag));
+                return;
+            }
+
             Json::Value ret;
             ret["id"]         = row["id"].as<int64_t>();
             ret["title"]      = row["title"].as<std::string>();
@@ -236,7 +305,7 @@ void PostController::getPost(const HttpRequestPtr &req,
             if (!row["content_html"].isNull())
                 ret["content_html"] = row["content_html"].as<std::string>();
             ret["created_at"] = row["created_at"].as<std::string>();
-            ret["updated_at"] = row["updated_at"].as<std::string>();
+            ret["updated_at"] = updatedAt;
 
             if (!row["author_id"].isNull()) {
                 ret["author"]["id"]       = row["author_id"].as<int64_t>();
@@ -246,7 +315,9 @@ void PostController::getPost(const HttpRequestPtr &req,
                     if (!img.empty()) ret["author"]["profile_image"] = img;
                 }
             }
-            callback(HttpResponse::newHttpJsonResponse(ret));
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag);
+            callback(resp);
         },
         [callback](const DrogonDbException& e) {
             LOG_ERROR << "DB Error (getPost): " << e.base().what();
@@ -478,9 +549,28 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
 
     try {
         auto posts = mapper.findBy(
-            Criteria(drogon_model::blog_db::Posts::Cols::_user_id, 
+            Criteria(drogon_model::blog_db::Posts::Cols::_user_id,
                     CompareOperator::EQ, userId)
         );
+
+        // ETag tracks (user_id, count, max(updated_at)). Adding /
+        // removing / editing one of this user's posts changes one of
+        // those three; other users' posts don't affect it.
+        std::int64_t maxTs = 0;
+        for (const auto& p : posts) {
+            const auto ts = http_cache::parseTimestampMicros(
+                                p.getValueOfUpdatedAt().toDbStringLocal());
+            if (ts > maxTs) maxTs = ts;
+        }
+        const std::string etag = http_cache::makeWeakEtag({
+            "user-posts", std::to_string(userId),
+            std::to_string(maxTs),
+            std::to_string(static_cast<int>(posts.size())),
+        });
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag));
+            return;
+        }
 
         Json::Value ret;
         ret["posts"] = Json::Value(Json::arrayValue);
@@ -495,6 +585,7 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
         }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        http_cache::applyCacheHeaders(resp, etag);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();
@@ -624,15 +715,28 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
 
     try {
         auto likes = mapper.findBy(
-            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
+            Criteria(drogon_model::blog_db::Likes::Cols::_post_id,
                     CompareOperator::EQ, postId)
         );
+
+        // ETag = (post_id, count). likes is just a join row that gets
+        // created/dropped by like/unlike — count is the entire payload,
+        // so any change yields a new ETag without further state.
+        const std::string etag = http_cache::makeWeakEtag({
+            "likes-count", std::to_string(postId),
+            std::to_string(likes.size()),
+        });
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag));
+            return;
+        }
 
         Json::Value ret;
         ret["post_id"] = postId;
         ret["likes_count"] = (int)likes.size();
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        http_cache::applyCacheHeaders(resp, etag);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

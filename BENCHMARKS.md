@@ -8,10 +8,10 @@ measured before / after on the same hardware against the same data.
 
 | Role | Host | CPU | RAM | OS |
 |---|---|---|---|---|
-| **App** (Drogon + Postgres + nginx) | OVH VPS `57.129.112.224` | 12 cores | 45 GiB | Ubuntu 25.04, kernel 6.14 |
-| **Load** (k6) | Hetzner VPS `81.181.166.237` | — | — | Ubuntu 24.04 |
+| **App** (Drogon + Postgres + nginx) | OVH VPS  | 12 cores | 45 GiB | Ubuntu 25.04, kernel 6.14 |
+| **Load** (k6) | Hetzner VPS  | — | — | Ubuntu 24.04 |
 
-The load host's `/etc/hosts` overrides `blog.micutu.com → 57.129.112.224`
+The load host's `/etc/hosts` overrides `blog.micutu.com`
 so traffic bypasses Cloudflare and reaches nginx on the origin directly
 — the goal is to measure the app and its TLS terminator, not the CDN.
 RTT bench → app: **30.4 ms** (3-packet ping average).
@@ -174,3 +174,90 @@ k6 run --vus 200 --duration 30s \
 
 Raw k6 JSON for both runs is checked in at
 `bench/results/origin-direct-{baseline,tuned}-20260524-200vu/`.
+
+## D17 follow-up: ETag / If-None-Match (conditional GETs)
+
+After the D16 tunings, the next ceiling on the cacheable GET endpoints
+is bandwidth — `feed_read` at the tuned baseline ships ~28 MB/s out of
+the origin while doing exactly the same query twice in a row. RFC 7232
+weak ETags let conformant clients (browsers, CDNs, mobile apps) ask
+"is this the same revision I already have?" and the server can answer
+with a header-only **304 Not Modified** instead of resending the body.
+
+`helpers/HttpCache.{h,cc}` provides the three primitives:
+`makeWeakEtag()` (FNV-1a over `value\x1f`-separated parts, hex-encoded),
+`ifNoneMatchHit()` (RFC 7232-compliant comma-split + W/-prefix strip),
+`applyCacheHeaders()` / `makeNotModified()`.
+
+Tags are derived deterministically from row metadata the client has
+already seen:
+
+| Endpoint            | ETag inputs                                                 |
+|---------------------|-------------------------------------------------------------|
+| `GET /posts/{id}`   | `(id, updated_at_micros)`                                   |
+| `GET /posts`        | `(max(updated_at), max(id), count, cursor, limit)` over page |
+| `GET /posts/search?q=…` | `(q, max(updated_at), count)` over matches              |
+| `GET /posts/user/{id}`  | `(user_id, max(updated_at), count)`                     |
+| `GET /posts/{id}/likes` | `(post_id, count)`                                      |
+
+Deterministic = stable across process restarts and across nodes, so
+intermediaries don't thrash whenever an upstream recycles. Weak (`W/"…"`)
+because `ts_headline` and JSON float reordering make us byte-noisy but
+semantically equivalent — exactly what weak ETags promise.
+
+Response headers on a 200:
+```
+ETag: W/"ced7d8926d165794"
+Cache-Control: public, max-age=0, must-revalidate
+```
+
+`max-age=0` keeps clients revalidating every navigation but allows
+back-button / prefetch reuse; `must-revalidate` prevents intermediate
+caches from serving stale content past expiry; `public` opts CDNs in.
+
+### Numbers (200 VUs, 30 s, origin-direct, post-D16-tuning baseline)
+
+| Scenario | Cold RPS | Warm RPS (304s) | Δ RPS | Cold MB/s | Warm MB/s | Bandwidth Δ |
+|---|---|---|---|---|---|---|
+| `feed_read`  | 3581 | **4978** | +39 % | 28.1 | **6.5** | **−77 %** |
+| `post_view`  | 5174 |   4945   | −4 %  | 8.4  |   6.4   | −24 % |
+| `search`     | 4490 |   4889   | +9 %  | 12.0 |   6.4   | −47 % |
+
+Why the spread:
+- **`feed_read`** is the same URL every time, so every warm VU re-hits
+  the same ETag — near-100 % hit rate. The list body is ~6 KiB; 304s
+  ship a few hundred header bytes.
+- **`post_view`** picks one of 25 ids at random per request — most VUs
+  see a given id only every ~25 iterations, so the cache hit rate is
+  low *and* the per-hit savings are small (single-post body is ~500 B).
+  The ETag check itself adds work on misses → slight regression on
+  RPS, modest bandwidth win.
+- **`search`** rotates 6 query strings — partial reuse. Hit rate is in
+  between, and the FTS body includes `ts_headline` snippets, so the
+  bandwidth win is meaningful.
+
+The headline is the **bandwidth** column: warm clients drop the
+sustained outbound from 28 MB/s to 6.5 MB/s on the most-served
+endpoint without us giving up correctness — the conditional check
+runs against fresh-from-DB data, so a write between two GETs always
+produces a different tag.
+
+### Why we *don't* short-circuit the DB query on cache hit
+
+Two-stage handlers (cheap `SELECT max(updated_at)` first, full query
+only on miss) would save DB cost on hits, but they double the query
+count on misses, and writes on conditional reads are the common case
+under low cache locality. The library route is also more complex —
+two control paths per handler. The current shape pays the full read
+cost every request and saves bandwidth only; we'd revisit the
+short-circuit when there's a clear stable-content endpoint with > 80 %
+hit rate. None today.
+
+### Coverage gaps
+
+`/posts/{id}/comments`, `/users/{id}`, and the auth-state endpoints
+(`/auth/me`, `/auth/2fa/status`) don't carry ETags yet. The first two
+fit the same pattern; the auth ones should grow `Vary: Cookie` first
+so a future Cloudflare-cached deployment doesn't serve one user's
+state to another. Not in this pass.
+

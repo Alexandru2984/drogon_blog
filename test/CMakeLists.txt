@@ -10,7 +10,8 @@ set(TEST_SOURCES
     test_security.cc
     test_image_pipeline.cc
     test_markdown.cc
-    test_2fa.cc)
+    test_2fa.cc
+    test_caching.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 
