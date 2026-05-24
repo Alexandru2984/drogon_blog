@@ -10,6 +10,7 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include <unistd.h>
 #include <unordered_set>
 
 namespace access_log {
@@ -84,8 +85,6 @@ const char* methodName(drogon::HttpMethod m)
         default:              return "?";
     }
 }
-
-std::mutex g_stdoutMu; // keep lines atomic across threads
 
 } // namespace
 
@@ -172,9 +171,19 @@ void install()
                 bytes,
                 jsonEscape(ip).c_str());
 
-            std::lock_guard<std::mutex> lk(g_stdoutMu);
-            std::fwrite(line, 1, n > 0 ? static_cast<std::size_t>(n) : 0, stdout);
-            std::fflush(stdout);
+            // One write() syscall per line. journald reads STDOUT_FILENO as a
+            // stream socket; writes ≤ PIPE_BUF (4096 B) — our lines max out
+            // around 1.3 KB — land atomically in the kernel buffer, so we
+            // don't need to bracket with a mutex any more. fwrite/fflush
+            // were the previous shape: two libc indirections + a separate
+            // flush syscall per request, plus a global lock that serialised
+            // every IO thread on the access path.
+            if (n > 0) {
+                // Return value intentionally unused: if journald disappears
+                // we drop the line rather than block the request path.
+                [[maybe_unused]] auto w =
+                    ::write(STDOUT_FILENO, line, static_cast<std::size_t>(n));
+            }
         });
 }
 
