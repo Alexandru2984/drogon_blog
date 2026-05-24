@@ -121,6 +121,46 @@ jobs:
             --error-exitcode=1 --quiet \
             controllers/ helpers/ main.cc
 
+  helm:
+    name: Helm chart (lint + template + kubeconform)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /tmp
+          sudo mv /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: helm lint
+        run: helm lint chart/drogon-blog
+
+      - name: Render & validate (defaults)
+        run: |
+          helm template ci chart/drogon-blog \
+            --set database.password=ci-only-not-real \
+            | kubeconform -summary -strict -ignore-missing-schemas \
+                          -kubernetes-version 1.30.0
+
+      - name: Render & validate (all opt-ins on)
+        # Covers the templates only emitted when their feature flag is
+        # set — otherwise lint / kubeconform never sees ingress.yaml,
+        # hpa.yaml, servicemonitor.yaml or the metrics secret.
+        run: |
+          helm template ci chart/drogon-blog \
+            --set database.password=ci-only-not-real \
+            --set ingress.enabled=true \
+            --set autoscaling.enabled=true \
+            --set app.metricsToken=ci-token \
+            --set metrics.serviceMonitor.enabled=true \
+            | kubeconform -summary -strict -ignore-missing-schemas \
+                          -kubernetes-version 1.30.0
+
   e2e:
     name: E2E (Playwright vs docker-compose)
     runs-on: ubuntu-24.04

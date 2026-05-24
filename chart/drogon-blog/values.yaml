@@ -1,0 +1,184 @@
+# Default values for drogon-blog.
+# Override per install with `-f my-values.yaml` or `--set key=value`.
+
+image:
+  repository: ghcr.io/alexandru2984/drogon-blog
+  # Override with an explicit immutable tag per deploy. `latest` is OK
+  # for dev clusters; production deploys should pin a digest or a tag.
+  tag: ""              # defaults to .Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Pod replicas. HPA (below) takes precedence when enabled.
+replicaCount: 2
+
+# Names. `nameOverride` swaps the chart name; `fullnameOverride`
+# replaces the whole release-prefixed name. Both empty → use the
+# release name + chart name combo from _helpers.tpl.
+nameOverride:     ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name:   ""
+  annotations: {}
+
+# ------------------------------------------------------------------
+# Database
+# ------------------------------------------------------------------
+# This chart assumes an EXTERNAL Postgres (managed RDS / CNPG / etc).
+# Wire your DB by setting `database.host` and either inlining the
+# password under `database.password` (it gets templated into a Secret)
+# or pointing `database.existingSecret` at one you manage yourself —
+# strongly preferred so a `helm get values` doesn't leak it.
+database:
+  host:     "postgres"
+  port:     5432
+  name:     "blog_db"
+  user:     "blog_user"
+  password: ""           # raw secret value — avoid in prod, use existingSecret
+  existingSecret:    ""  # name of a k8s Secret in the same namespace
+  existingSecretKey: "password"
+
+# ------------------------------------------------------------------
+# SMTP
+# ------------------------------------------------------------------
+# Leave server empty to disable real delivery (emails logged + dropped
+# by EmailHelper — useful for local clusters and CI runs).
+smtp:
+  server:    ""
+  username:  ""
+  password:  ""
+  fromEmail: "noreply@example.com"
+  fromName:  "Drogon Blog"
+  existingSecret:    ""    # if set, overrides .password
+  existingSecretKey: "smtp_password"
+
+# ------------------------------------------------------------------
+# Application config (BLOG_* env vars)
+# ------------------------------------------------------------------
+app:
+  # Origin used in WebAuthn RP id derivation, email links, CSRF
+  # SameSite enforcement. Must match how clients reach the app
+  # (typically the public ingress URL).
+  siteOrigin:    "https://blog.example.com"
+  siteName:     "Drogon Blog"
+  serviceName:  "drogon-blog"
+  # 1 → Set-Cookie ... Secure. Required when siteOrigin is https://.
+  secureCookies: true
+  # OTLP-style trace JSON on stderr (sampled). 0.0–1.0.
+  traceLog:        false
+  traceSampleRate: "0.0"
+  # WebAuthn RP id. Empty → derived from siteOrigin host. Override
+  # only when you need a parent domain RP id (apex covering subs).
+  webauthnRpId: ""
+  # Bypass per-IP token buckets on /auth/*. Only safe for benchmarks
+  # behind a closed network — never enable in production.
+  disableRateLimit: false
+  # Bearer token gating /metrics for off-loopback peers. When empty,
+  # /metrics returns 403 to any non-loopback client.
+  metricsToken: ""
+
+# ------------------------------------------------------------------
+# Service
+# ------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8092
+
+# ------------------------------------------------------------------
+# Ingress (off by default — chart works on a flat cluster without one)
+# ------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: blog.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: blog-tls
+  #   hosts: [blog.example.com]
+
+# ------------------------------------------------------------------
+# Resources
+# ------------------------------------------------------------------
+# The empty default lets the cluster auto-allocate; production should
+# always set both requests and limits. Numbers below are a reasonable
+# starting point for a small blog under burst load.
+resources: {}
+  # requests:
+  #   cpu:    "200m"
+  #   memory: "256Mi"
+  # limits:
+  #   cpu:    "1000m"
+  #   memory: "512Mi"
+
+# ------------------------------------------------------------------
+# Autoscaler
+# ------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# ------------------------------------------------------------------
+# Prometheus operator integration (ServiceMonitor)
+# ------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Bearer used by Prometheus when scraping /metrics. Should match
+    # app.metricsToken; if set here, a Secret holds it and SM uses
+    # bearerTokenSecret to inject. Leaving both empty makes /metrics
+    # loopback-only — pointless in a Service-routed cluster, so the
+    # SM template requires one of them.
+    bearerToken: ""
+
+# ------------------------------------------------------------------
+# Pod scheduling / hardening
+# ------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser:    1000
+  runAsGroup:   1000
+  fsGroup:      1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem:   false   # /app/uploads needs write
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations:  []
+affinity:     {}
+
+# ------------------------------------------------------------------
+# Probes (paths match Drogon's helpers/Ops.cc handlers)
+# ------------------------------------------------------------------
+probes:
+  liveness:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds:       20
+    timeoutSeconds:      3
+    failureThreshold:    3
+  readiness:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds:       10
+    timeoutSeconds:      3
+    failureThreshold:    3

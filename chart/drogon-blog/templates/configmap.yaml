@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "drogon-blog.fullname" . }}-env
+  labels: {{- include "drogon-blog.labels" . | nindent 4 }}
+data:
+  # Database non-secret connection info. The password is injected
+  # separately via envFrom secretRef so it never lands in a ConfigMap.
+  DB_HOST: {{ .Values.database.host | quote }}
+  DB_PORT: {{ .Values.database.port | quote }}
+  DB_NAME: {{ .Values.database.name | quote }}
+  DB_USER: {{ .Values.database.user | quote }}
+
+  # SMTP non-secret config. Empty SMTP_SERVER disables real delivery,
+  # which is the safe default for clusters that haven't been wired
+  # to an outbound relay.
+  SMTP_SERVER:     {{ .Values.smtp.server     | quote }}
+  SMTP_USERNAME:   {{ .Values.smtp.username   | quote }}
+  SMTP_FROM_EMAIL: {{ .Values.smtp.fromEmail  | quote }}
+  SMTP_FROM_NAME:  {{ .Values.smtp.fromName   | quote }}
+
+  # App config.
+  BLOG_SITE_ORIGIN:   {{ .Values.app.siteOrigin   | quote }}
+  BLOG_SITE_NAME:     {{ .Values.app.siteName     | quote }}
+  BLOG_SERVICE_NAME:  {{ .Values.app.serviceName  | quote }}
+  BLOG_SECURE_COOKIES: {{ ternary "1" "0" .Values.app.secureCookies | quote }}
+  BLOG_TRACE_LOG:      {{ ternary "1" "0" .Values.app.traceLog      | quote }}
+  BLOG_TRACE_SAMPLE_RATE: {{ .Values.app.traceSampleRate | quote }}
+  {{- with .Values.app.webauthnRpId }}
+  BLOG_WEBAUTHN_RP_ID: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.app.disableRateLimit }}
+  BLOG_DISABLE_RATE_LIMIT: "1"
+  {{- end }}

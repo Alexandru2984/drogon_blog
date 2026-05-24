@@ -1,0 +1,42 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- if not (or .Values.metrics.serviceMonitor.bearerToken .Values.app.metricsToken) -}}
+{{- fail "metrics.serviceMonitor.enabled requires app.metricsToken (or metrics.serviceMonitor.bearerToken) so Prometheus can authenticate against /metrics" -}}
+{{- end -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "drogon-blog.fullname" . }}
+  labels: {{- include "drogon-blog.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "drogon-blog.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval:      {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+      authorization:
+        type:  Bearer
+        credentials:
+          # Reuse the same Secret the app reads METRICS_TOKEN from so
+          # rotating the token affects both sides of the handshake at
+          # once. Falls back to a SM-only token only if the operator
+          # really wants Prometheus to scrape with a different key.
+          name: {{ if .Values.app.metricsToken -}}
+                  {{ include "drogon-blog.fullname" . }}-metrics
+                {{- else -}}
+                  {{ include "drogon-blog.fullname" . }}-sm-bearer
+                {{- end }}
+          key: METRICS_TOKEN
+---
+{{- if and (not .Values.app.metricsToken) .Values.metrics.serviceMonitor.bearerToken }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "drogon-blog.fullname" . }}-sm-bearer
+  labels: {{- include "drogon-blog.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  METRICS_TOKEN: {{ .Values.metrics.serviceMonitor.bearerToken | quote }}
+{{- end }}
+{{- end }}

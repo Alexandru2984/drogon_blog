@@ -22,6 +22,7 @@ A full-stack blog platform built around a modern C++ HTTP backend and a Vue 3 SP
 - **Two-factor authentication** — TOTP (RFC 6238) implemented from scratch on libsodium + OpenSSL HMAC, WebAuthn passkeys (FIDO2 with ES256 + EdDSA), and Argon2id-hashed single-use recovery codes. Two-step login flow gates the session on a fresh factor even after a correct password. See [`SECURITY.md`](SECURITY.md).
 - **Conditional GETs** — every cacheable `/posts*` endpoint emits a weak `ETag` derived from `(max(updated_at), count, query keys)` and honours `If-None-Match` with a header-only `304 Not Modified`. Cuts outbound bandwidth on the `/posts` feed by ~77 % for warm clients with no correctness regression (writes always change the tag). See [`BENCHMARKS.md`](BENCHMARKS.md).
 - **Multi-arch Docker image** — `linux/amd64` + `linux/arm64`. Drogon (1.9.13, pinned) is built from source in its own stage on a multi-arch Ubuntu 22.04 base, so the whole image is portable to ARM hosts (Hetzner CAX, Oracle Free Tier ARM, Raspberry Pi 4/5). CI builds both arches on native runners.
+- **Helm chart** — under [`chart/drogon-blog`](chart/drogon-blog/), with optional Ingress / HPA / Prometheus ServiceMonitor templates, hardened pod security context, and `existingSecret` paths for DB / SMTP / metrics token so secrets never round-trip through `helm get values`. CI runs `helm lint` + `helm template | kubeconform` twice (defaults + every opt-in feature on) on every change.
 
 ## Architecture
 

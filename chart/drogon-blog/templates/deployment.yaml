@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "drogon-blog.fullname" . }}
+  labels: {{- include "drogon-blog.labels" . | nindent 4 }}
+spec:
+  # HPA-managed: omit replicas when autoscaling is on, so HPA can take
+  # ownership without the helm upgrade fighting it.
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0
+  selector:
+    matchLabels: {{- include "drogon-blog.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "drogon-blog.labels" . | nindent 8 }}
+      annotations:
+        # Force pod rotation whenever the env config changes — helm
+        # otherwise keeps the same pod template hash and the change
+        # doesn't propagate until you bounce the deployment manually.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml")    . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "drogon-blog.serviceAccountName" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: blog
+          image: {{ include "drogon-blog.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8092
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "drogon-blog.fullname" . }}-env
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "drogon-blog.dbSecretName" . }}
+                  key:  {{ include "drogon-blog.dbSecretKey"  . }}
+            {{- if or .Values.smtp.existingSecret .Values.smtp.password }}
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "drogon-blog.smtpSecretName" . }}
+                  key:  {{ include "drogon-blog.smtpSecretKey"  . }}
+            {{- end }}
+            {{- if .Values.app.metricsToken }}
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "drogon-blog.fullname" . }}-metrics
+                  key:  METRICS_TOKEN
+            {{- end }}
+          # /uploads is the only writable path the app needs; mount an
+          # emptyDir there so the rest of the filesystem can be made
+          # read-only when the user opts in via containerSecurityContext.
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+          livenessProbe:  {{- toYaml .Values.probes.liveness  | nindent 12 }}
+          readinessProbe: {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      volumes:
+        - name: uploads
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

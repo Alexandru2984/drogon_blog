@@ -1,0 +1,31 @@
+Drogon blog installed as release: {{ .Release.Name }}
+
+Reach the app:
+{{- if .Values.ingress.enabled }}
+  {{- range .Values.ingress.hosts }}
+    http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+  {{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  Watch the service until an EXTERNAL-IP appears:
+    kubectl -n {{ .Release.Namespace }} get svc -w {{ include "drogon-blog.fullname" . }}
+{{- else }}
+  Inside the cluster:
+    {{ include "drogon-blog.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+  Port-forward for local inspection:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "drogon-blog.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+{{- end }}
+
+Health probes (resolved server-side, no auth required):
+  GET /healthz   liveness
+  GET /readyz    readiness — fails closed when the DB pool is degraded
+
+{{- if .Values.app.metricsToken }}
+Metrics:
+  curl -H 'Authorization: Bearer <metricsToken>' \
+    http://<host>:{{ .Values.service.port }}/metrics
+{{- else }}
+Metrics:
+  /metrics is loopback-only without app.metricsToken — set it on upgrade
+  to expose the Prometheus scrape endpoint to in-cluster Prometheus.
+{{- end }}

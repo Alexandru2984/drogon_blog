@@ -1,0 +1,24 @@
+apiVersion: v2
+name: drogon-blog
+description: |
+  Drogon (C++20) blog with PostgreSQL backend, Argon2id auth, TOTP +
+  WebAuthn 2FA, weak-ETag conditional GETs and OTLP-shaped tracing.
+  Image is multi-arch (linux/amd64, linux/arm64).
+type: application
+# version: chart version — bump on any template change.
+# appVersion: image tag this chart was tested against; values.image.tag
+#             overrides per-install. Quoted because SemVer-ish strings
+#             starting with a digit can be parsed as numbers otherwise.
+version:    0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0"
+home: https://github.com/Alexandru2984/drogon_blog
+sources:
+  - https://github.com/Alexandru2984/drogon_blog
+keywords:
+  - drogon
+  - cpp
+  - postgresql
+  - blog
+maintainers:
+  - name: micu
