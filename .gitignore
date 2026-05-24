@@ -600,3 +600,6 @@ e2e/test-results/
 # Bench artifacts
 bench/results/
 bench/seed.json
+
+# Personal backlog — kept local, not part of the project surface.
+TODO.md
