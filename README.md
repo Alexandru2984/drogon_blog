@@ -21,6 +21,7 @@ A full-stack blog platform built around a modern C++ HTTP backend and a Vue 3 SP
 - **Vue 3 SPA** (TypeScript, Pinia, Vue Router in hash mode, Axios) built by Vite directly into Drogon's `document_root`.
 - **Two-factor authentication** — TOTP (RFC 6238) implemented from scratch on libsodium + OpenSSL HMAC, WebAuthn passkeys (FIDO2 with ES256 + EdDSA), and Argon2id-hashed single-use recovery codes. Two-step login flow gates the session on a fresh factor even after a correct password. See [`SECURITY.md`](SECURITY.md).
 - **Conditional GETs** — every cacheable `/posts*` endpoint emits a weak `ETag` derived from `(max(updated_at), count, query keys)` and honours `If-None-Match` with a header-only `304 Not Modified`. Cuts outbound bandwidth on the `/posts` feed by ~77 % for warm clients with no correctness regression (writes always change the tag). See [`BENCHMARKS.md`](BENCHMARKS.md).
+- **Multi-arch Docker image** — `linux/amd64` + `linux/arm64`. Drogon (1.9.13, pinned) is built from source in its own stage on a multi-arch Ubuntu 22.04 base, so the whole image is portable to ARM hosts (Hetzner CAX, Oracle Free Tier ARM, Raspberry Pi 4/5). CI builds both arches on native runners.
 
 ## Architecture
 
