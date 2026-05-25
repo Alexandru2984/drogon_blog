@@ -113,6 +113,29 @@ redis:
   url: ""   # e.g. "redis://blog-redis:6379" or "unix:///var/run/redis.sock"
 
 # ------------------------------------------------------------------
+# Sentry / Glitchtip (optional, error tracking)
+# ------------------------------------------------------------------
+# Backend (`dsn`): consumed by helpers/Sentry as BLOG_SENTRY_DSN.
+# When a request errors out (5xx), a single fire-and-forget POST to
+# the legacy `/api/<project>/store/` ingest endpoint ships request
+# context (route, method, status, request-id, trace-id). No stack
+# traces — the backend doesn't carry exception-aware instrumentation,
+# and shipping bodies would risk PII / credential leaks.
+#
+# Frontend (`frontendDsn`): if you also want browser-side errors
+# captured, pass this DSN as VITE_SENTRY_DSN at FRONTEND BUILD TIME
+# (not runtime — Vite inlines env vars at build). The Helm chart
+# only surfaces it for documentation; baking it into a runtime
+# config requires a small bootstrap shim that's intentionally out
+# of scope for this chart.
+#
+# Both DSNs are inert when empty. Glitchtip works with the same
+# format and the same endpoints.
+sentry:
+  dsn:         ""   # backend, e.g. https://abc@o123.ingest.sentry.io/42
+  frontendDsn: ""   # build-time pass-through for the SPA
+
+# ------------------------------------------------------------------
 # SMTP
 # ------------------------------------------------------------------
 # Leave server empty to disable real delivery (emails logged + dropped

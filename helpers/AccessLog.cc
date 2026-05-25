@@ -1,6 +1,7 @@
 #include "AccessLog.h"
 #include "Metrics.h"
 #include "Security.h"
+#include "Sentry.h"
 #include "Tracing.h"
 
 #include <drogon/drogon.h>
@@ -198,6 +199,16 @@ void install()
                 // we drop the line rather than block the request path.
                 [[maybe_unused]] auto w =
                     ::write(STDOUT_FILENO, line, static_cast<std::size_t>(n));
+            }
+
+            // Escalate server errors to Sentry. 4xx is client-driven
+            // and would drown the dashboard; 5xx is on us. fire-and-
+            // forget — sentry::captureRequestError is a no-op when
+            // BLOG_SENTRY_DSN is unset.
+            if (status >= 500) {
+                sentry::captureRequestError(
+                    req, resp, sentry::Level::Error,
+                    method + " " + route + " → " + std::to_string(status));
             }
         });
 }

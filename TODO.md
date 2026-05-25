@@ -78,4 +78,8 @@ not deadline. Strike through when shipped.
       across pods. Optional (CMake gates on libhiredis-dev;
       `BLOG_REDIS_URL` env opt-in at runtime).
 - [ ] A/B testing flag system.
-- [ ] Sentry / error tracking integration.
+- [x] Sentry / error tracking — `helpers/Sentry` ships a minimal
+      HTTP-based ingest client (no sentry-native dep); AccessLog
+      fires capture on 5xx with request context. Frontend uses
+      `@sentry/vue` gated on `VITE_SENTRY_DSN`. Helm chart exposes
+      `sentry.dsn` (backend) + `sentry.frontendDsn`.

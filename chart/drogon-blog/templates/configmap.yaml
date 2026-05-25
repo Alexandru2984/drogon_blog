@@ -37,3 +37,6 @@ data:
   {{- with .Values.redis.url }}
   BLOG_REDIS_URL: {{ . | quote }}
   {{- end }}
+  {{- with .Values.sentry.dsn }}
+  BLOG_SENTRY_DSN: {{ . | quote }}
+  {{- end }}
