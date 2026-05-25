@@ -308,12 +308,20 @@ jobs:
         run: |
           # BLOG_DISABLE_RATE_LIMIT short-circuits the per-IP register / login
           # budget so Playwright can mint a fresh user per spec without 429.
+          #
+          # The DB is also exposed on host port 55432 so the password-reset
+          # spec can plant a known reset token directly (the SHA-256 in DB
+          # is one-way and EmailHelper isn't wired in CI). Same channel
+          # used by the WS spec to look up Bob's user id.
           cat > docker-compose.e2e.yml <<'EOF'
           services:
             app:
               environment:
                 BLOG_DISABLE_RATE_LIMIT: "1"
                 BLOG_SITE_ORIGIN:        "http://127.0.0.1:8092"
+            db:
+              ports:
+                - "55432:5432"
           EOF
           DB_PASSWORD=e2e_db_password \
             docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
@@ -334,7 +342,12 @@ jobs:
       - name: Run Playwright
         working-directory: e2e
         env:
-          E2E_BASE_URL: http://127.0.0.1:8092
+          E2E_BASE_URL:    http://127.0.0.1:8092
+          E2E_DB_HOST:     127.0.0.1
+          E2E_DB_PORT:     "55432"
+          E2E_DB_USER:     blog_user
+          E2E_DB_PASSWORD: e2e_db_password
+          E2E_DB_NAME:     blog_db
         run: npm test
 
       - name: Upload report on failure

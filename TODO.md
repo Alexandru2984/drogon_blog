@@ -17,10 +17,11 @@ not deadline. Strike through when shipped.
 
 ## Tests
 
-- [ ] **E2E expansion** (`e2e/`): TOTP enroll + login, recovery code,
-      WebAuthn cycle with Playwright's virtual authenticator,
-      password-reset full flow, messaging WebSocket bidirectional.
-      Currently smoke-only.
+- [x] **E2E expansion** (`e2e/`): 4 new spec files covering TOTP
+      enrol + login + recovery, WebAuthn with virtual authenticator,
+      password reset via DB-planted token, messaging WebSocket
+      bidirectional with two browser contexts. CI wires DB port
+      55432 through docker-compose.e2e.yml.
 - [ ] **Perf regression guard in CI** — k6 with thresholds on loopback
       (e.g. `p95 < 50 ms`, `RPS > 4000` for `feed_read`). Defends the
       D16 / D17 numbers from silent regression.
@@ -44,9 +45,9 @@ not deadline. Strike through when shipped.
 
 - [ ] **i18n SPA** with vue-i18n (RO / EN switcher).
 - [ ] **Storybook** for the Vue components in isolation.
-- [ ] **ETag on `/comments`, `/users/{id}`, `/auth/me`** — last one
-      requires `Vary: Cookie` first so a future Cloudflare cache
-      doesn't serve one user's state to another.
+- [x] **ETag on `/comments`, `/users/{id}`, `/auth/me`** — done.
+      `/auth/me` emits `Vary: Cookie` + `private` cache-control;
+      migration 0005 added `comments.updated_at` for cache keying.
 - [ ] **`Link` headers** (RFC 5988) for cursor pagination on `/posts`
       so generic clients don't have to crack open the JSON to follow
       `next_cursor`.
