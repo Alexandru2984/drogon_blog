@@ -75,7 +75,12 @@ not deadline. Strike through when shipped.
 
 ## Stretch (probably overkill)
 
-- [ ] gRPC API surface in parallel with REST.
+- [x] gRPC API surface — read-only `BlogReader` service
+      (`GetPost`, `ListPosts`) on a second port. proto3 spec in
+      `proto/blog.proto`, CMake codegen via protoc + grpc_cpp_plugin
+      (gated on libgrpc++-dev). Listens via Drogon's sync DB pool
+      from a dedicated thread. Helm chart exposes `grpc.enabled`
+      + `grpc.port`. Mutating ops stay on REST.
 - [x] WebSocket Redis adapter — `helpers/Presence` (libhiredis sync
       client) tracks online users in a shared Redis: SETEX
       `user:N:online` on WS connect, DEL on last-connection close,

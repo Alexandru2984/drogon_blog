@@ -10,6 +10,7 @@
 #include "helpers/PgListener.h"
 #include "helpers/Presence.h"
 #include "helpers/Sentry.h"
+#include "helpers/GrpcServer.h"
 #include "helpers/PublicPages.h"
 #include "helpers/Security.h"
 #include "controllers/MessageWebSocket.h"
@@ -146,6 +147,7 @@ int main()
     EmailHelper::start();
     presence::install();
     sentry::install();
+    rpc::install();
 
     // Cross-process WebSocket fan-out: a dedicated libpq connection LISTENs
     // on `blog_event` and routes every notification into the in-process
@@ -181,6 +183,7 @@ int main()
         EmailHelper::stop();
         presence::stop();
         sentry::stop();
+        rpc::stop();
         image::shutdownLibrary();
     });
 

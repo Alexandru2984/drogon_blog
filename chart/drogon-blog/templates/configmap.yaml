@@ -40,3 +40,6 @@ data:
   {{- with .Values.sentry.dsn }}
   BLOG_SENTRY_DSN: {{ . | quote }}
   {{- end }}
+  {{- if .Values.grpc.enabled }}
+  BLOG_GRPC_PORT: {{ .Values.grpc.port | quote }}
+  {{- end }}

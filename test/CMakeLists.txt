@@ -21,6 +21,13 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../controllers TEST_CTL_SRC)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../helpers     TEST_HELPER_SRC)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../models      TEST_MODEL_SRC)
 
+# Strip the gRPC bridge sources from the test build — the tests don't
+# exercise the gRPC surface (the REST controllers cover the same DB
+# code paths) and pulling them in would require teaching this CMake
+# about the protoc codegen step. Easier to keep the test target
+# pure-REST.
+list(FILTER TEST_HELPER_SRC EXCLUDE REGEX "/GrpcServer\\.cc$")
+
 target_sources(${PROJECT_NAME} PRIVATE
     ${TEST_CTL_SRC}
     ${TEST_HELPER_SRC}

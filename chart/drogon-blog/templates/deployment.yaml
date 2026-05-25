@@ -39,6 +39,11 @@ spec:
             - name: http
               containerPort: 8092
               protocol: TCP
+            {{- if .Values.grpc.enabled }}
+            - name: grpc
+              containerPort: {{ .Values.grpc.port }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "drogon-blog.fullname" . }}-env

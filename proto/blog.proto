@@ -1,0 +1,65 @@
+// Drogon Blog — read-only gRPC surface.
+//
+// Why a separate, narrow service: the REST surface is the contract
+// for browsers + the OpenAPI consumers. gRPC ships alongside as an
+// efficient binary alternative for service-to-service callers
+// (analytics, mirrors, future feeds). Starting read-only keeps the
+// blast radius bounded — no write paths means no need to plumb auth
+// + CSRF + rate-limit + audit log a second time. Auth-gated writes
+// stay on REST until there's a demonstrated need to migrate them.
+//
+// Package + go-style "blog.v1" naming so a future v2 can land
+// without breaking generated clients.
+
+syntax = "proto3";
+
+package blog.v1;
+
+// Public author fields, mirrored from REST's `PostAuthor`. Profile
+// image URL omitted when the user never uploaded one — proto3 nulls
+// the field, which is the right shape for a "may be empty" field.
+message PostAuthor {
+  int32  id            = 1;
+  string username      = 2;
+  string profile_image = 3;
+}
+
+// Same shape as the REST `Post`. Timestamps are ISO 8601 strings to
+// match the REST contract — a proto-native Timestamp would force
+// clients to translate between two timestamp encodings depending on
+// which channel they used.
+message Post {
+  int32      id           = 1;
+  string     title        = 2;
+  string     content      = 3;
+  string     content_html = 4;
+  string     created_at   = 5;
+  string     updated_at   = 6;
+  PostAuthor author       = 7;
+}
+
+message GetPostRequest {
+  int32 id = 1;
+}
+
+message ListPostsRequest {
+  // Cursor pagination — pass back `next_cursor` from the previous
+  // page. 0 / unset means "first page".
+  int32 cursor = 1;
+  // Defaults to 20 server-side when 0; capped at 50 to match the
+  // REST endpoint's clampLimit().
+  int32 limit  = 2;
+}
+
+message ListPostsResponse {
+  repeated Post posts        = 1;
+  // 0 when there are no further pages — proto3 doesn't have nullable
+  // primitives, so the client treats 0 as the same end-of-feed
+  // signal the REST surface communicates via JSON null.
+  int32         next_cursor  = 2;
+}
+
+service BlogReader {
+  rpc GetPost   (GetPostRequest)   returns (Post);
+  rpc ListPosts (ListPostsRequest) returns (ListPostsResponse);
+}

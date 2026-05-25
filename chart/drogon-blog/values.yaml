@@ -136,6 +136,22 @@ sentry:
   frontendDsn: ""   # build-time pass-through for the SPA
 
 # ------------------------------------------------------------------
+# gRPC server (optional, read-only)
+# ------------------------------------------------------------------
+# Bolts a BlogReader gRPC service onto a second port alongside the
+# REST listener. Read-only by design (GetPost, ListPosts) so we don't
+# duplicate the auth + CSRF + rate-limit plumbing onto a second
+# surface; mutating ops stay on REST.
+#
+# Build-time gate: the binary needs to be linked with libgrpc++-dev +
+# protobuf-compiler[-grpc] (the Dockerfile installs both; bare-metal
+# builds may not). When unavailable, BLOG_GRPC_PORT is ignored and
+# helpers/GrpcServer compiles to a stub.
+grpc:
+  enabled: false
+  port:    8093
+
+# ------------------------------------------------------------------
 # SMTP
 # ------------------------------------------------------------------
 # Leave server empty to disable real delivery (emails logged + dropped

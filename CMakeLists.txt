@@ -52,6 +52,22 @@ if (HIREDIS_FOUND)
 else ()
     message(STATUS "Redis presence tracker: disabled (libhiredis-dev not found)")
 endif ()
+
+# gRPC — also optional. When grpc++ + protobuf + the codegen tools
+# are present, we compile a parallel read-only gRPC server. Off →
+# helpers/GrpcServer.cc is a stub and the binary still ships.
+pkg_check_modules(GRPCPP     QUIET     grpc++)
+pkg_check_modules(PROTOBUF   QUIET     protobuf)
+find_program(PROTOC_BIN          NAMES protoc)
+find_program(GRPC_CPP_PLUGIN_BIN NAMES grpc_cpp_plugin)
+if (GRPCPP_FOUND AND PROTOBUF_FOUND AND PROTOC_BIN AND GRPC_CPP_PLUGIN_BIN)
+    add_compile_definitions(BLOG_HAS_GRPC=1)
+    message(STATUS "gRPC server: ENABLED (grpc++ ${GRPCPP_VERSION}, protobuf ${PROTOBUF_VERSION})")
+    set(BLOG_GRPC_AVAILABLE TRUE)
+else ()
+    message(STATUS "gRPC server: disabled (need libgrpc++-dev + protobuf-compiler[-grpc])")
+    set(BLOG_GRPC_AVAILABLE FALSE)
+endif ()
 # cmark-gfm-extensions ships without a .pc file in Debian/Ubuntu; we link
 # it explicitly so the GFM extensions registry (tables, autolink, …)
 # resolves at load time.
@@ -60,13 +76,18 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${VIPS_CPP_INCLUDE_DIRS}
     ${CMARK_GFM_INCLUDE_DIRS}
     ${LIBPQ_INCLUDE_DIRS}
-    ${HIREDIS_INCLUDE_DIRS})
+    ${HIREDIS_INCLUDE_DIRS}
+    ${GRPCPP_INCLUDE_DIRS}
+    ${PROTOBUF_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_BINARY_DIR}/proto)
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
     ${VIPS_CPP_LIBRARY_DIRS}
     ${CMARK_GFM_LIBRARY_DIRS}
     ${LIBPQ_LIBRARY_DIRS}
-    ${HIREDIS_LIBRARY_DIRS})
+    ${HIREDIS_LIBRARY_DIRS}
+    ${GRPCPP_LIBRARY_DIRS}
+    ${PROTOBUF_LIBRARY_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     CURL::libcurl
@@ -77,6 +98,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     cmark-gfm-extensions
     ${LIBPQ_LIBRARIES}
     ${HIREDIS_LIBRARIES}
+    ${GRPCPP_LIBRARIES}
+    ${PROTOBUF_LIBRARIES}
     brotlidec brotlienc)
 
 # ##############################################################################
@@ -94,6 +117,36 @@ aux_source_directory(filters FILTER_SRC)
 aux_source_directory(plugins PLUGIN_SRC)
 aux_source_directory(models MODEL_SRC)
 aux_source_directory(helpers HELPER_SRC)
+
+# gRPC stub generation. The .proto file gets compiled into 4 sources
+# in the build directory (blog.pb.{h,cc} from protoc, blog.grpc.pb.{h,cc}
+# from grpc_cpp_plugin). We then add them to the target's source list
+# alongside the hand-written service implementation under
+# controllers/grpc/. Skipped silently when BLOG_HAS_GRPC is off.
+set(BLOG_GRPC_SRC "")
+if (BLOG_GRPC_AVAILABLE)
+    set(_proto_in  ${CMAKE_CURRENT_SOURCE_DIR}/proto/blog.proto)
+    set(_proto_out ${CMAKE_CURRENT_BINARY_DIR}/proto)
+    file(MAKE_DIRECTORY ${_proto_out})
+    set(_gen_files
+        ${_proto_out}/blog.pb.cc        ${_proto_out}/blog.pb.h
+        ${_proto_out}/blog.grpc.pb.cc   ${_proto_out}/blog.grpc.pb.h)
+    add_custom_command(
+        OUTPUT  ${_gen_files}
+        COMMAND ${PROTOC_BIN}
+                --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+                --cpp_out=${_proto_out}
+                --grpc_out=${_proto_out}
+                --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN_BIN}
+                ${_proto_in}
+        DEPENDS ${_proto_in}
+        COMMENT "protoc + grpc_cpp_plugin -> blog.{pb,grpc.pb}.cc")
+    aux_source_directory(controllers/grpc GRPC_SVC_SRC)
+    list(APPEND BLOG_GRPC_SRC
+        ${_proto_out}/blog.pb.cc
+        ${_proto_out}/blog.grpc.pb.cc
+        ${GRPC_SVC_SRC})
+endif ()
 
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
@@ -115,7 +168,8 @@ target_sources(${PROJECT_NAME}
                ${FILTER_SRC}
                ${PLUGIN_SRC}
                ${MODEL_SRC}
-               ${HELPER_SRC})
+               ${HELPER_SRC}
+               ${BLOG_GRPC_SRC})
 # ##############################################################################
 # uncomment the following line for dynamically loading views 
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)
