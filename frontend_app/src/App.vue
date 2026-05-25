@@ -5,6 +5,7 @@ import { useRouter, RouterView } from 'vue-router'
 import { useAuthStore }     from '@/stores/auth'
 import { useToastStore }    from '@/stores/toast'
 import { useMessagesStore } from '@/stores/messages'
+import ToastList            from '@/components/ToastList.vue'
 
 const auth     = useAuthStore()
 const { user, isAuthed } = storeToRefs(auth)
@@ -90,5 +91,5 @@ watch(isAuthed, (now, prev) => {
     <a href="https://drogon.org" target="_blank" rel="noopener">Drogon</a>
   </footer>
 
-  <div v-for="t in toasts.items" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
+  <ToastList :items="toasts.items" />
 </template>

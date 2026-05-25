@@ -86,6 +86,19 @@ jobs:
       - name: Build (typecheck + bundle)
         run: npm run build
 
+      - name: Build Storybook
+        # Storybook 10 + Vue3 + Vite reuses the project's vite.config.ts.
+        # `npm ci` above already pulled `storybook` + `@storybook/vue3-vite`,
+        # so this is a pure build step — no extra install.
+        run: npm run build-storybook
+
+      - name: Upload Storybook static
+        uses: actions/upload-artifact@v7
+        with:
+          name: storybook-static
+          path: frontend_app/storybook-static/
+          retention-days: 14
+
   static-analysis:
     name: Static analysis (clang-tidy + cppcheck)
     runs-on: ubuntu-24.04

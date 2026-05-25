@@ -50,7 +50,10 @@ not deadline. Strike through when shipped.
 ## Feature gaps
 
 - [ ] **i18n SPA** with vue-i18n (RO / EN switcher).
-- [ ] **Storybook** for the Vue components in isolation.
+- [x] **Storybook** — Storybook 10 + Vue3 + Vite. Stories for
+      `PostCard`, `ToastList`, `Avatar` (the last two extracted out
+      of inline templates). Frontend CI runs `build-storybook` and
+      uploads the static bundle as artifact.
 - [x] **ETag on `/comments`, `/users/{id}`, `/auth/me`** — done.
       `/auth/me` emits `Vary: Cookie` + `private` cache-control;
       migration 0005 added `comments.updated_at` for cache keying.
