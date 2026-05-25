@@ -119,24 +119,39 @@ bool ifNoneMatchHit(const drogon::HttpRequestPtr& req, std::string_view etag)
 
 void applyCacheHeaders(const drogon::HttpResponsePtr& resp,
                        std::string_view etag,
-                       int maxAgeSeconds)
+                       int maxAgeSeconds,
+                       std::string_view varyHeader)
 {
     resp->addHeader("ETag", std::string(etag));
 
     // public  → intermediaries (Cloudflare, nginx proxy_cache) may store
     // max-age=N → freshness window before the next revalidation
     // must-revalidate → after expiry, a cache must re-check, not serve stale
-    char buf[80];
+    //
+    // For per-user responses we downgrade `public` to `private` to keep
+    // shared caches from holding the body at all — the Vary alone is
+    // belt-and-braces but a misconfigured intermediary that ignores it
+    // would otherwise be a privacy leak.
+    const bool perUser = !varyHeader.empty();
+    char buf[96];
     std::snprintf(buf, sizeof(buf),
-        "public, max-age=%d, must-revalidate", maxAgeSeconds);
+        "%s, max-age=%d, must-revalidate",
+        perUser ? "private" : "public",
+        maxAgeSeconds);
     resp->addHeader("Cache-Control", buf);
+
+    if (!varyHeader.empty()) {
+        resp->addHeader("Vary", std::string(varyHeader));
+    }
 }
 
-drogon::HttpResponsePtr makeNotModified(std::string_view etag, int maxAgeSeconds)
+drogon::HttpResponsePtr makeNotModified(std::string_view etag,
+                                        int maxAgeSeconds,
+                                        std::string_view varyHeader)
 {
     auto r = drogon::HttpResponse::newHttpResponse();
     r->setStatusCode(drogon::k304NotModified);
-    applyCacheHeaders(r, etag, maxAgeSeconds);
+    applyCacheHeaders(r, etag, maxAgeSeconds, varyHeader);
     return r;
 }
 

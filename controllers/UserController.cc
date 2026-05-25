@@ -2,6 +2,7 @@
 #include "../models/Users.h"
 #include "../helpers/AuditLog.h"
 #include "../helpers/EmailHelper.h"
+#include "../helpers/HttpCache.h"
 #include "../helpers/ImageProcessor.h"
 #include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
@@ -24,18 +25,32 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
     try {
         auto user = mapper.findByPrimaryKey(userId);
 
+        // Public profile — same data for every viewer, so ETag is keyed
+        // only on (id, updated_at) and no Vary is needed. updated_at
+        // moves on every profile mutation via the BEFORE-UPDATE trigger.
+        const std::string etag = http_cache::makeWeakEtag({
+            std::to_string(user.getValueOfId()),
+            std::to_string(http_cache::parseTimestampMicros(
+                user.getValueOfUpdatedAt().toDbStringLocal())),
+        });
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag));
+            return;
+        }
+
         Json::Value ret;
         ret["id"] = user.getValueOfId();
         ret["username"] = user.getValueOfUsername();
         ret["email"] = user.getValueOfEmail();
         ret["bio"] = user.getValueOfBio();
         ret["created_at"] = user.getValueOfCreatedAt().toDbStringLocal();
-        
+
         if (!user.getValueOfProfileImage().empty()) {
             ret["profile_image"] = user.getValueOfProfileImage();
         }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        http_cache::applyCacheHeaders(resp, etag);
         callback(resp);
     } catch (const DrogonDbException &e) {
         Json::Value ret;

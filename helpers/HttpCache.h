@@ -60,13 +60,22 @@ bool ifNoneMatchHit(const drogon::HttpRequestPtr& req, std::string_view etag);
 // keeps clients revalidating on every navigation but lets them serve
 // from local cache on the same page (back-button, prefetch). Bump it
 // only for resources that genuinely tolerate stale reads.
+//
+// `varyHeader`, when non-empty, is emitted as a `Vary:` header — set
+// to "Cookie" on per-session responses (e.g. /auth/me) so an upstream
+// CDN keys its cache by Cookie and can't serve one user's identity
+// to another. Multiple values can be comma-joined ("Cookie, Accept").
 void applyCacheHeaders(const drogon::HttpResponsePtr& resp,
                        std::string_view etag,
-                       int maxAgeSeconds = 0);
+                       int maxAgeSeconds = 0,
+                       std::string_view varyHeader = {});
 
 // Build the canonical RFC 7232 304. Empty body, ETag echoed back,
 // Cache-Control included so revalidation behaviour matches a 200.
+// `varyHeader` is mirrored from the 200 response so caches keep the
+// same cache-key semantics on revalidation.
 drogon::HttpResponsePtr makeNotModified(std::string_view etag,
-                                        int maxAgeSeconds = 0);
+                                        int maxAgeSeconds = 0,
+                                        std::string_view varyHeader = {});
 
 } // namespace http_cache

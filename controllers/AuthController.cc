@@ -3,6 +3,7 @@
 #include "../models/PasswordResetTokens.h"
 #include "../helpers/AuditLog.h"
 #include "../helpers/EmailHelper.h"
+#include "../helpers/HttpCache.h"
 #include "../helpers/Security.h"
 
 #include <drogon/orm/Mapper.h>
@@ -365,6 +366,28 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
 
+        // ETag derives from (id, updated_at). Any profile mutation goes
+        // through users.updated_at (BEFORE-UPDATE trigger from 0001_init);
+        // the CSRF cookie rehydration below does not change the response
+        // body, only Set-Cookie, so it doesn't need to invalidate.
+        //
+        // Vary: Cookie is the load-bearing header here: /auth/me returns
+        // identity scoped to the session cookie. Without Vary, any cache
+        // (browser back/forward cache, future Cloudflare-edge cache,
+        // intermediate corporate proxy) could serve one user's response
+        // to the next request from a different cookie.
+        const std::string etag = http_cache::makeWeakEtag({
+            std::to_string(user.getValueOfId()),
+            std::to_string(http_cache::parseTimestampMicros(
+                user.getValueOfUpdatedAt().toDbStringLocal())),
+        });
+        constexpr std::string_view kVary = "Cookie";
+
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag, 0, kVary));
+            return;
+        }
+
         Json::Value ret;
         ret["id"]       = user.getValueOfId();
         ret["username"] = user.getValueOfUsername();
@@ -376,6 +399,7 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         issueCsrfCookie(req, resp);             // rehydrate CSRF on session bootstrap
+        http_cache::applyCacheHeaders(resp, etag, 0, kVary);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error (me): " << e.base().what();

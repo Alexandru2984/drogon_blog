@@ -1,6 +1,7 @@
 #include "CommentController.h"
 #include "../models/Comments.h"
 #include "../models/Users.h"
+#include "../helpers/HttpCache.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -21,54 +22,81 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                                        std::function<void(const HttpResponsePtr &)> &&callback,
                                        int postId)
 {
+    // Raw SQL with an explicit LEFT JOIN replaces the Mapper-then-loop
+    // pattern: one round-trip, no N+1, and updated_at (added in 0005)
+    // is surfaced for ETag derivation without going through a model
+    // regen. The LEFT JOIN preserves a comment whose author row was
+    // deleted concurrently (CommentController previously caught that
+    // case with a try/catch around findByPrimaryKey).
+    static const char* kSql =
+        "SELECT c.id, c.content, c.created_at, c.updated_at, "
+        "       u.id AS author_id, u.username AS author_username, "
+        "       u.profile_image AS author_profile_image "
+        "FROM comments c "
+        "LEFT JOIN users u ON u.id = c.user_id "
+        "WHERE c.post_id = $1 "
+        "ORDER BY c.created_at ASC";
+
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Comments> commentMapper(dbClient);
-    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
-
-    try {
-        auto comments = commentMapper.orderBy(drogon_model::blog_db::Comments::Cols::_created_at, 
-                                             SortOrder::ASC)
-                                    .findBy(Criteria(drogon_model::blog_db::Comments::Cols::_post_id, 
-                                                    CompareOperator::EQ, postId));
-
-        Json::Value ret;
-        ret["comments"] = Json::Value(Json::arrayValue);
-
-        for (const auto &comment : comments) {
-            Json::Value commentJson;
-            commentJson["id"] = comment.getValueOfId();
-            commentJson["content"] = comment.getValueOfContent();
-            commentJson["created_at"] = comment.getValueOfCreatedAt().toDbStringLocal();
-            
-            // Best-effort author enrichment. If the author was deleted
-            // concurrently we still surface the comment row without their
-            // metadata rather than failing the whole list.
-            try {
-                auto author = userMapper.findByPrimaryKey(comment.getValueOfUserId());
-                commentJson["author"]["id"] = author.getValueOfId();
-                commentJson["author"]["username"] = author.getValueOfUsername();
-                if (!author.getValueOfProfileImage().empty()) {
-                    commentJson["author"]["profile_image"] = author.getValueOfProfileImage();
-                }
-            } catch (const DrogonDbException& e) {
-                LOG_DEBUG << "author lookup for comment "
-                          << comment.getValueOfId() << " failed: "
-                          << e.base().what();
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, req, postId](const Result& r) {
+            // ETag from (post_id, count, max(updated_at)). Edits bump
+            // updated_at via trg_comments_updated_at; inserts bump the
+            // count and update max; deletes bump the count and may
+            // lower the max (still a distinct fragment). Keying on
+            // post_id keeps two posts' comment-list ETags disjoint
+            // even when they coincidentally produce the same count
+            // and max timestamp.
+            std::int64_t maxTs = 0;
+            for (const auto& row : r) {
+                const auto ts = http_cache::parseTimestampMicros(
+                                    row["updated_at"].as<std::string>());
+                if (ts > maxTs) maxTs = ts;
+            }
+            const std::string etag = http_cache::makeWeakEtag({
+                "comments",
+                std::to_string(postId),
+                std::to_string(static_cast<int>(r.size())),
+                std::to_string(maxTs),
+            });
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag));
+                return;
             }
 
-            ret["comments"].append(commentJson);
-        }
+            Json::Value ret;
+            ret["comments"] = Json::Value(Json::arrayValue);
+            for (const auto& row : r) {
+                Json::Value commentJson;
+                commentJson["id"] = row["id"].as<int>();
+                commentJson["content"] = row["content"].as<std::string>();
+                commentJson["created_at"] = row["created_at"].as<std::string>();
 
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to fetch comments";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+                if (!row["author_id"].isNull()) {
+                    commentJson["author"]["id"] = row["author_id"].as<int>();
+                    commentJson["author"]["username"] = row["author_username"].as<std::string>();
+                    if (!row["author_profile_image"].isNull()) {
+                        auto img = row["author_profile_image"].as<std::string>();
+                        if (!img.empty()) commentJson["author"]["profile_image"] = img;
+                    }
+                }
+                ret["comments"].append(commentJson);
+            }
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag);
+            callback(resp);
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (comments): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch comments";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        postId);
 }
 
 void CommentController::createComment(const HttpRequestPtr &req,
