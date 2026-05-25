@@ -7,22 +7,57 @@
 #include <cstdlib>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace security {
 
 namespace {
 
+// Operator-configurable trust list, parsed once. Format: comma-separated
+// IP prefixes (no CIDR mask — string-prefix match, kept simple
+// deliberately). e.g. BLOG_TRUSTED_PROXIES="127.,::1,172.18."
+//
+// Why an env override at all: the built-in defaults trust *all* of
+// RFC1918, but a VPC / shared-SDN deployment (AWS, GCP, DO, Hetzner
+// Cloud private nets) routes attacker-tenant pods into the same
+// 10.0.0.0/8 space as us. Without an explicit allowlist, an attacker
+// on the same SDN can reach the container's 8092 port directly,
+// inject X-Forwarded-For, and bypass the per-IP rate limit on /auth.
+//
+// Why default to loopback-only when env is unset: it's the safest
+// behaviour for the prod deploy (nginx on 127.0.0.1). Anything else
+// (docker-compose bridge networks, k8s pod IPs, …) must be declared
+// explicitly so the operator knows what they're trusting.
+const std::vector<std::string>& trustedPrefixes()
+{
+    static const std::vector<std::string> kDefault = {"127.", "::1"};
+    static const std::vector<std::string> v = [] {
+        const char* env = std::getenv("BLOG_TRUSTED_PROXIES");
+        if (!env || !*env) return kDefault;
+        std::vector<std::string> out;
+        std::string cur;
+        for (char c : std::string_view(env)) {
+            if (c == ',') {
+                if (!cur.empty()) out.push_back(cur);
+                cur.clear();
+            } else if (c != ' ' && c != '\t') {
+                cur.push_back(c);
+            }
+        }
+        if (!cur.empty()) out.push_back(cur);
+        return out.empty() ? kDefault : out;
+    }();
+    return v;
+}
+
 bool isTrustedProxy(const std::string& ip)
 {
-    // nginx reverse-proxies us on loopback; Docker / VPN ranges may also be
-    // legitimate. Anything beyond these should not be allowed to spoof XFF.
-    if (ip.rfind("127.", 0) == 0) return true;
-    if (ip == "::1")              return true;
-    if (ip.rfind("10.", 0) == 0)  return true;
-    if (ip.rfind("172.", 0) == 0) return true;
-    if (ip.rfind("192.168.", 0) == 0) return true;
+    for (const auto& prefix : trustedPrefixes()) {
+        if (ip.rfind(prefix, 0) == 0) return true;
+    }
     return false;
 }
 

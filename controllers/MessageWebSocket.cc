@@ -79,11 +79,20 @@ void unregisterConnection(const WebSocketConnectionPtr& conn)
     ctx->subscribedPosts.clear();
 }
 
+// Hard cap on per-connection post subscriptions. Without this, a client
+// can loop {"type":"subscribe_post","post_id":N} for N in 1..N and grow
+// both the per-connection set and the global g_byPost map without
+// bound — straightforward OOM kill of the Drogon process. 50 is well
+// above any plausible UI use (the human can read maybe half a dozen
+// posts live at once).
+constexpr std::size_t kMaxSubscribedPostsPerConn = 50;
+
 void subscribeToPost(const WebSocketConnectionPtr& conn, int postId)
 {
     auto ctx = conn->getContext<ConnCtx>();
     if (!ctx) return;
     std::lock_guard<std::mutex> lk(g_mu);
+    if (ctx->subscribedPosts.size() >= kMaxSubscribedPostsPerConn) return;
     if (ctx->subscribedPosts.insert(postId).second) {
         g_byPost[postId].insert(conn);
     }

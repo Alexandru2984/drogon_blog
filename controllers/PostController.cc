@@ -647,18 +647,21 @@ void PostController::likePost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
 
+    // ON CONFLICT DO NOTHING + RETURNING id avoids the SELECT-then-INSERT
+    // TOCTOU race that the ORM mapper would hit when two concurrent
+    // /like requests both pass the "already exists?" check and then race
+    // to insert. The UNIQUE(post_id, user_id) constraint serialises them
+    // at the DB layer; ON CONFLICT lets us turn the second insert into
+    // a clean 409 instead of letting libpq throw and degrading to a 500.
     try {
-        // Check if already liked
-        auto existingLikes = mapper.findBy(
-            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
-                    CompareOperator::EQ, postId) &&
-            Criteria(drogon_model::blog_db::Likes::Cols::_user_id, 
-                    CompareOperator::EQ, userIdOpt.value())
-        );
-
-        if (existingLikes.size() > 0) {
+        auto r = dbClient->execSqlSync(
+            "INSERT INTO likes (post_id, user_id) "
+            "VALUES ($1, $2) "
+            "ON CONFLICT (post_id, user_id) DO NOTHING "
+            "RETURNING id",
+            postId, userIdOpt.value());
+        if (r.empty()) {
             Json::Value ret;
             ret["error"] = "Post already liked";
             auto resp = HttpResponse::newHttpJsonResponse(ret);
@@ -666,19 +669,11 @@ void PostController::likePost(const HttpRequestPtr &req,
             callback(resp);
             return;
         }
-
-        drogon_model::blog_db::Likes newLike;
-        newLike.setPostId(postId);
-        newLike.setUserId(userIdOpt.value());
-
-        mapper.insert(newLike);
-
         Json::Value ret;
         ret["message"] = "Post liked successfully";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
+        callback(HttpResponse::newHttpJsonResponse(ret));
     } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
+        LOG_ERROR << "DB Error (likePost): " << e.base().what();
         Json::Value ret;
         ret["error"] = "Failed to like post";
         auto resp = HttpResponse::newHttpJsonResponse(ret);

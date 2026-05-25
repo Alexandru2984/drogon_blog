@@ -440,7 +440,15 @@ void AuthController::requestPasswordReset(const HttpRequestPtr &req,
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
     std::string email = (*json)["email"].asString();
-    if (email.empty() || email.size() > kMaxEmailLen) {
+    if (email.empty() || email.size() > kMaxEmailLen ||
+        !emailLooksValid(email))
+    {
+        // Defence-in-depth: registration already filters CR/LF / space
+        // before any value lands in users.email, so the DB lookup below
+        // can never match a header-injection attempt. Validating here
+        // still catches obviously-malformed inputs early and keeps the
+        // SMTP To: header safe even if a future write path skips the
+        // registration gate.
         callback(jsonError(k400BadRequest, "Email is required"));
         return;
     }
@@ -576,7 +584,15 @@ void AuthController::resendVerification(const HttpRequestPtr &req,
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
     std::string email = (*json)["email"].asString();
-    if (email.empty() || email.size() > kMaxEmailLen) {
+    if (email.empty() || email.size() > kMaxEmailLen ||
+        !emailLooksValid(email))
+    {
+        // Defence-in-depth: registration already filters CR/LF / space
+        // before any value lands in users.email, so the DB lookup below
+        // can never match a header-injection attempt. Validating here
+        // still catches obviously-malformed inputs early and keeps the
+        // SMTP To: header safe even if a future write path skips the
+        // registration gate.
         callback(jsonError(k400BadRequest, "Email is required"));
         return;
     }
