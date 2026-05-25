@@ -5,9 +5,10 @@ not deadline. Strike through when shipped.
 
 ## Visibility / docs
 
-- [ ] **OpenAPI 3.1 spec + docs UI** — schema for every endpoint, served
-      at `/api/docs` (Scalar or Redoc). Validate in CI with spectral.
-      Biggest "I get the API in 30 s" win.
+- [x] **OpenAPI 3.1 spec + docs UI** — `openapi/blog.openapi.yaml`
+      covers 42 paths / 19 schemas; served at `/api/openapi.yaml` and
+      rendered by self-hosted Redoc at `/api/docs`. Spectral linted in
+      CI (`openapi` job) against `.spectral.yaml`.
 - [ ] **Architecture Decision Records** under `docs/adr/` — why Drogon,
       why Argon2id, why weak ETag derivation, why no-PG-bundle in Helm,
       why per-request `write(2)` over async log queue.

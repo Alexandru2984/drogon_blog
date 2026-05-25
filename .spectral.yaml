@@ -1,0 +1,26 @@
+# Spectral ruleset for the Drogon Blog OpenAPI spec.
+#
+# Inherits Stoplight's OAS rules (covers 3.0 + 3.1) and overrides a few
+# noisy ones for our shape:
+#   - oas3-unused-component: false-positive on parameters/responses that
+#     are reused only via `$ref`s spectral can't statically resolve.
+#   - operation-tag-defined: every operation has a tag, but spectral
+#     wants top-level `tags` to match exactly — we keep them in sync.
+#   - operation-operationId: not all of our handlers have a stable code
+#     name worth exposing; OpenAPI keeps it optional.
+extends:
+  - spectral:oas
+
+rules:
+  oas3-unused-component: off
+  operation-operationId: off
+  # We document examples on the headline endpoints only; not flagging
+  # every endpoint that lacks one would dilute signal on real findings.
+  oas3-valid-media-example: warn
+  oas3-valid-schema-example: warn
+  # `summary` is the primary doc field that Redoc renders; demanding a
+  # separate `description` on every operation would duplicate it.
+  # The handful of endpoints with non-obvious semantics (CSRF flow,
+  # 2FA challenge handshake, search XSS guard) DO carry a description
+  # — spectral is happy to find one when it matters.
+  operation-description: off

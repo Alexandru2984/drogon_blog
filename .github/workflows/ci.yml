@@ -139,6 +139,23 @@ jobs:
             --error-exitcode=1 --quiet \
             controllers/ helpers/ main.cc
 
+  openapi:
+    name: OpenAPI lint (spectral)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      - name: spectral lint
+        # @stoplight/spectral-cli pinned to a known-good major. We use
+        # npx --package so the version is captured in the CI log and
+        # doesn't drift silently against npm's "latest" pointer.
+        run: |
+          npx --yes --package=@stoplight/spectral-cli@6.15.0 \
+              spectral lint openapi/blog.openapi.yaml --ruleset .spectral.yaml \
+              --fail-severity=error
+
   backup-restore:
     name: Backup → restore round-trip
     runs-on: ubuntu-24.04

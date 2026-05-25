@@ -63,6 +63,9 @@ COPY models/      ./models/
 COPY helpers/     ./helpers/
 COPY test/        ./test/
 COPY migrations/  ./migrations/
+# openapi/ carries the spec + a self-hosted Redoc bundle that the
+# api_docs handlers stream at /api/openapi.yaml and /api/docs.
+COPY openapi/     ./openapi/
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)" --target blog
@@ -88,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --from=backend  /src/build/blog /app/blog
 COPY --from=backend  /src/migrations /app/migrations
+COPY --from=backend  /src/openapi    /app/openapi
 COPY --from=backend  /src/config.json /app/config.json
 COPY --from=frontend /app/../public/ /app/public/
 COPY docker/entrypoint.sh /app/entrypoint.sh

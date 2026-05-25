@@ -5,6 +5,7 @@
 #include "helpers/EmailHelper.h"
 #include "helpers/ImageProcessor.h"
 #include "helpers/Markdown.h"
+#include "helpers/ApiDocs.h"
 #include "helpers/Ops.h"
 #include "helpers/PgListener.h"
 #include "helpers/PublicPages.h"
@@ -183,6 +184,9 @@ int main()
 
     // /healthz, /readyz, /metrics.
     ops::install();
+
+    // /api/openapi.yaml + /api/redoc.standalone.js + /api/docs.
+    api_docs::install();
 
     // /feed.xml (Atom 1.0) + /preview/posts/{id} (OpenGraph/Twitter cards).
     public_pages::install(

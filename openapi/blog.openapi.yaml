@@ -1,0 +1,1432 @@
+openapi: 3.1.0
+info:
+  title: Drogon Blog API
+  version: 1.0.0
+  summary: Backend REST surface for the Drogon Blog SPA.
+  description: |
+    Session-cookie + CSRF-double-submit authentication. Argon2id for
+    passwords. Optional 2FA via TOTP, WebAuthn passkeys, and recovery
+    codes. PostgreSQL underneath with versioned migrations.
+
+    **Authentication model**
+
+    Login issues an `HttpOnly` `JSESSIONID` session cookie. A
+    same-origin request to any state-mutating endpoint must also send
+    the `X-CSRF-Token` header set to the value of the `csrf_token`
+    cookie (double-submit pattern). Read-only `GET` requests don't
+    need the CSRF header.
+
+    **Conditional GETs**
+
+    Listed endpoints return weak ETags (`W/"…"`) and honour
+    `If-None-Match` for `304 Not Modified` revalidation. `/auth/me`
+    additionally emits `Vary: Cookie` so any shared cache stays
+    correctly partitioned by session.
+
+    **Rate limiting**
+
+    `/auth/login`, `/auth/register`, `/auth/request-reset`,
+    `/auth/resend-verification` and `/posts/search` carry per-IP
+    token-bucket budgets. Exceeding the budget returns `429` with a
+    `Retry-After` header.
+  contact:
+    name: Drogon Blog
+    url: https://github.com/micutu/drogon_blog
+  license:
+    name: MIT
+
+servers:
+  - url: https://blog.micutu.com
+    description: Production
+  - url: http://127.0.0.1:8092
+    description: Local dev (Drogon listening on loopback)
+
+tags:
+  - name: Auth
+    description: Account lifecycle — registration, sign-in, password reset, email verification.
+  - name: 2FA
+    description: Two-factor enrolment — TOTP secrets, WebAuthn passkeys, recovery codes.
+  - name: 2FA login challenges
+    description: Second-step verification after a password login when 2FA is enrolled.
+  - name: Posts
+    description: Blog posts CRUD, full-text search, likes.
+  - name: Comments
+    description: Comment threads attached to posts.
+  - name: Messages
+    description: Direct messages between users (HTTP) plus the realtime WebSocket hub at `/ws/messages`.
+  - name: Users
+    description: Public profiles + the signed-in user's own profile / avatar.
+  - name: Ops
+    description: Health, readiness, and Prometheus metrics for the running process.
+
+security:
+  - sessionCookie: []
+  - sessionCookie: []
+    csrfHeader: []
+
+paths:
+  # ---------------------------------------------------------------- Auth
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a new account
+      description: |
+        Username and email must be unique. Email is normalised + lightly
+        validated; control bytes are rejected to prevent SMTP header
+        injection. The password is hashed with Argon2id. A verification
+        email is sent asynchronously; the response returns regardless of
+        SMTP success so a slow MTA doesn't block the user.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Username or email already in use.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in with username + password
+      description: |
+        On success, sets the session cookie and the CSRF cookie. If the
+        account has 2FA enrolled, the response carries `two_step` and a
+        short-lived `challenge_id` — the client must then complete one
+        of `/auth/login/verify-{totp,recovery,webauthn}`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Either fully authenticated or a 2FA challenge issued.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LoginSuccess'
+                  - $ref: '#/components/schemas/TwoStepChallenge'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Sign out
+      description: Clears the session and CSRF cookies server-side. Idempotent.
+      responses:
+        '200':
+          description: Logged out.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user's identity
+      description: |
+        Returns the signed-in user's profile. Emits `Vary: Cookie` and a
+        weak ETag so a browser back-button / prefetch returns 304
+        without leaking another session's data through a shared cache.
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Current user.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Vary:
+              schema: { type: string, const: Cookie }
+              description: Tells caches to partition by Cookie header.
+            Cache-Control:
+              schema: { type: string, example: 'private, max-age=0, must-revalidate' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Consume an email-verification token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: Single-use token from the verification email. }
+      responses:
+        '200':
+          description: Email verified.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400':
+          description: Invalid or expired token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/request-reset:
+    post:
+      tags: [Auth]
+      summary: Request a password-reset email
+      description: |
+        Returns 200 regardless of whether the email exists, so an
+        attacker cannot enumerate registered addresses. A reset link is
+        sent asynchronously if the address is on file.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Email queued (always, regardless of account existence).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Consume a reset token and set a new password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:    { type: string }
+                password: { type: string, format: password, minLength: 10 }
+      responses:
+        '200':
+          description: Password reset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400':
+          description: Token invalid / expired / weak password.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/resend-verification:
+    post:
+      tags: [Auth]
+      summary: Re-send the email-verification message
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Queued (regardless of account state).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ---------------------------------------------------------------- 2FA enrollment
+  /auth/2fa/status:
+    get:
+      tags: [2FA]
+      summary: 2FA factors enrolled on this account
+      responses:
+        '200':
+          description: Status snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TwoFactorStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/totp/setup:
+    post:
+      tags: [2FA]
+      summary: Generate a fresh TOTP secret + QR
+      description: |
+        The secret is wrapped at rest via libsodium `crypto_secretbox`
+        (key from `BLOG_TOTP_KEY`). The response includes a
+        `otpauth://` URI for QR rendering; confirm with
+        `/auth/2fa/totp/confirm` to activate.
+      responses:
+        '200':
+          description: Provisioning material.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret, otpauth_url, qr_svg]
+                properties:
+                  secret:       { type: string, description: Base32 TOTP secret (do not store client-side beyond the setup flow). }
+                  otpauth_url:  { type: string, format: uri }
+                  qr_svg:       { type: string, description: Inline SVG for the QR code. }
+                  recovery_codes:
+                    type: array
+                    items: { type: string }
+                    description: One-time use codes shown only once at first 2FA activation.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/totp/confirm:
+    post:
+      tags: [2FA]
+      summary: Confirm and activate the pending TOTP secret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: TOTP enrolled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/disable:
+    post:
+      tags: [2FA]
+      summary: Remove TOTP and recovery codes
+      description: Requires the user's current password as a re-auth step.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: 2FA disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/recovery-codes/regenerate:
+    post:
+      tags: [2FA]
+      summary: Issue a fresh batch of one-time recovery codes
+      description: Invalidates the previous batch atomically.
+      responses:
+        '200':
+          description: New codes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recovery_codes]
+                properties:
+                  recovery_codes:
+                    type: array
+                    items: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/webauthn/register/begin:
+    post:
+      tags: [2FA]
+      summary: Start a WebAuthn credential registration
+      description: |
+        Returns the PublicKeyCredentialCreationOptions the browser
+        passes to `navigator.credentials.create()`. The challenge is
+        bound to the session.
+      responses:
+        '200':
+          description: Creation options.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: PublicKeyCredentialCreationOptions per WebAuthn Level 2.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/webauthn/register/finish:
+    post:
+      tags: [2FA]
+      summary: Persist a new WebAuthn credential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: AuthenticatorAttestationResponse + optional nickname (≤128 chars).
+              properties:
+                nickname: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Credential registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/webauthn/list:
+    get:
+      tags: [2FA]
+      summary: List the user's registered WebAuthn credentials
+      responses:
+        '200':
+          description: Credentials.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentials]
+                properties:
+                  credentials:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebAuthnCredential' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/2fa/webauthn/remove/{credentialId}:
+    post:
+      tags: [2FA]
+      summary: Remove a single WebAuthn credential
+      parameters:
+        - in: path
+          name: credentialId
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- 2FA login challenges
+  /auth/login/verify-totp:
+    post:
+      tags: [2FA login challenges]
+      summary: Complete a 2FA login with a TOTP code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, code]
+              properties:
+                challenge_id: { type: string }
+                code:         { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/login/verify-recovery:
+    post:
+      tags: [2FA login challenges]
+      summary: Complete a 2FA login with a recovery code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, code]
+              properties:
+                challenge_id: { type: string }
+                code:         { type: string, description: One-time recovery code shown at enrolment. }
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/login/verify-webauthn/begin:
+    post:
+      tags: [2FA login challenges]
+      summary: Start a WebAuthn assertion for the current login challenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id]
+              properties:
+                challenge_id: { type: string }
+      responses:
+        '200':
+          description: PublicKeyCredentialRequestOptions.
+          content:
+            application/json:
+              schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /auth/login/verify-webauthn/finish:
+    post:
+      tags: [2FA login challenges]
+      summary: Finalise a WebAuthn assertion
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: AuthenticatorAssertionResponse + challenge_id.
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------------- Posts
+  /posts:
+    get:
+      tags: [Posts]
+      summary: List posts (cursor-paginated, newest first)
+      security: []
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - in: query
+          name: cursor
+          schema: { type: integer, minimum: 1 }
+          description: Pass back the `next_cursor` value from the previous page.
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Page of posts.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostList' }
+        '304': { $ref: '#/components/responses/NotModified' }
+    post:
+      tags: [Posts]
+      summary: Create a new post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /posts/search:
+    get:
+      tags: [Posts]
+      summary: Full-text search over posts
+      description: |
+        Uses Postgres `websearch_to_tsquery` + `ts_headline` for the
+        snippet. The post body is HTML-escaped before highlighting so
+        stored XSS cannot survive the `<mark>` wrap. Snippet preserves
+        only the `<mark>` wrapping that ts_headline adds.
+      security: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Up to 50 ranked matches.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/PostSearchHit' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /posts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Posts]
+      summary: Fetch a single post
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Post.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Posts]
+      summary: Update the calling user's own post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    delete:
+      tags: [Posts]
+      summary: Delete the calling user's own post
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /posts/user/{userId}:
+    get:
+      tags: [Posts]
+      summary: List posts by a specific author
+      security: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Author's posts.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [posts]
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+        '304': { $ref: '#/components/responses/NotModified' }
+
+  /posts/{id}/like:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    post:
+      tags: [Posts]
+      summary: Like a post
+      description: Atomic insert via `ON CONFLICT DO NOTHING RETURNING`. Returns 409 if already liked.
+      responses:
+        '201':
+          description: Liked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Post already liked by this user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [Posts]
+      summary: Remove a previous like
+      responses:
+        '200':
+          description: Unliked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /posts/{id}/likes:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Posts]
+      summary: Likes count for a post
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Count + whether the calling session has liked.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count]
+                properties:
+                  count:     { type: integer, minimum: 0 }
+                  liked_by_me:
+                    type: boolean
+                    description: Only present when the request carries an authenticated session.
+        '304': { $ref: '#/components/responses/NotModified' }
+
+  # ---------------------------------------------------------------- Comments
+  /posts/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Comments]
+      summary: List the comment thread under a post
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Comments (chronological).
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [comments]
+                properties:
+                  comments:
+                    type: array
+                    items: { $ref: '#/components/schemas/Comment' }
+        '304': { $ref: '#/components/responses/NotModified' }
+    post:
+      tags: [Comments]
+      summary: Post a comment on a post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, minLength: 1, maxLength: 10240 }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [comment]
+                properties:
+                  comment: { $ref: '#/components/schemas/Comment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /comments/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, minimum: 1 }
+    put:
+      tags: [Comments]
+      summary: Edit the calling user's own comment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content: { type: string, minLength: 1, maxLength: 10240 }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comment: { $ref: '#/components/schemas/Comment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    delete:
+      tags: [Comments]
+      summary: Delete the calling user's own comment
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Messages
+  /messages:
+    post:
+      tags: [Messages]
+      summary: Send a direct message
+      description: |
+        Persists the message and pushes a `pg_notify` event picked up by
+        the WebSocket hub at `/ws/messages`. Recipients with an active
+        subscription receive a preview frame immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [receiver_id, content]
+              properties:
+                receiver_id: { type: integer, minimum: 1 }
+                content:     { type: string, minLength: 1, maxLength: 10240 }
+      responses:
+        '201':
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { $ref: '#/components/schemas/DirectMessage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /messages/received:
+    get:
+      tags: [Messages]
+      summary: Inbox — messages addressed to the calling user
+      responses:
+        '200':
+          description: Messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/DirectMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /messages/sent:
+    get:
+      tags: [Messages]
+      summary: Outbox — messages sent by the calling user
+      responses:
+        '200':
+          description: Messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/DirectMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /messages/conversation/{userId}:
+    get:
+      tags: [Messages]
+      summary: Conversation thread with another user
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Both directions, chronological.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/DirectMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /messages/{id}/read:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, minimum: 1 }
+    put:
+      tags: [Messages]
+      summary: Mark a received message as read
+      responses:
+        '200':
+          description: Marked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /messages/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, minimum: 1 }
+    delete:
+      tags: [Messages]
+      summary: Delete a message you sent or received
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Users
+  /users:
+    get:
+      tags: [Users]
+      summary: List public user profiles
+      security: []
+      responses:
+        '200':
+          description: Users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: '#/components/schemas/PublicUser' }
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Fetch a public profile
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Profile.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicUser' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /users/profile:
+    put:
+      tags: [Users]
+      summary: Update the calling user's own profile
+      description: |
+        Email changes are gated: when the supplied email differs from
+        the current one, the change is queued behind a new verification
+        token and the active email_verified flag is cleared until the
+        link is consumed. Bio is hard-capped at 8 KiB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /users/profile/image:
+    post:
+      tags: [Users]
+      summary: Upload / replace the calling user's avatar
+      description: |
+        `multipart/form-data` upload. Server-side: validates file type,
+        re-encodes through libvips to strip metadata, generates a random
+        filename suffix (no timestamp guessing).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profile_image]
+                properties:
+                  profile_image: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  # ---------------------------------------------------------------- Ops
+  /healthz:
+    get:
+      tags: [Ops]
+      summary: Liveness probe — process is up
+      security: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /readyz:
+    get:
+      tags: [Ops]
+      summary: Readiness probe — process is up AND can reach Postgres
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ready }
+        '503':
+          description: Not ready (DB unreachable, draining, …).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+
+  /metrics:
+    get:
+      tags: [Ops]
+      summary: Prometheus exposition format
+      description: |
+        Gated behind `Authorization: Bearer <BLOG_METRICS_TOKEN>` when
+        the env var is set in production. Returns text/plain in the
+        Prometheus exposition format.
+      security:
+        - bearerMetricsToken: []
+      responses:
+        '200':
+          description: Metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP blog_uptime_seconds Time since process start
+                  blog_uptime_seconds 1234
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID
+      description: HttpOnly session cookie issued by `/auth/login`.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        Double-submit value. Read its expected value from the
+        non-HttpOnly `csrf_token` cookie and echo it back on every
+        state-mutating request. Required on `POST`/`PUT`/`PATCH`/`DELETE`
+        (except `/auth/login` and `/auth/register` which bootstrap the
+        cookie).
+    bearerMetricsToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Set via the `BLOG_METRICS_TOKEN` env var. Optional in dev.
+
+  parameters:
+    IfNoneMatch:
+      in: header
+      name: If-None-Match
+      required: false
+      schema: { type: string }
+      description: Echo the previous ETag here to revalidate; receive 304 on cache hit.
+    PostId:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  headers:
+    ETag:
+      schema: { type: string, example: 'W/"6dfbb62472e910b2"' }
+      description: Weak ETag (RFC 7232).
+
+  responses:
+    NotModified:
+      description: Cached copy is fresh. Empty body.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+    BadRequest:
+      description: Malformed request body / invalid parameters.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid session.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but not allowed to operate on this resource.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    CsrfMissing:
+      description: CSRF cookie/header pair missing or mismatched.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: Body exceeds the endpoint's hard cap.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Per-IP token-bucket budget exhausted.
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error description. Stable identifiers are not promised; rely on the HTTP status for branching.
+
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 64 }
+        email:    { type: string, format: email }
+        password: { type: string, format: password, minLength: 10 }
+
+    RegisterResponse:
+      type: object
+      required: [message]
+      properties:
+        message:    { type: string }
+        email_sent: { type: boolean }
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+
+    LoginSuccess:
+      type: object
+      required: [message, user]
+      properties:
+        message: { type: string, const: Login successful }
+        user:    { $ref: '#/components/schemas/CurrentUser' }
+
+    TwoStepChallenge:
+      type: object
+      required: [two_step, challenge_id, methods]
+      properties:
+        two_step:     { type: boolean, const: true }
+        challenge_id: { type: string }
+        methods:
+          type: array
+          items: { type: string, enum: [totp, recovery, webauthn] }
+
+    TwoFactorStatus:
+      type: object
+      required: [totp_enabled, webauthn_enabled, recovery_codes_remaining]
+      properties:
+        totp_enabled:     { type: boolean }
+        webauthn_enabled: { type: boolean }
+        recovery_codes_remaining: { type: integer, minimum: 0 }
+
+    WebAuthnCredential:
+      type: object
+      required: [id, created_at]
+      properties:
+        id:         { type: integer }
+        nickname:   { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        sign_count: { type: integer, minimum: 0 }
+
+    CurrentUser:
+      type: object
+      required: [id, username, email]
+      properties:
+        id:       { type: integer, minimum: 1 }
+        username: { type: string }
+        email:    { type: string, format: email }
+        bio:      { type: string }
+        profile_image: { type: string }
+
+    PublicUser:
+      type: object
+      required: [id, username]
+      properties:
+        id:            { type: integer, minimum: 1 }
+        username:      { type: string }
+        bio:           { type: string }
+        created_at:    { type: string, format: date-time }
+        profile_image: { type: string }
+
+    ProfileUpdate:
+      type: object
+      description: All fields optional — only present ones are applied.
+      properties:
+        email:    { type: string, format: email }
+        bio:      { type: string, maxLength: 8192 }
+        password: { type: string, format: password, minLength: 10 }
+
+    PostCreate:
+      type: object
+      required: [title, content]
+      properties:
+        title:   { type: string, minLength: 1, maxLength: 5120 }
+        content: { type: string, minLength: 1, maxLength: 102400 }
+
+    PostUpdate:
+      type: object
+      properties:
+        title:   { type: string, maxLength: 5120 }
+        content: { type: string, maxLength: 102400 }
+
+    Post:
+      type: object
+      required: [id, title, content, created_at, updated_at]
+      properties:
+        id:           { type: integer, minimum: 1 }
+        title:        { type: string }
+        content:      { type: string }
+        content_html: { type: string, description: Sanitized HTML render of `content`. }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+        author:
+          type: object
+          properties:
+            id:            { type: integer }
+            username:      { type: string }
+            profile_image: { type: string }
+
+    PostList:
+      type: object
+      required: [posts]
+      properties:
+        posts:
+          type: array
+          items: { $ref: '#/components/schemas/Post' }
+        next_cursor:
+          type: integer
+          nullable: true
+          description: |
+            Pass back as `cursor` to fetch the next page. `null` when
+            the current page was the last.
+
+    PostSearchHit:
+      type: object
+      required: [id, title, snippet]
+      properties:
+        id:         { type: integer }
+        title:      { type: string }
+        snippet:    { type: string, description: HTML — `<mark>` wraps the matched terms. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        rank:       { type: number, format: float }
+        author:
+          type: object
+          properties:
+            id:            { type: integer }
+            username:      { type: string }
+            profile_image: { type: string }
+
+    Comment:
+      type: object
+      required: [id, content, created_at]
+      properties:
+        id:         { type: integer, minimum: 1 }
+        content:    { type: string }
+        created_at: { type: string, format: date-time }
+        author:
+          type: object
+          properties:
+            id:            { type: integer }
+            username:      { type: string }
+            profile_image: { type: string }
+
+    DirectMessage:
+      type: object
+      required: [id, sender_id, receiver_id, content, created_at]
+      properties:
+        id:          { type: integer, minimum: 1 }
+        sender_id:   { type: integer }
+        receiver_id: { type: integer }
+        content:     { type: string }
+        created_at:  { type: string, format: date-time }
+        read_at:     { type: string, format: date-time, nullable: true }
+        content_truncated:
+          type: boolean
+          description: |
+            True when the WS preview was truncated to fit under PG's
+            8 KiB NOTIFY payload cap. Re-fetch via `/messages/conversation/{userId}`
+            to get the full body.
+
+x-websockets:
+  /ws/messages:
+    summary: Realtime message hub
+    description: |
+      Subscribe with the session cookie to receive `pg_notify`-driven
+      events whenever a new message is inserted for the authenticated
+      user. The hub also fans out post / comment subscriptions for the
+      activity feed.
+
+      Frame shape (server → client):
+
+      ```json
+      {
+        "type": "new_message",
+        "message": { ...DirectMessage }
+      }
+      ```
+
+      Subscriptions are per-connection; a single connection may
+      subscribe to up to 50 posts (`subscribe_to_post`). Connections
+      from disallowed origins are rejected before authentication.
