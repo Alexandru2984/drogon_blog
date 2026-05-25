@@ -15,7 +15,7 @@ namespace {
 // before json_build_object so it stays under PG's 8 KiB NOTIFY limit,
 // but the stored content itself is bounded here so a single comment
 // can't be a DoS vector on subsequent renders / list responses.
-constexpr std::size_t kMaxCommentBytes = 10 * 1024;
+constexpr std::size_t kMaxCommentBytes = std::size_t{10} * 1024;
 }
 
 void CommentController::getPostComments(const HttpRequestPtr &req,

@@ -13,7 +13,7 @@ namespace {
 // trg_messages_notify trigger additionally truncates to 200 bytes
 // before json_build_object so the websocket payload stays under that
 // envelope even if this cap is raised later.
-constexpr std::size_t kMaxMessageBytes = 10 * 1024;
+constexpr std::size_t kMaxMessageBytes = std::size_t{10} * 1024;
 }
 
 void MessageController::getReceivedMessages(const HttpRequestPtr &req,

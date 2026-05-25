@@ -10,7 +10,7 @@ namespace markdown {
 // occupy an IO thread the entire time. Capping the source at 100 KiB
 // keeps any single render bounded; legitimate blog posts are several
 // orders of magnitude below this.
-inline constexpr std::size_t kMaxMarkdownBytes = 100 * 1024;
+inline constexpr std::size_t kMaxMarkdownBytes = std::size_t{100} * 1024;
 
 // Convert a CommonMark / GitHub-flavored Markdown string into safe HTML.
 //

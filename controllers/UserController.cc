@@ -150,7 +150,7 @@ void UserController::updateProfile(const HttpRequestPtr &req,
             // 8 KiB is generous for a blog bio; protects the users.bio
             // column from being weaponised as DB-bloat storage by an
             // authenticated client looping PUT /users/profile.
-            if (newBio.size() > 8 * 1024) {
+            if (newBio.size() > std::size_t{8} * 1024) {
                 Json::Value ret;
                 ret["error"] = "Bio too long";
                 auto resp = HttpResponse::newHttpJsonResponse(ret);

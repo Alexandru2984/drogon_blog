@@ -108,11 +108,29 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: clang-tidy
+        shell: bash
         run: |
           # The HeaderFilterRegex in .clang-tidy keeps reports limited to our
           # own controllers/ + helpers/ tree. Exit code reflects findings.
+          #
+          # awk strips clang-tidy's accounting lines ("N warnings generated.",
+          # "Suppressed M warnings…", the "Use -header-filter=.* to display"
+          # hint). These count warnings the HeaderFilterRegex suppressed from
+          # OUTPUT but clang-analyzer still tracked internally — drogon /
+          # libpq headers reach into the hundreds of thousands per TU, which
+          # produced the 3M-line CI log without buying any signal. The actual
+          # tidy diagnostics on our code are still emitted with file:line and
+          # are not matched by these filters.
+          #
+          # -P "$(nproc)" parallelises across cores. clang-tidy is CPU-bound
+          # per file, so the speedup scales linearly until we run out of TUs.
+          # pipefail preserves clang-tidy's exit code through the awk filter.
+          set -o pipefail
           find controllers helpers -name '*.cc' -print0 \
-            | xargs -0 clang-tidy -p build --quiet --warnings-as-errors='*'
+            | xargs -0 -P "$(nproc)" -n 1 clang-tidy -p build --quiet --warnings-as-errors='*' 2>&1 \
+            | awk '!/^[0-9]+ warnings generated\.$/ && \
+                   !/^Suppressed [0-9]+ warnings / && \
+                   !/^Use -header-filter=/'
 
       - name: cppcheck
         run: |

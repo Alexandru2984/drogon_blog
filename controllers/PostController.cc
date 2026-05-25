@@ -25,8 +25,8 @@ constexpr int kMaxPageSize     = 50;
 // Content bound matches the parser cap in helpers/Markdown.h so we
 // reject at the API boundary with a clear 413 instead of returning an
 // empty render later.
-constexpr std::size_t kMaxTitleBytes   = 5 * 1024;
-constexpr std::size_t kMaxContentBytes = 100 * 1024;
+constexpr std::size_t kMaxTitleBytes   = std::size_t{5} * 1024;
+constexpr std::size_t kMaxContentBytes = std::size_t{100} * 1024;
 
 int clampLimit(const std::string& raw)
 {
