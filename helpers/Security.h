@@ -30,6 +30,26 @@ std::string sha256Hex(const std::string& input);
 // SMTP To: header.
 bool emailLooksValid(const std::string& e);
 
+// Transparent encryption-at-rest for TOTP shared secrets and other
+// app-managed opaque secrets that need to be recoverable (not just
+// verified — TOTP needs the raw key to compute codes).
+//
+// Activation: set BLOG_TOTP_KEY to 64 hex chars (32 bytes). When the
+// var is set, wrap() emits `enc:v1:<base64(nonce || ciphertext)>`;
+// when unset, wrap() returns the input verbatim so dev / test
+// deployments don't need a key. unwrap() handles both forms
+// (round-trips encrypted values when the key is set, otherwise
+// expects plaintext) — which gives us a lazy migration: existing
+// rows continue to verify, new writes get encrypted, the operator
+// can rotate by re-issuing secrets on a future reroll.
+//
+// Throws std::runtime_error when the input claims to be encrypted
+// but the key is missing / the MAC doesn't verify — i.e. exactly
+// the cases where silently degrading to plaintext would be the
+// wrong default.
+std::string wrapTotpSecret(const std::string& plaintext);
+std::string unwrapTotpSecret(const std::string& stored);
+
 // Returns the configured CSRF cookie name. Centralized so frontend / backend
 // stay in sync.
 const std::string& csrfCookieName();

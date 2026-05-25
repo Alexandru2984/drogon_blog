@@ -193,13 +193,17 @@ void AuthController::setupTotp(const HttpRequestPtr& req,
 
     // Fresh secret on every setup — re-running the flow rotates the seed
     // so an abandoned half-enrolment can't be reactivated by a stranger.
+    // We store the secret wrapped: when BLOG_TOTP_KEY is set the value
+    // on disk is encrypted (libsodium secretbox); the column still holds
+    // a text string so legacy plaintext rows keep working. See
+    // helpers/Security.cc::wrapTotpSecret for the format.
     const std::string secret = totp::generateSecret();
     db->execSqlSync(
         "INSERT INTO user_totp_secrets (user_id, secret_b32, enabled) "
         "VALUES ($1, $2, FALSE) "
         "ON CONFLICT (user_id) DO UPDATE "
         "  SET secret_b32 = EXCLUDED.secret_b32, enabled = FALSE, confirmed_at = NULL",
-        *userIdOpt, secret);
+        *userIdOpt, security::wrapTotpSecret(secret));
 
     const auto username =
         db->execSqlSync("SELECT username FROM users WHERE id = $1", *userIdOpt)
@@ -236,7 +240,8 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     if (rows[0]["enabled"].as<bool>()) {
         callback(jsonError(k409Conflict, "TOTP already enabled")); return;
     }
-    const auto secret = rows[0]["secret_b32"].as<std::string>();
+    const auto secret =
+        security::unwrapTotpSecret(rows[0]["secret_b32"].as<std::string>());
     if (!totp::verify(secret, code)) {
         audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
                                 std::nullopt, std::nullopt, Json::objectValue});
@@ -287,7 +292,11 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
         auto r = db->execSqlSync(
             "SELECT secret_b32 FROM user_totp_secrets WHERE user_id = $1 AND enabled = TRUE",
             *userIdOpt);
-        if (!r.empty() && totp::verify(r[0]["secret_b32"].as<std::string>(), code)) {
+        if (!r.empty() &&
+            totp::verify(
+                security::unwrapTotpSecret(r[0]["secret_b32"].as<std::string>()),
+                code))
+        {
             factorOk = true;
         }
     }
@@ -529,7 +538,11 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
         "SELECT secret_b32 FROM user_totp_secrets "
         "WHERE user_id = $1 AND enabled = TRUE",
         *pendingOpt);
-    if (r.empty() || !totp::verify(r[0]["secret_b32"].as<std::string>(), code)) {
+    if (r.empty() ||
+        !totp::verify(
+            security::unwrapTotpSecret(r[0]["secret_b32"].as<std::string>()),
+            code))
+    {
         audit_log::record(req, {"2fa.verify.totp.fail", pendingOpt,
                                 std::nullopt, std::nullopt, Json::objectValue});
         callback(jsonError(k401Unauthorized, "Invalid code"));

@@ -3,9 +3,13 @@
 #include <drogon/drogon.h>
 #include <sodium.h>
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -157,6 +161,23 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
     auto now = std::chrono::steady_clock::now();
 
     std::lock_guard<std::mutex> lk(g_mu);
+
+    // Opportunistic GC. Without this, every distinct (rule, ip) tuple
+    // we ever see is retained for the lifetime of the process — a
+    // long-running prod (or an attacker rotating IPs) grows g_buckets
+    // monotonically. We sweep when the map crosses a threshold and
+    // drop anything that hasn't been touched in the last hour; even
+    // the slowest bucket we have refills well within that window, so
+    // an evicted entry is equivalent to a fresh one.
+    constexpr std::size_t kGcThreshold = 4096;
+    if (g_buckets.size() >= kGcThreshold) {
+        const auto cutoff = now - std::chrono::hours(1);
+        for (auto bit = g_buckets.begin(); bit != g_buckets.end(); ) {
+            if (bit->second.lastRefill < cutoff) bit = g_buckets.erase(bit);
+            else                                 ++bit;
+        }
+    }
+
     auto it = g_buckets.find(composite);
     if (it == g_buckets.end()) {
         g_buckets.emplace(composite, Bucket{capacity - 1.0, now});
@@ -327,6 +348,155 @@ std::string sha256Hex(const std::string& input)
         out[2 * i + 1] = kHex[digest[i] & 0xF];
     }
     return out;
+}
+
+// ---- Encryption-at-rest for opaque secrets (TOTP shared keys) ----
+
+namespace {
+
+// Parse BLOG_TOTP_KEY as 64 hex chars. Returns std::nullopt when the
+// env is unset or malformed (caller then degrades to plaintext mode).
+std::optional<std::array<unsigned char, crypto_secretbox_KEYBYTES>>
+loadTotpKey()
+{
+    const char* env = std::getenv("BLOG_TOTP_KEY");
+    if (!env || !*env) return std::nullopt;
+    std::string_view s(env);
+    if (s.size() != crypto_secretbox_KEYBYTES * 2) return std::nullopt;
+    std::array<unsigned char, crypto_secretbox_KEYBYTES> key{};
+    auto hexVal = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (std::size_t i = 0; i < crypto_secretbox_KEYBYTES; ++i) {
+        const int hi = hexVal(s[2 * i]);
+        const int lo = hexVal(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return std::nullopt;
+        key[i] = static_cast<unsigned char>((hi << 4) | lo);
+    }
+    return key;
+}
+
+// Base64 alphabet (standard, with padding) — local to keep this file
+// self-contained; randomToken above is URL-safe and unpadded for cookies.
+std::string b64Encode(const unsigned char* data, std::size_t n)
+{
+    static const char* kAlphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((n + 2) / 3) * 4);
+    std::size_t i = 0;
+    while (i + 3 <= n) {
+        unsigned a = data[i], b = data[i+1], c = data[i+2];
+        out.push_back(kAlphabet[(a >> 2) & 0x3F]);
+        out.push_back(kAlphabet[((a & 0x3) << 4) | ((b >> 4) & 0xF)]);
+        out.push_back(kAlphabet[((b & 0xF) << 2) | ((c >> 6) & 0x3)]);
+        out.push_back(kAlphabet[c & 0x3F]);
+        i += 3;
+    }
+    if (i < n) {
+        unsigned a = data[i];
+        unsigned b = (i + 1 < n) ? data[i+1] : 0;
+        out.push_back(kAlphabet[(a >> 2) & 0x3F]);
+        out.push_back(kAlphabet[((a & 0x3) << 4) | ((b >> 4) & 0xF)]);
+        out.push_back((i + 1 < n) ? kAlphabet[(b & 0xF) << 2] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+bool b64Decode(std::string_view s, std::vector<unsigned char>& out)
+{
+    static const std::array<signed char, 256> table = [] {
+        std::array<signed char, 256> t{};
+        for (auto& v : t) v = -1;
+        const char* a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i)
+            t[static_cast<unsigned char>(a[i])] = static_cast<signed char>(i);
+        return t;
+    }();
+    out.clear();
+    out.reserve((s.size() / 4) * 3);
+    int bits = 0, val = 0;
+    for (char c : s) {
+        if (c == '=' || c == '\n' || c == '\r') continue;
+        signed char v = table[static_cast<unsigned char>(c)];
+        if (v < 0) return false;
+        val = (val << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<unsigned char>((val >> bits) & 0xFF));
+        }
+    }
+    return true;
+}
+
+constexpr const char* kEncPrefix = "enc:v1:";
+
+} // namespace
+
+std::string wrapTotpSecret(const std::string& plaintext)
+{
+    auto keyOpt = loadTotpKey();
+    if (!keyOpt) return plaintext;       // dev / test deploy without a key
+
+    std::array<unsigned char, crypto_secretbox_NONCEBYTES> nonce{};
+    randombytes_buf(nonce.data(), nonce.size());
+
+    std::vector<unsigned char> ct(plaintext.size() + crypto_secretbox_MACBYTES);
+    if (crypto_secretbox_easy(
+            ct.data(),
+            reinterpret_cast<const unsigned char*>(plaintext.data()),
+            plaintext.size(),
+            nonce.data(),
+            keyOpt->data()) != 0)
+    {
+        throw std::runtime_error("crypto_secretbox_easy failed");
+    }
+
+    // Pack nonce || ciphertext into a single base64 blob; the version
+    // tag lets future schema rolls coexist.
+    std::vector<unsigned char> combined;
+    combined.reserve(nonce.size() + ct.size());
+    combined.insert(combined.end(), nonce.begin(), nonce.end());
+    combined.insert(combined.end(), ct.begin(), ct.end());
+    return std::string(kEncPrefix) + b64Encode(combined.data(), combined.size());
+}
+
+std::string unwrapTotpSecret(const std::string& stored)
+{
+    if (stored.rfind(kEncPrefix, 0) != 0) {
+        // Plaintext (legacy or running without a key) — pass through.
+        return stored;
+    }
+    auto keyOpt = loadTotpKey();
+    if (!keyOpt) {
+        throw std::runtime_error(
+            "TOTP secret is encrypted but BLOG_TOTP_KEY is not set");
+    }
+    std::vector<unsigned char> combined;
+    if (!b64Decode(std::string_view(stored).substr(std::strlen(kEncPrefix)),
+                   combined)) {
+        throw std::runtime_error("TOTP ciphertext base64 decode failed");
+    }
+    if (combined.size() < crypto_secretbox_NONCEBYTES + crypto_secretbox_MACBYTES) {
+        throw std::runtime_error("TOTP ciphertext truncated");
+    }
+    const std::size_t ctLen = combined.size() - crypto_secretbox_NONCEBYTES;
+    std::vector<unsigned char> pt(ctLen - crypto_secretbox_MACBYTES);
+    if (crypto_secretbox_open_easy(
+            pt.data(),
+            combined.data() + crypto_secretbox_NONCEBYTES,
+            ctLen,
+            combined.data(),
+            keyOpt->data()) != 0)
+    {
+        throw std::runtime_error("TOTP MAC verification failed");
+    }
+    return std::string(pt.begin(), pt.end());
 }
 
 std::string hashPassword(const std::string& password)

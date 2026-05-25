@@ -187,11 +187,27 @@ void PostController::searchPosts(const HttpRequestPtr &req,
     // websearch_to_tsquery tolerates raw user input (quoted phrases, OR, -negate)
     // without throwing on punctuation. ts_headline returns highlighted snippets;
     // ts_rank orders by relevance, falling back to recency as a tiebreaker.
+    //
+    // The content is HTML-escaped BEFORE ts_headline. ts_headline's
+    // tokenizer strips a hard-coded set of HTML-ish tags (script,
+    // iframe, …) but happily preserves attributes on others — e.g.
+    // `<img src=x onerror=alert(1)>` survives intact and becomes
+    // stored XSS the moment the SPA v-htmls the snippet. Escaping
+    // up front converts every angle-bracket in the source to a text
+    // entity, so the only real HTML left in the output is the
+    // <mark> wrapping ts_headline inserts itself.
     static const char* kSql =
         "WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query) "
         "SELECT p.id, p.title, "
-        "       ts_headline('english', p.content, q.query, "
-        "                   'MaxFragments=2,MaxWords=24,MinWords=8,"
+        "       ts_headline('english', "
+        "         replace(replace(replace(replace(replace(p.content, "
+        "             '&', '&amp;'), "
+        "             '<', '&lt;'), "
+        "             '>', '&gt;'), "
+        "             '\"', '&quot;'), "
+        "             '''', '&#39;'), "
+        "         q.query, "
+        "         'MaxFragments=2,MaxWords=24,MinWords=8,"
         "ShortWord=2,StartSel=<mark>,StopSel=</mark>') AS snippet, "
         "       p.created_at, p.updated_at, "
         "       u.id AS author_id, u.username AS author_username, "
