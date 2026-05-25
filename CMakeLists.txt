@@ -40,6 +40,18 @@ pkg_check_modules(SODIUM    REQUIRED libsodium)
 pkg_check_modules(VIPS_CPP  REQUIRED vips-cpp)
 pkg_check_modules(CMARK_GFM REQUIRED libcmark-gfm)
 pkg_check_modules(LIBPQ     REQUIRED libpq)
+# hiredis is OPTIONAL — when present, helpers/Presence.cc compiles in
+# its cross-node online-tracker (SETEX/EXISTS-based). Without it, the
+# helper compiles to no-ops and the app runs single-pod as before.
+# pkg-config name is `hiredis`; Ubuntu / Debian / Alpine all ship it
+# under that name from libhiredis-dev / hiredis-dev.
+pkg_check_modules(HIREDIS    QUIET     hiredis)
+if (HIREDIS_FOUND)
+    add_compile_definitions(BLOG_HAS_REDIS=1)
+    message(STATUS "Redis presence tracker: ENABLED (hiredis ${HIREDIS_VERSION})")
+else ()
+    message(STATUS "Redis presence tracker: disabled (libhiredis-dev not found)")
+endif ()
 # cmark-gfm-extensions ships without a .pc file in Debian/Ubuntu; we link
 # it explicitly so the GFM extensions registry (tables, autolink, …)
 # resolves at load time.
@@ -47,12 +59,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_INCLUDE_DIRS}
     ${VIPS_CPP_INCLUDE_DIRS}
     ${CMARK_GFM_INCLUDE_DIRS}
-    ${LIBPQ_INCLUDE_DIRS})
+    ${LIBPQ_INCLUDE_DIRS}
+    ${HIREDIS_INCLUDE_DIRS})
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
     ${VIPS_CPP_LIBRARY_DIRS}
     ${CMARK_GFM_LIBRARY_DIRS}
-    ${LIBPQ_LIBRARY_DIRS})
+    ${LIBPQ_LIBRARY_DIRS}
+    ${HIREDIS_LIBRARY_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     CURL::libcurl
@@ -62,6 +76,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${CMARK_GFM_LIBRARIES}
     cmark-gfm-extensions
     ${LIBPQ_LIBRARIES}
+    ${HIREDIS_LIBRARIES}
     brotlidec brotlienc)
 
 # ##############################################################################

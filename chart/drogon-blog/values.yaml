@@ -95,6 +95,24 @@ cnpg:
   imageName:  ""
 
 # ------------------------------------------------------------------
+# Redis (optional, presence tracker)
+# ------------------------------------------------------------------
+# When `url` is non-empty, the app connects on startup and tracks
+# WebSocket-online users in a shared Redis (SETEX user:N:online TTL).
+# /users/{id} surfaces an `online: true` field for active users.
+#
+# Useful once you scale past one app pod — pg_notify already fans
+# out new messages across pods, but "is user N online globally?"
+# needs a shared store. Leave empty for single-pod deployments.
+#
+# Production note: the binary needs to be built with libhiredis-dev
+# (the Dockerfile does this; bare-metal builds may not). When the
+# build lacks hiredis, BLOG_REDIS_URL is ignored and helpers/Presence
+# helpers no-op silently.
+redis:
+  url: ""   # e.g. "redis://blog-redis:6379" or "unix:///var/run/redis.sock"
+
+# ------------------------------------------------------------------
 # SMTP
 # ------------------------------------------------------------------
 # Leave server empty to disable real delivery (emails logged + dropped

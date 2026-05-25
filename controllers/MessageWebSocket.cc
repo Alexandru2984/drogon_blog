@@ -1,4 +1,5 @@
 #include "MessageWebSocket.h"
+#include "../helpers/Presence.h"
 
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
@@ -176,6 +177,7 @@ void MessageWebSocket::handleNewConnection(const HttpRequestPtr& req,
 
     conn->setContext(std::make_shared<ConnCtx>(ConnCtx{userIdOpt.value(), {}}));
     registerConnection(userIdOpt.value(), conn);
+    presence::markOnline(userIdOpt.value());
 
     Json::Value hello;
     hello["type"]    = "ready";
@@ -214,9 +216,30 @@ void MessageWebSocket::handleNewMessage(const WebSocketConnectionPtr& conn,
     }
 }
 
+// Only the LAST connection's close should flip the user offline —
+// a user may have multiple tabs open. We snapshot userId before
+// unregistering, then check whether they still have any sockets
+// remaining on this pod.
+namespace {
+bool stillLocallyOnline(int userId)
+{
+    std::lock_guard<std::mutex> lk(g_mu);
+    auto it = g_byUser.find(userId);
+    return it != g_byUser.end() && !it->second.empty();
+}
+} // namespace
+
 void MessageWebSocket::handleConnectionClosed(const WebSocketConnectionPtr& conn)
 {
+    auto ctx = conn->getContext<ConnCtx>();
+    const int userId = ctx ? ctx->userId : 0;
     unregisterConnection(conn);
+    // Only flip the user offline when this pod has no other live
+    // socket for them. A user with multiple tabs / devices stays
+    // online until the last one disconnects.
+    if (userId > 0 && !stillLocallyOnline(userId)) {
+        presence::markOffline(userId);
+    }
 }
 
 void MessageWebSocket::pushNewMessage(int receiverId,

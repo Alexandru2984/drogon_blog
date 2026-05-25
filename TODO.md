@@ -71,8 +71,11 @@ not deadline. Strike through when shipped.
 ## Stretch (probably overkill)
 
 - [ ] gRPC API surface in parallel with REST.
-- [ ] WebSocket Redis adapter for horizontal scaling beyond a single node
-      (PgListener fan-out already covers the inserts path; presence
-      counters would still split across nodes).
+- [x] WebSocket Redis adapter — `helpers/Presence` (libhiredis sync
+      client) tracks online users in a shared Redis: SETEX
+      `user:N:online` on WS connect, DEL on last-connection close,
+      30s TTL heartbeat refresh. `/users/{id}` surfaces `online: true`
+      across pods. Optional (CMake gates on libhiredis-dev;
+      `BLOG_REDIS_URL` env opt-in at runtime).
 - [ ] A/B testing flag system.
 - [ ] Sentry / error tracking integration.

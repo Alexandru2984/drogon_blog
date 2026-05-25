@@ -32,13 +32,15 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_INCLUDE_DIRS}
     ${VIPS_CPP_INCLUDE_DIRS}
     ${CMARK_GFM_INCLUDE_DIRS}
-    ${LIBPQ_INCLUDE_DIRS})
+    ${LIBPQ_INCLUDE_DIRS}
+    ${HIREDIS_INCLUDE_DIRS})
 
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${SODIUM_LIBRARY_DIRS}
     ${VIPS_CPP_LIBRARY_DIRS}
     ${CMARK_GFM_LIBRARY_DIRS}
-    ${LIBPQ_LIBRARY_DIRS})
+    ${LIBPQ_LIBRARY_DIRS}
+    ${HIREDIS_LIBRARY_DIRS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
@@ -49,6 +51,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${CMARK_GFM_LIBRARIES}
     cmark-gfm-extensions
     ${LIBPQ_LIBRARIES}
+    ${HIREDIS_LIBRARIES}
     brotlidec brotlienc)
 
 ParseAndAddDrogonTests(${PROJECT_NAME})

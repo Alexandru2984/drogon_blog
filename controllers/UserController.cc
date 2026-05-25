@@ -4,6 +4,7 @@
 #include "../helpers/EmailHelper.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/ImageProcessor.h"
+#include "../helpers/Presence.h"
 #include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
@@ -47,6 +48,15 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
 
         if (!user.getValueOfProfileImage().empty()) {
             ret["profile_image"] = user.getValueOfProfileImage();
+        }
+        // Online flag is read AFTER ETag derivation on purpose:
+        // presence is volatile (5-30 s TTL window), and including
+        // it in the cache key would invalidate the entry every time
+        // a heartbeat ticks. We accept that a 304 may show a stale
+        // online flag — clients that care can drop their cache and
+        // re-fetch.
+        if (presence::isOnline(user.getValueOfId())) {
+            ret["online"] = true;
         }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);

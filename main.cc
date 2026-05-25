@@ -8,6 +8,7 @@
 #include "helpers/ApiDocs.h"
 #include "helpers/Ops.h"
 #include "helpers/PgListener.h"
+#include "helpers/Presence.h"
 #include "helpers/PublicPages.h"
 #include "helpers/Security.h"
 #include "controllers/MessageWebSocket.h"
@@ -142,6 +143,7 @@ int main()
     }
 
     EmailHelper::start();
+    presence::install();
 
     // Cross-process WebSocket fan-out: a dedicated libpq connection LISTENs
     // on `blog_event` and routes every notification into the in-process
@@ -175,6 +177,7 @@ int main()
     drogon::app().getLoop()->runOnQuit([] {
         pglisten::stop();
         EmailHelper::stop();
+        presence::stop();
         image::shutdownLibrary();
     });
 
