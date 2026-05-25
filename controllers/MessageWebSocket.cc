@@ -250,3 +250,24 @@ std::size_t MessageWebSocket::connectionCount()
     for (const auto& entry : g_byUser) total += entry.second.size();
     return total;
 }
+
+void MessageWebSocket::shutdownAll()
+{
+    // Snapshot the connections under the lock, then close them outside
+    // it. shutdown() ultimately calls back into our handleConnectionClosed
+    // which tries to reacquire g_mu via unregisterConnection — holding
+    // the lock across shutdown() would deadlock.
+    std::vector<WebSocketConnectionPtr> conns;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        conns.reserve(g_byUser.size());
+        for (auto& [_, set] : g_byUser) {
+            for (const auto& c : set) conns.push_back(c);
+        }
+        g_byUser.clear();
+        g_byPost.clear();
+    }
+    for (const auto& c : conns) {
+        c->shutdown(CloseCode::kNormalClosure, "server shutting down");
+    }
+}

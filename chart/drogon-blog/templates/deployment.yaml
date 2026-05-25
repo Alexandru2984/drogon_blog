@@ -72,6 +72,23 @@ spec:
           readinessProbe: {{- toYaml .Values.probes.readiness | nindent 12 }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                # K8s removes the pod from Service endpoints the moment
+                # it begins termination, but kube-proxy + the upstream
+                # LB take a few seconds to propagate that change. Sleep
+                # here keeps the container in a "still serving" state
+                # for long enough that no fresh request hits us with a
+                # stale endpoint cache. SIGTERM is sent AFTER preStop
+                # completes; the app's own handler then flips /readyz
+                # to 503 and drains in-flight work (see main.cc).
+                command: ["/bin/sh", "-c", "sleep {{ .Values.lifecycle.preStopSleepSeconds }}"]
+      # terminationGracePeriodSeconds caps the total shutdown window:
+      # preStop sleep + SIGTERM drain. Tuned to comfortably exceed the
+      # 2 s drain sleep + a slow in-flight DB query without leaving the
+      # rolling deploy hanging.
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       volumes:
         - name: uploads
           emptyDir: {}

@@ -12,10 +12,12 @@
 #include "helpers/Security.h"
 #include "controllers/MessageWebSocket.h"
 
+#include <chrono>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <cstdlib>
 #include <cctype>
@@ -193,6 +195,36 @@ int main()
         std::getenv("BLOG_SITE_ORIGIN")
             ? std::getenv("BLOG_SITE_ORIGIN")
             : "https://blog.micutu.com");
+
+    // Graceful shutdown.
+    //
+    // K8s rolling deploy / systemd restart sends SIGTERM. The default
+    // Drogon handler just calls app().quit() — which yanks in-flight
+    // requests and slams open WebSocket connections shut. Override so:
+    //
+    //   1. ops::beginDrain() flips /readyz to 503 immediately. Upstream
+    //      load balancers stop sending us new traffic on their next probe.
+    //   2. A short sleep gives the LB time to remove us from the pool
+    //      *and* lets the K8s PreStop hook (chart/.../deployment.yaml)
+    //      cover the kube-proxy propagation window. 2 s is a deliberate
+    //      lower bound — the PreStop hook does the heavier waiting.
+    //   3. WebSocket connections get a clean close-frame so the SPA's
+    //      reconnect logic kicks in immediately instead of waiting for
+    //      a TCP read timeout.
+    //   4. app().quit() finally drains in-flight HTTP and stops the loop;
+    //      the loop's runOnQuit then drains PgListener + EmailHelper.
+    //
+    // SIGINT (Ctrl-C in dev) takes the same path so tests + manual runs
+    // observe the same shutdown semantics as production.
+    const auto shutdownHandler = [] {
+        LOG_INFO << "shutdown signal received — draining";
+        ops::beginDrain();
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        MessageWebSocket::shutdownAll();
+        drogon::app().quit();
+    };
+    drogon::app().setTermSignalHandler(shutdownHandler);
+    drogon::app().setIntSignalHandler(shutdownHandler);
 
     std::cout << "Drogon listening (see config for port)..." << std::endl;
     drogon::app().run();

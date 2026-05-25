@@ -182,3 +182,14 @@ probes:
     periodSeconds:       10
     timeoutSeconds:      3
     failureThreshold:    3
+
+# ------------------------------------------------------------------
+# Graceful shutdown
+# ------------------------------------------------------------------
+# Total window = preStopSleepSeconds + the app-side SIGTERM drain
+# (2 s LB-notice sleep + WS close + in-flight HTTP drain, see main.cc).
+# Bump preStopSleepSeconds if the LB endpoint sync is slow on your
+# cluster (Cloud LBs sometimes need 10–20 s before they stop sending).
+lifecycle:
+  preStopSleepSeconds:            8
+  terminationGracePeriodSeconds: 30

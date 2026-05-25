@@ -35,4 +35,11 @@ public:
 
     // Number of currently-connected sockets (for /metrics). Cheap mutex-only.
     static std::size_t connectionCount();
+
+    // Close every open WebSocket with a clean kNormalClosure frame. The
+    // SPA's reconnect logic picks up the new pod after a short backoff
+    // (see frontend_app/src/stores/messages.ts) so users barely notice
+    // the cycle. Called from the SIGTERM handler before app().quit().
+    // Safe to call multiple times — the registry empties on first run.
+    static void shutdownAll();
 };

@@ -4,6 +4,7 @@
 #include <drogon/drogon.h>
 #include <drogon/orm/Exception.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -11,6 +12,12 @@
 namespace ops {
 
 namespace {
+
+// Process-wide drain flag. Atomic because the readyz handler runs on a
+// Drogon worker thread while the SIGTERM handler runs on the main loop.
+// Default-init to false; beginDrain() flips it; no path resets it
+// because draining is a terminal state for the process lifecycle.
+std::atomic<bool> g_draining{false};
 
 bool isLoopbackPeer(const drogon::HttpRequestPtr& req)
 {
@@ -51,6 +58,17 @@ void install()
     app().registerHandler("/readyz",
         [](const HttpRequestPtr&,
            std::function<void(const HttpResponsePtr&)>&& cb) {
+            // Draining short-circuits the DB probe. The pod is alive
+            // (liveness still passes) but we want the LB to remove us
+            // from rotation immediately. Reporting a discriminator
+            // status string lets a curious operator tell "shutting
+            // down" apart from a real failure.
+            if (g_draining.load(std::memory_order_acquire)) {
+                Json::Value body;
+                body["status"] = "draining";
+                cb(jsonStatus(k503ServiceUnavailable, body));
+                return;
+            }
             auto db = app().getDbClient();
             if (!db) {
                 Json::Value body;
@@ -109,6 +127,16 @@ void install()
             cb(r);
         },
         {Get});
+}
+
+void beginDrain()
+{
+    g_draining.store(true, std::memory_order_release);
+}
+
+bool isDraining()
+{
+    return g_draining.load(std::memory_order_acquire);
 }
 
 } // namespace ops

@@ -1,0 +1,31 @@
+[Unit]
+Description=Drogon Blog Server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/drogon_blog
+ExecStart=/home/micu/drogon_blog/build/blog
+EnvironmentFile=/home/micu/drogon_blog/.env
+
+Restart=on-failure
+RestartSec=5
+
+# Graceful shutdown window.
+#
+# main.cc's SIGTERM handler: flip /readyz to 503, sleep 2 s for the
+# upstream LB to notice, close all WebSockets with a normal-close
+# frame, then app().quit() drains in-flight HTTP. The bulk of the
+# wall-clock cost is the 2 s drain sleep + however long the longest
+# in-flight DB query takes; 30 s is a comfortable ceiling under all
+# realistic load shapes. After TimeoutStopSec systemd escalates to
+# SIGKILL — past that point we accept the kill rather than risk a
+# wedged unit blocking other deploys.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

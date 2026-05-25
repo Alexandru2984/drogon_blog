@@ -35,8 +35,11 @@ not deadline. Strike through when shipped.
 - [ ] **PgBouncer sidecar / sub-deployment in Helm** — connection
       pooling layer; the chart currently assumes app talks straight
       to Postgres.
-- [ ] **Graceful shutdown + PreStop hook** — drain in-flight requests
-      cleanly on rolling K8s deploys.
+- [x] **Graceful shutdown + PreStop hook** — SIGTERM/SIGINT flip
+      `/readyz` to 503, sleep 2s for LB notice, close all WebSockets
+      with normal-close, `app().quit()` drains in-flight HTTP. Helm
+      chart adds `preStop: sleep 8` + `terminationGracePeriodSeconds: 30`.
+      systemd unit gets `TimeoutStopSec=30`.
 - [ ] **Optional CNPG dependency** in the Helm chart (off by default)
       — gives "helm install + done" for dev clusters without bundling
       stateful infra into the prod path.
