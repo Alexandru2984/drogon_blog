@@ -104,3 +104,37 @@ Image reference: repository + tag (defaults to chart appVersion).
 {{- $tag := default .Chart.AppVersion .Values.image.tag -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
+
+{{/*
+Upstream Postgres host: where SOMETHING (the app, or pgbouncer when
+the sidecar is on) eventually connects. CNPG flips this to the
+in-cluster Cluster's read-write Service automatically. Used by
+pgbouncer's POSTGRESQL_HOST and by the app when no sidecar is on.
+*/}}
+{{- define "drogon-blog.upstreamDbHost" -}}
+{{- if .Values.cnpg.enabled -}}
+{{- printf "%s-cnpg-rw" (include "drogon-blog.fullname" .) -}}
+{{- else -}}
+{{- .Values.database.host -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Host the APP container sees. With pgbouncer enabled, that's the
+sidecar on loopback; without, it's the upstream host directly.
+*/}}
+{{- define "drogon-blog.appDbHost" -}}
+{{- if .Values.pgbouncer.enabled -}}
+127.0.0.1
+{{- else -}}
+{{- include "drogon-blog.upstreamDbHost" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "drogon-blog.appDbPort" -}}
+{{- if .Values.pgbouncer.enabled -}}
+6432
+{{- else -}}
+{{- .Values.database.port -}}
+{{- end -}}
+{{- end -}}

@@ -42,6 +42,59 @@ database:
   existingSecretKey: "password"
 
 # ------------------------------------------------------------------
+# PgBouncer sidecar
+# ------------------------------------------------------------------
+# When enabled, a `pgbouncer` container is added to the app pod and
+# the app talks to it on 127.0.0.1:6432 instead of the upstream DB
+# directly. PgBouncer pools connections to the actual Postgres
+# (.Values.database.host), so the per-pod connection count to PG
+# stays bounded even if the app spikes thread-pool concurrency
+# (Drogon's worker pool, large bench bursts, etc.).
+#
+# Trade-off: an extra hop per query (loopback, ~50µs). Worth it once
+# you have >1 app replica or burst load that would otherwise overshoot
+# PG's max_connections; for a single replica it's marginal.
+#
+# Defaults are sized for a 1-2 CPU pod hitting a 100-connection PG
+# cap with a couple of replicas — bump pool_size if you scale out.
+pgbouncer:
+  enabled: false
+  image:
+    repository: bitnami/pgbouncer
+    tag:        "1.23.1"
+    pullPolicy: IfNotPresent
+  poolMode:    "transaction"   # transaction|session|statement
+  poolSize:    20               # per-pool connections to PG
+  maxClient:   200              # client-side connection cap
+  resources:
+    requests: { cpu: "50m",  memory: "32Mi" }
+    limits:   { cpu: "200m", memory: "128Mi" }
+
+# ------------------------------------------------------------------
+# CloudNativePG (CNPG) optional dependency
+# ------------------------------------------------------------------
+# OFF by default. Real prod deployments use an externally-managed
+# Postgres (managed RDS, an existing in-cluster cluster, etc.).
+# Turning this on installs a single-instance Cluster CR via the
+# cloudnative-pg/cluster sub-chart — convenient for dev clusters
+# where "helm install + done" is the goal, but not what you want in
+# production (you'd want a real backup story, replicas, monitoring).
+#
+# Note: the CNPG OPERATOR itself must already be installed in the
+# cluster. This chart only declares a Cluster CR — it doesn't bring
+# the operator with it. See cloudnative-pg.io for the operator's
+# install instructions.
+#
+# When enabled, this chart also rewrites .Values.database.host to
+# the CNPG-managed Service name in the templates that read it.
+cnpg:
+  enabled:    false
+  instances:  1
+  storage:    "5Gi"
+  # Image override is rarely needed; CNPG ships matching PG images.
+  imageName:  ""
+
+# ------------------------------------------------------------------
 # SMTP
 # ------------------------------------------------------------------
 # Leave server empty to disable real delivery (emails logged + dropped

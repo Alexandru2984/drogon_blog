@@ -34,17 +34,18 @@ not deadline. Strike through when shipped.
       `drogon-blog-backup.timer`, rolling retention (7d / 4w / 6m),
       CI round-trip job in `backup-restore`, runbook in
       `ops/RUNBOOK-backup-restore.md`.
-- [ ] **PgBouncer sidecar / sub-deployment in Helm** — connection
-      pooling layer; the chart currently assumes app talks straight
-      to Postgres.
+- [x] **PgBouncer sidecar / sub-deployment in Helm** — opt-in
+      sidecar via `pgbouncer.enabled`; app's DB_HOST/DB_PORT flip
+      to 127.0.0.1:6432 through the appDbHost/appDbPort helpers.
 - [x] **Graceful shutdown + PreStop hook** — SIGTERM/SIGINT flip
       `/readyz` to 503, sleep 2s for LB notice, close all WebSockets
       with normal-close, `app().quit()` drains in-flight HTTP. Helm
       chart adds `preStop: sleep 8` + `terminationGracePeriodSeconds: 30`.
       systemd unit gets `TimeoutStopSec=30`.
-- [ ] **Optional CNPG dependency** in the Helm chart (off by default)
-      — gives "helm install + done" for dev clusters without bundling
-      stateful infra into the prod path.
+- [x] **Optional CNPG dependency** — `cnpg.enabled` templates a
+      hand-rolled `postgresql.cnpg.io/v1 Cluster` CR plus paired
+      bootstrap Secret. Operator install is the user's job — chart
+      only declares the CR.
 
 ## Feature gaps
 

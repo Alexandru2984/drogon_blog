@@ -27,14 +27,68 @@ clusters without a values fork.
 
 - **PostgreSQL.** Production should consume a managed Postgres (CNPG,
   RDS, …); the chart only points the app at it via `database.host` /
-  `database.port` / `database.existingSecret`. Bundling a stateful
-  subchart would invite the worst-of-both-worlds: "easy to install,
-  hard to operate."
+  `database.port` / `database.existingSecret`. There IS an opt-in
+  `cnpg.enabled` knob (see below) that templates a CNPG `Cluster` CR
+  for dev clusters — but the operator itself is your responsibility.
 - **TLS.** The Ingress template wires `tls:` straight through; pair
   with cert-manager or your own ACME setup as a separate concern.
 - **Migrations.** The container's entrypoint (`docker/entrypoint.sh`)
   applies the SHA256-checked migrations under `migrations/` at boot,
   so the chart doesn't need a Job.
+
+## DB layouts (PgBouncer / CNPG)
+
+The chart supports three DB layouts via two independent knobs.
+
+| `pgbouncer.enabled` | `cnpg.enabled` | Layout |
+|---|---|---|
+| `false` | `false` | App connects directly to `database.host` (default — managed / external PG). |
+| `true`  | `false` | App connects to a `pgbouncer` sidecar on `127.0.0.1:6432`; bouncer forwards to `database.host`. |
+| `false` | `true`  | App connects directly to `<release>-cnpg-rw` (CNPG Service for the chart-created Cluster). |
+| `true`  | `true`  | App → pgbouncer sidecar → CNPG Service. Useful for hammering an in-cluster PG in load tests. |
+
+The app stays oblivious to which layout is active — the `appDbHost`
+/ `appDbPort` helpers in `_helpers.tpl` resolve the right values
+and feed them through `configmap.yaml`.
+
+### PgBouncer (`pgbouncer.enabled: true`)
+
+Adds a `bitnami/pgbouncer` container to the app pod. Pool mode
+defaults to `transaction` (the safe pick for Drogon's threaded
+worker pool — `LISTEN/NOTIFY` runs on a dedicated PgListener
+connection that isn't routed through bouncer). Tunables:
+
+| Key | Default | Notes |
+|---|---|---|
+| `pgbouncer.poolMode` | `transaction` | `session` / `transaction` / `statement` |
+| `pgbouncer.poolSize` | `20` | server-side connections per (DB, user) |
+| `pgbouncer.maxClient` | `200` | client-side cap |
+| `pgbouncer.image.tag` | `1.23.1` | pin via image tag |
+
+Worth turning on when you have >1 app replica or a workload that
+bursts above PG's `max_connections` cap.
+
+### CNPG (`cnpg.enabled: true`)
+
+Templates a single-instance `postgresql.cnpg.io/v1 Cluster` CR plus
+a paired bootstrap Secret. Convenient for `helm install + done` on a
+local kind / minikube cluster.
+
+**Prerequisite:** the [CloudNativePG operator](https://cloudnative-pg.io)
+must already be installed in the cluster. The chart only declares the
+`Cluster` CR — it doesn't bring the operator with it. Without the
+operator, the CR sits as a dangling spec.
+
+| Key | Default | Notes |
+|---|---|---|
+| `cnpg.instances` | `1` | bump to 2+ for replication |
+| `cnpg.storage`  | `5Gi` | per-instance PVC size |
+| `cnpg.imageName` | `""` | override the CNPG-bundled PG image |
+
+**Not for production**: the chart hardcodes no-backup / no-monitoring
+defaults that are fine for dev but irresponsible for prod. Real prod
+setups should run their own CNPG `Cluster` CR (or a managed PG) and
+leave `cnpg.enabled: false`.
 
 ## Minimal install
 

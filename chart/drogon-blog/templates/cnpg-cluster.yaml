@@ -1,0 +1,64 @@
+{{- if .Values.cnpg.enabled }}
+{{- /*
+Hand-rolled CloudNativePG Cluster CR. We deliberately do NOT pull in
+cloudnative-pg/cluster as a chart dependency — that would add a
+`helm dep update` step to CI and couple us to a specific sub-chart
+version for a feature that's off by default.
+
+The Cluster CR uses the same fullname-based naming as the rest of
+the chart so `helm uninstall` cleans both up together. CNPG itself
+generates a paired Service called "<cluster>-rw" pointing at the
+current primary, which is what `upstreamDbHost` resolves to.
+
+Prerequisite: the CloudNativePG OPERATOR must already be installed
+in the cluster (`kubectl apply -f
+https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/main/releases/cnpg-1.24.0.yaml`
+or the operator's official Helm chart). Without it this CR sits as
+a dangling spec — kubectl shows it, nothing reconciles it.
+
+The paired app-side Secret carrying the password CNPG seeds is in
+cnpg-secret.yaml — split into its own file so `helm lint`'s YAML
+parser doesn't trip over a multi-document template.
+*/ -}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "drogon-blog.fullname" . }}-cnpg
+  labels: {{- include "drogon-blog.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.instances }}
+  {{- with .Values.cnpg.imageName }}
+  imageName: {{ . | quote }}
+  {{- end }}
+
+  # Bootstrap a fresh cluster with our app's role + DB pre-created so
+  # the blog's migrations/apply.sh runs on first connection. CNPG seeds
+  # the password from the paired Secret defined in cnpg-secret.yaml.
+  bootstrap:
+    initdb:
+      database: {{ .Values.database.name | quote }}
+      owner:    {{ .Values.database.user | quote }}
+      secret:
+        name: {{ include "drogon-blog.fullname" . }}-cnpg-app
+
+  storage:
+    size: {{ .Values.cnpg.storage | quote }}
+
+  # PostgreSQL parameters tuned for a small dev cluster. Production
+  # users either won't enable CNPG at all (they bring managed PG) or
+  # will override these via their own values.yaml.
+  postgresql:
+    parameters:
+      max_connections:               "100"
+      shared_buffers:                "128MB"
+      effective_cache_size:          "256MB"
+      # Aggressive enough to keep autovacuum lively on a write-light
+      # blog; nothing here will impact a workload that hits hard.
+      log_min_duration_statement:    "200ms"
+
+  # Resource defaults — enough for a small dev cluster, easy to bump
+  # by editing values.yaml when this gets used for anything serious.
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "1",    memory: "1Gi" }
+{{- end }}

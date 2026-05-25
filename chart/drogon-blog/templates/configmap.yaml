@@ -6,8 +6,10 @@ metadata:
 data:
   # Database non-secret connection info. The password is injected
   # separately via envFrom secretRef so it never lands in a ConfigMap.
-  DB_HOST: {{ .Values.database.host | quote }}
-  DB_PORT: {{ .Values.database.port | quote }}
+  # appDbHost / appDbPort respect the pgbouncer sidecar (loopback:6432)
+  # and CNPG (in-cluster cluster service) — see _helpers.tpl.
+  DB_HOST: {{ include "drogon-blog.appDbHost" . | quote }}
+  DB_PORT: {{ include "drogon-blog.appDbPort" . | quote }}
   DB_NAME: {{ .Values.database.name | quote }}
   DB_USER: {{ .Values.database.user | quote }}
 

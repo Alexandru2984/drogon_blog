@@ -84,6 +84,66 @@ spec:
                 # completes; the app's own handler then flips /readyz
                 # to 503 and drains in-flight work (see main.cc).
                 command: ["/bin/sh", "-c", "sleep {{ .Values.lifecycle.preStopSleepSeconds }}"]
+        {{- if .Values.pgbouncer.enabled }}
+        # PgBouncer sidecar. Pools app-side queries onto a bounded set
+        # of connections to the upstream Postgres so a multi-replica
+        # rollout / burst doesn't run PG's max_connections cap. The
+        # app talks to this container on 127.0.0.1:6432 (see the
+        # appDbHost/Port helpers + configmap.yaml).
+        #
+        # bitnami/pgbouncer is env-driven — no ConfigMap mount needed
+        # for the standard pooling setup. POSTGRESQL_* configure the
+        # upstream connection; PGBOUNCER_* configure the listen side.
+        - name: pgbouncer
+          image: "{{ .Values.pgbouncer.image.repository }}:{{ .Values.pgbouncer.image.tag }}"
+          imagePullPolicy: {{ .Values.pgbouncer.image.pullPolicy }}
+          ports:
+            - name: bouncer
+              containerPort: 6432
+              protocol: TCP
+          env:
+            - name: POSTGRESQL_HOST
+              value: {{ include "drogon-blog.upstreamDbHost" . | quote }}
+            - name: POSTGRESQL_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: POSTGRESQL_USERNAME
+              value: {{ .Values.database.user | quote }}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "drogon-blog.dbSecretName" . }}
+                  key:  {{ include "drogon-blog.dbSecretKey"  . }}
+            - name: POSTGRESQL_DATABASE
+              value: {{ .Values.database.name | quote }}
+            - name: PGBOUNCER_DATABASE
+              # `*` exposes every upstream DB on the listener so the
+              # app's DB_NAME passes through without an explicit
+              # per-database stanza. Bitnami's launcher generates the
+              # [databases] section from this.
+              value: "*"
+            - name: PGBOUNCER_PORT
+              value: "6432"
+            - name: PGBOUNCER_BIND_ADDR
+              value: "127.0.0.1"
+            - name: PGBOUNCER_POOL_MODE
+              value: {{ .Values.pgbouncer.poolMode | quote }}
+            - name: PGBOUNCER_DEFAULT_POOL_SIZE
+              value: {{ .Values.pgbouncer.poolSize | quote }}
+            - name: PGBOUNCER_MAX_CLIENT_CONN
+              value: {{ .Values.pgbouncer.maxClient | quote }}
+            # Skip the `extra_float_digits` startup parameter — Drogon's
+            # libpq client emits it and pgbouncer rejects unknown
+            # startup params in transaction pool mode unless told to
+            # ignore them.
+            - name: PGBOUNCER_IGNORE_STARTUP_PARAMETERS
+              value: "extra_float_digits"
+          resources: {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: bouncer
+            initialDelaySeconds: 5
+            periodSeconds:       10
+        {{- end }}
       # terminationGracePeriodSeconds caps the total shutdown window:
       # preStop sleep + SIGTERM drain. Tuned to comfortably exceed the
       # 2 s drain sleep + a slow in-flight DB query without leaving the

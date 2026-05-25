@@ -280,7 +280,12 @@ jobs:
       - name: Render & validate (all opt-ins on)
         # Covers the templates only emitted when their feature flag is
         # set — otherwise lint / kubeconform never sees ingress.yaml,
-        # hpa.yaml, servicemonitor.yaml or the metrics secret.
+        # hpa.yaml, servicemonitor.yaml, the metrics secret, the
+        # pgbouncer sidecar container, or the CNPG Cluster CR.
+        # -ignore-missing-schemas is essential because the CNPG
+        # Cluster CR is a CRD that kubeconform's bundled schemas
+        # don't cover — we accept "I can't check this one" rather
+        # than fetching the CRD schema in CI.
         run: |
           helm template ci chart/drogon-blog \
             --set database.password=ci-only-not-real \
@@ -288,6 +293,8 @@ jobs:
             --set autoscaling.enabled=true \
             --set app.metricsToken=ci-token \
             --set metrics.serviceMonitor.enabled=true \
+            --set pgbouncer.enabled=true \
+            --set cnpg.enabled=true \
             | kubeconform -summary -strict -ignore-missing-schemas \
                           -kubernetes-version 1.30.0
 
