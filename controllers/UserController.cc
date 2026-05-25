@@ -82,6 +82,17 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         if (json->isMember("email")) {
             const std::string newEmail = (*json)["email"].asString();
             if (newEmail != user.getValueOfEmail()) {
+                if (!security::emailLooksValid(newEmail)) {
+                    // Same SMTP-header-injection guard as /auth/register:
+                    // the new address lands in EmailHelper's To: header
+                    // when the verification mail goes out.
+                    Json::Value ret;
+                    ret["error"] = "Invalid email address";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
                 const std::string currentPassword =
                     (*json)["current_password"].asString();
                 if (currentPassword.empty() ||
@@ -106,8 +117,12 @@ void UserController::updateProfile(const HttpRequestPtr &req,
 
                 user.setEmail(newEmail);
                 user.setEmailVerified(0);
+                // Hash the verification token at rest, same as registerUser
+                // and resendVerification (D-audit fix G+H). The previous
+                // version stored the plaintext here.
                 const std::string verificationToken = EmailHelper::generateToken();
-                user.setEmailVerificationToken(verificationToken);
+                user.setEmailVerificationToken(
+                    security::sha256Hex(verificationToken));
                 user.setEmailVerificationExpires(
                     trantor::Date::now().after(24 * 3600));
 
@@ -116,7 +131,19 @@ void UserController::updateProfile(const HttpRequestPtr &req,
             }
         }
         if (json->isMember("bio")) {
-            user.setBio((*json)["bio"].asString());
+            const std::string newBio = (*json)["bio"].asString();
+            // 8 KiB is generous for a blog bio; protects the users.bio
+            // column from being weaponised as DB-bloat storage by an
+            // authenticated client looping PUT /users/profile.
+            if (newBio.size() > 8 * 1024) {
+                Json::Value ret;
+                ret["error"] = "Bio too long";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k413RequestEntityTooLarge);
+                callback(resp);
+                return;
+            }
+            user.setBio(newBio);
         }
 
         mapper.update(user);

@@ -400,7 +400,11 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
 
     const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
     const std::string attestationObj = (*json)["attestationObject"].asString();
-    const std::string nickname       = (*json).get("nickname", "").asString();
+    std::string nickname             = (*json).get("nickname", "").asString();
+    // The nickname is plain UI text — cap it so an authenticated client
+    // can't grow user_webauthn_credentials.nickname into a multi-megabyte
+    // DB-bloat surface by looping passkey enrolments with huge labels.
+    if (nickname.size() > 128) nickname.resize(128);
 
     std::string err;
     auto res = webauthn::finishRegistration(
@@ -680,10 +684,30 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
         return;
     }
 
-    db->execSqlSync(
+    // Conditional UPDATE closes the TOCTOU window between the SELECT
+    // above and this write. Without `sign_count < $1` two concurrent
+    // verifications of the same captured assertion would BOTH:
+    //   - SELECT the same storedCnt
+    //   - pass new_sign_count > storedCnt
+    //   - UPDATE sign_count = new_sign_count
+    // …completing twice for a single counter advance. Adding the guard
+    // makes the second UPDATE a no-op (0 rows affected); the helper's
+    // sign_count regression check on the next legitimate login then
+    // rejects the cloned credential. RETURNING id lets us notice the
+    // miss and audit it.
+    auto upd = db->execSqlSync(
         "UPDATE user_webauthn_credentials "
-        "SET sign_count = $1, last_used_at = NOW() WHERE id = $2",
+        "   SET sign_count = $1, last_used_at = NOW() "
+        " WHERE id = $2 AND sign_count < $1 "
+        "RETURNING id",
         static_cast<std::int64_t>(res->new_sign_count), credRowId);
+    if (upd.empty()) {
+        audit_log::record(req, {"2fa.verify.webauthn.replay", pendingOpt,
+                                std::string{"webauthn_credential"}, credRowId,
+                                Json::objectValue});
+        callback(jsonError(k401Unauthorized, "Authentication failed"));
+        return;
+    }
 
     audit_log::record(req, {"2fa.verify.webauthn.ok", pendingOpt,
                             std::string{"webauthn_credential"}, credRowId,

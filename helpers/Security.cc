@@ -264,6 +264,20 @@ bool secureCookies()
     return v && std::string(v) == "1";
 }
 
+bool emailLooksValid(const std::string& e)
+{
+    if (e.empty() || e.size() > 255) return false;
+    for (unsigned char c : e) {
+        if (c < 0x20 || c == 0x7F) return false;
+        if (c == ' ')               return false;
+    }
+    const auto at = e.find('@');
+    if (at == std::string::npos || at == 0 || at == e.size() - 1) return false;
+    if (e.find('@', at + 1) != std::string::npos) return false;
+    if (e.find('.', at + 1) == std::string::npos) return false;
+    return true;
+}
+
 std::string sha256Hex(const std::string& input)
 {
     unsigned char digest[crypto_hash_sha256_BYTES];

@@ -91,8 +91,13 @@ public:
         return true;
     }
 
-    bool skip()
+    // Cap recursion depth so a crafted attestationObject can't blow the
+    // stack by nesting arrays / maps. 16 is generously above anything a
+    // real authenticator emits (typical attestation is 1–2 levels deep).
+    static constexpr int kMaxCborDepth = 16;
+    bool skip(int depth = 0)
     {
+        if (depth >= kMaxCborDepth) return false;
         int           major;
         std::uint64_t v;
         if (!readHead(major, v)) return false;
@@ -104,12 +109,13 @@ public:
                 p_ += v;
                 return true;
             case 4:
-                for (std::uint64_t i = 0; i < v; ++i) if (!skip()) return false;
+                for (std::uint64_t i = 0; i < v; ++i)
+                    if (!skip(depth + 1)) return false;
                 return true;
             case 5:
                 for (std::uint64_t i = 0; i < v; ++i) {
-                    if (!skip()) return false;  // key
-                    if (!skip()) return false;  // value
+                    if (!skip(depth + 1)) return false;  // key
+                    if (!skip(depth + 1)) return false;  // value
                 }
                 return true;
             default:

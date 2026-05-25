@@ -21,6 +21,15 @@ std::string randomToken(std::size_t bytes = 32);
 // Not for passwords — those go through Argon2id via hashPassword().
 std::string sha256Hex(const std::string& input);
 
+// Minimal email-shape sanity check, oriented around what we MUST
+// reject for safety: any control byte / whitespace lets an attacker
+// inject extra SMTP headers downstream (CWE-93). Loose structural
+// validation (single `@`, at least one `.` in the domain) catches the
+// obviously-malformed without trying to validate RFC 5322. Used by
+// every endpoint that accepts an email field bound for an outbound
+// SMTP To: header.
+bool emailLooksValid(const std::string& e);
+
 // Returns the configured CSRF cookie name. Centralized so frontend / backend
 // stay in sync.
 const std::string& csrfCookieName();

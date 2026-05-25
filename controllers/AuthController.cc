@@ -64,26 +64,11 @@ bool passwordTooWeak(const std::string& p)
     return p.size() < kMinPasswordLen || p.size() > kMaxPasswordLen;
 }
 
-// Minimal email shape check focused on what we MUST reject for safety:
-// any control byte (CR/LF in particular) lets an attacker inject extra
-// SMTP headers downstream (CWE-93). The structural check is intentionally
-// loose — we want to accept the real-world long tail of legitimate
-// addresses, not validate them — but the presence of `@` plus a `.`
-// somewhere after it filters out obvious junk too. Length is bounded
-// by kMaxEmailLen above.
-bool emailLooksValid(const std::string& e)
-{
-    if (e.empty() || e.size() > kMaxEmailLen) return false;
-    for (unsigned char c : e) {
-        if (c < 0x20 || c == 0x7F) return false;  // any control byte
-        if (c == ' ')               return false;
-    }
-    const auto at = e.find('@');
-    if (at == std::string::npos || at == 0 || at == e.size() - 1) return false;
-    if (e.find('@', at + 1) != std::string::npos) return false;    // second @
-    if (e.find('.', at + 1) == std::string::npos) return false;    // no TLD
-    return true;
-}
+// Email-shape sanity check moved to helpers/Security.h so the same
+// validator runs on every endpoint that touches an outbound SMTP
+// To: header (registration, profile update). Local alias kept so the
+// caller sites read naturally.
+using security::emailLooksValid;
 
 HttpResponsePtr jsonError(HttpStatusCode code, const std::string& msg)
 {
