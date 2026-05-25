@@ -362,6 +362,96 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 
+  perf-regression:
+    name: Perf regression (k6)
+    runs-on: ubuntu-24.04
+    needs: [backend]
+    # The job exists to catch order-of-magnitude regressions, not to
+    # benchmark prod. STRICT_THRESHOLDS in bench/scenarios.js are sized
+    # for the ubuntu-24.04 4-vCPU runner; bumping the runner class
+    # warrants a paired bump in those thresholds. See bench/README.md.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bring up the stack
+        run: |
+          # Same docker-compose override as the e2e job — rate limiter
+          # off so the bench's 20 VUs hammering /posts don't 429 each
+          # other. No DB port export needed here.
+          cat > docker-compose.perf.yml <<'EOF'
+          services:
+            app:
+              environment:
+                BLOG_DISABLE_RATE_LIMIT: "1"
+                BLOG_SITE_ORIGIN:        "http://127.0.0.1:8092"
+          EOF
+          DB_PASSWORD=perf_db_password \
+            docker compose -f docker-compose.yml -f docker-compose.perf.yml \
+                up -d --build
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:8092/healthz >/dev/null && break || true
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8092/healthz
+
+      - name: Install k6
+        run: |
+          # grafana/k6 official apt repo. v0.55 is the current stable.
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+              --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+              | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq k6
+          k6 version
+
+      - name: Seed bench data
+        run: |
+          # bench/seed.py writes bench/seed.json which the k6 scenarios
+          # mmap at init time. Idempotent — re-runs reset to a known
+          # corpus.
+          python3 bench/seed.py --base http://127.0.0.1:8092
+
+      - name: k6 — feed_read (strict)
+        run: |
+          # Each scenario runs as its own k6 invocation: thresholds in
+          # scenarios.js are flat (no tag scoping) and apply to the
+          # whole run. 20s is enough to fill the latency histograms
+          # past the variance floor while keeping total job time short.
+          K6_STRICT=1 k6 run \
+              -e SCENARIO=feed_read -e BASE_URL=http://127.0.0.1:8092 \
+              --vus 20 --duration 20s \
+              --summary-export bench/results-ci/feed_read.json \
+              bench/scenarios.js
+
+      - name: k6 — post_view (strict)
+        run: |
+          K6_STRICT=1 k6 run \
+              -e SCENARIO=post_view -e BASE_URL=http://127.0.0.1:8092 \
+              --vus 20 --duration 20s \
+              --summary-export bench/results-ci/post_view.json \
+              bench/scenarios.js
+
+      - name: k6 — search (strict)
+        run: |
+          K6_STRICT=1 k6 run \
+              -e SCENARIO=search -e BASE_URL=http://127.0.0.1:8092 \
+              --vus 10 --duration 20s \
+              --summary-export bench/results-ci/search.json \
+              bench/scenarios.js
+
+      - name: Upload k6 summaries on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k6-summaries
+          path: bench/results-ci/
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.perf.yml down -v
+
   docker:
     name: Docker image build (${{ matrix.arch }})
     # Native runners per arch so we don't pay 5-10× QEMU emulation tax on

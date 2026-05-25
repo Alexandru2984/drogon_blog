@@ -35,3 +35,32 @@ The script:
 - Live rate limiting on `/auth/login` (5 burst, 5 / min) is sized for humans, not bots, so login-heavy benches need `BLOG_DISABLE_RATE_LIMIT=1` on the service.
 - The bench writes to the production DB by default. Point `BASE_URL` at a `docker compose` stack if you need a clean slate.
 - `summarize.py` survives small differences between k6 minor releases (v0.42+ nests trend values under `.values`, older versions store them at the top level).
+
+## CI regression guard (`K6_STRICT=1`)
+
+`scenarios.js` ships **two** threshold sets:
+
+- **Default** (lax) — `p(95) < 500 ms`, `errors < 1 %`. The right call when you're running the bench locally to compare two builds — wide tolerance keeps it from flapping on a noisy laptop.
+- **Strict** (`K6_STRICT=1` env) — per-scenario SLOs that fail the `perf-regression` CI job in `.github/workflows/ci.yml`. The strict numbers are tuned for the GitHub Actions `ubuntu-24.04` runner (4 vCPU, shared host); they catch order-of-magnitude regressions, not absolute parity with the prod VPS.
+
+| Scenario        | `p(95)` ceiling | RPS floor |
+|-----------------|-----------------|-----------|
+| `feed_read`     | 150 ms          | 500       |
+| `post_view`     | 150 ms          | 500       |
+| `search`        | 300 ms          | 200       |
+| `feed_read_warm`| 100 ms          | 800       |
+
+How to invoke locally:
+
+```bash
+K6_STRICT=1 k6 run \
+    -e SCENARIO=feed_read -e BASE_URL=http://127.0.0.1:8092 \
+    --vus 20 --duration 20s bench/scenarios.js
+```
+
+When to update these:
+
+- The CI runner class changes (e.g. switching to a different image / arch). The ceiling and floor scale roughly with vCPU count.
+- A planned, *acknowledged* perf regression lands (e.g. you swap raw SQL for a slower abstraction and accept the tradeoff). Update the table here and the `STRICT_THRESHOLDS` block in `scenarios.js` in the same commit; don't relax silently.
+
+The job uploads each scenario's `--summary-export` JSON as a CI artifact when it fails, so you can see exactly which metric tripped.

@@ -22,9 +22,11 @@ not deadline. Strike through when shipped.
       password reset via DB-planted token, messaging WebSocket
       bidirectional with two browser contexts. CI wires DB port
       55432 through docker-compose.e2e.yml.
-- [ ] **Perf regression guard in CI** — k6 with thresholds on loopback
-      (e.g. `p95 < 50 ms`, `RPS > 4000` for `feed_read`). Defends the
-      D16 / D17 numbers from silent regression.
+- [x] **Perf regression guard in CI** — k6 strict mode
+      (`K6_STRICT=1`) with per-scenario SLOs sized for the
+      ubuntu-24.04 runner profile. New `perf-regression` CI job runs
+      feed_read / post_view / search and fails on threshold breach;
+      summary JSON uploaded as artifact on failure.
 
 ## Operational
 

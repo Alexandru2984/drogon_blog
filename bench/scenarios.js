@@ -23,14 +23,57 @@ const errors = new Rate('blog_errors')
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 
+// Per-scenario strict thresholds, used when K6_STRICT=1. Each k6 run
+// drives a single SCENARIO, so the metric names stay bare (no tag
+// filter) — they apply to the whole run.
+//
+// Numbers are chosen for the GitHub Actions ubuntu-24.04 runner
+// profile (4 vCPU, shared host), not for the prod VPS — the goal is
+// to catch order-of-magnitude regressions, not absolute parity with
+// BENCHMARKS.md. Bump these if the runner class changes or the suite
+// gets noisy; loosen only with a paired note in bench/README.md
+// explaining why.
+const STRICT_THRESHOLDS = {
+  feed_read: {
+    'http_req_duration': ['p(95)<150'],
+    'http_reqs':         ['rate>500'], // RPS floor
+  },
+  post_view: {
+    'http_req_duration': ['p(95)<150'],
+    'http_reqs':         ['rate>500'],
+  },
+  search: {
+    'http_req_duration': ['p(95)<300'],
+    'http_reqs':         ['rate>200'],
+  },
+  feed_read_warm: {
+    'http_req_duration': ['p(95)<100'],
+    'http_reqs':         ['rate>800'],
+  },
+}
+
+function buildThresholds() {
+  // Always-on guards. blog_errors is the synthetic rate we increment
+  // on a failed check; http_req_failed is k6's built-in transport
+  // failure rate. Both should sit close to zero.
+  const base = {
+    'blog_errors':       ['rate<0.005'],
+    'http_req_failed':   ['rate<0.005'],
+    'http_req_duration': ['p(95)<500'],
+  }
+  if (__ENV.K6_STRICT === '1' && STRICT_THRESHOLDS[SCENARIO]) {
+    // Strict overrides bake replace the lax defaults for the metrics
+    // they touch (http_req_duration in particular). Object.assign
+    // semantics: later keys win.
+    return Object.assign(base, STRICT_THRESHOLDS[SCENARIO])
+  }
+  return base
+}
+
 export const options = {
   // Sensible defaults — the cli flags override these per scenario.
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
-  thresholds: {
-    'blog_errors':       ['rate<0.01'],
-    'http_req_failed':   ['rate<0.01'],
-    'http_req_duration': ['p(95)<500'],
-  },
+  thresholds: buildThresholds(),
 }
 
 function getFeed() {
