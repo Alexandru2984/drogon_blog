@@ -53,11 +53,16 @@ not deadline. Strike through when shipped.
 - [x] **ETag on `/comments`, `/users/{id}`, `/auth/me`** — done.
       `/auth/me` emits `Vary: Cookie` + `private` cache-control;
       migration 0005 added `comments.updated_at` for cache keying.
-- [ ] **`Link` headers** (RFC 5988) for cursor pagination on `/posts`
-      so generic clients don't have to crack open the JSON to follow
-      `next_cursor`.
-- [ ] **`X-RateLimit-*` response headers** on auth endpoints so polite
-      clients can self-pace before they hit 429.
+- [x] **`Link` headers** (RFC 5988) — `/posts` emits
+      `Link: </posts?cursor=N&limit=M>; rel="next"` when more
+      pages exist.
+- [x] **`X-RateLimit-*` response headers** — `Limit`, `Remaining`,
+      `Reset` (seconds) on every rate-limited path (auth + search),
+      surfaced both on 200 and 429 so polite clients can self-pace.
+- [x] **ETag on `/messages/conversation`** — weak ETag from
+      `(viewer, peer, count, max(created_at), sum(is_read))` with
+      `Vary: Cookie` + `private` cache-control; matches the
+      pattern set by `/auth/me`.
 
 ## Stretch (probably overkill)
 

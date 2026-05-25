@@ -1,6 +1,7 @@
 #include "MessageController.h"
 #include "../models/Messages.h"
 #include "../models/Users.h"
+#include "../helpers/HttpCache.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -182,6 +183,34 @@ void MessageController::getConversation(const HttpRequestPtr &req,
                                                 CompareOperator::EQ, userIdOpt.value()))
                                     );
 
+        // ETag derives from (peer_id, count, max(created_at) + max(updated_at-equivalent)).
+        // Messages don't track updated_at — the only mutation post-insert is
+        // marking a message read (is_read flips 0→1 via PUT /messages/{id}/read).
+        // Folding the sum of is_read into the tag catches that mutation without
+        // a schema change. Vary: Cookie + Cache-Control: private — the payload
+        // is scoped to the session pair, never cacheable by a shared proxy.
+        std::int64_t maxTs = 0;
+        std::int64_t readSum = 0;
+        for (const auto& m : messages) {
+            const auto ts = http_cache::parseTimestampMicros(
+                m.getValueOfCreatedAt().toDbStringLocal());
+            if (ts > maxTs) maxTs = ts;
+            readSum += m.getValueOfIsRead() ? 1 : 0;
+        }
+        const std::string etag = http_cache::makeWeakEtag({
+            "conv",
+            std::to_string(userIdOpt.value()),
+            std::to_string(otherUserId),
+            std::to_string(static_cast<int>(messages.size())),
+            std::to_string(maxTs),
+            std::to_string(readSum),
+        });
+        constexpr std::string_view kVary = "Cookie";
+        if (http_cache::ifNoneMatchHit(req, etag)) {
+            callback(http_cache::makeNotModified(etag, 0, kVary));
+            return;
+        }
+
         Json::Value ret;
         ret["messages"] = Json::Value(Json::arrayValue);
 
@@ -212,6 +241,7 @@ void MessageController::getConversation(const HttpRequestPtr &req,
         }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
+        http_cache::applyCacheHeaders(resp, etag, 0, kVary);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

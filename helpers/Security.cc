@@ -178,10 +178,25 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
         }
     }
 
+    auto makeDecision = [&](bool allowed, double tokensAfter, double retryAfter) {
+        RateLimitDecision d{};
+        d.allowed          = allowed;
+        d.retryAfterSeconds= retryAfter;
+        d.limit            = capacity;
+        d.remaining        = std::max(0.0, tokensAfter);
+        // Seconds until the bucket would refill back to full capacity
+        // from its current `tokens` level. Clients echo this on a
+        // `Retry-After`-style poll loop.
+        d.resetSeconds     = (capacity - tokensAfter) / refillPerSecond;
+        if (d.resetSeconds < 0.0) d.resetSeconds = 0.0;
+        return d;
+    };
+
     auto it = g_buckets.find(composite);
     if (it == g_buckets.end()) {
-        g_buckets.emplace(composite, Bucket{capacity - 1.0, now});
-        return {true, 0.0};
+        const double tokensAfter = capacity - 1.0;
+        g_buckets.emplace(composite, Bucket{tokensAfter, now});
+        return makeDecision(true, tokensAfter, 0.0);
     }
 
     Bucket& b = it->second;
@@ -191,9 +206,9 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
 
     if (b.tokens >= 1.0) {
         b.tokens -= 1.0;
-        return {true, 0.0};
+        return makeDecision(true, b.tokens, 0.0);
     }
-    return {false, (1.0 - b.tokens) / refillPerSecond};
+    return makeDecision(false, b.tokens, (1.0 - b.tokens) / refillPerSecond);
 }
 
 void registerAdvices()
@@ -265,8 +280,21 @@ void registerAdvices()
                             resp->setStatusCode(drogon::k429TooManyRequests);
                             resp->addHeader("Retry-After",
                                 std::to_string(static_cast<int>(d.retryAfterSeconds) + 1));
+                            // Same advisory headers on 429 as on 200, so a
+                            // client knows the budget shape without having
+                            // to win a request first.
+                            resp->addHeader("X-RateLimit-Limit",
+                                std::to_string(static_cast<int>(d.limit)));
+                            resp->addHeader("X-RateLimit-Remaining", "0");
+                            resp->addHeader("X-RateLimit-Reset",
+                                std::to_string(static_cast<int>(d.resetSeconds) + 1));
                             return resp;
                         }
+                        // Stash the post-take bucket state on the request
+                        // so the post-handling advice below can emit
+                        // X-RateLimit-* without re-doing the lookup.
+                        req->getAttributes()->insert(
+                            "rate_limit_decision", d);
                         break;
                     }
                 }
@@ -293,8 +321,24 @@ void registerAdvices()
         });
 
     drogon::app().registerPostHandlingAdvice(
-        [](const drogon::HttpRequestPtr&, const drogon::HttpResponsePtr& resp) {
+        [](const drogon::HttpRequestPtr& req, const drogon::HttpResponsePtr& resp) {
             applySecurityHeaders(resp);
+
+            // X-RateLimit-* advisory headers. The sync advice above
+            // stashes the post-take state on the request whenever the
+            // path was rate-limited; we surface it on every response
+            // shape (200, 4xx, 5xx) so a client that hits a validation
+            // error still sees its budget.
+            if (req->getAttributes()->find("rate_limit_decision")) {
+                const auto& d = req->getAttributes()->get<RateLimitDecision>(
+                    "rate_limit_decision");
+                resp->addHeader("X-RateLimit-Limit",
+                    std::to_string(static_cast<int>(d.limit)));
+                resp->addHeader("X-RateLimit-Remaining",
+                    std::to_string(static_cast<int>(d.remaining)));
+                resp->addHeader("X-RateLimit-Reset",
+                    std::to_string(static_cast<int>(d.resetSeconds) + 1));
+            }
         });
 
     // Drogon attaches the session cookie *after* PostHandling, so we patch it

@@ -140,7 +140,9 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
 
         // Only emit a cursor when this page filled the limit; otherwise the
         // client knows there's nothing more to fetch.
+        std::int64_t nextCursor = 0;
         if (static_cast<int>(r.size()) == limit && minId > 0) {
+            nextCursor = minId;
             ret["next_cursor"] = static_cast<Json::Int64>(minId);
         } else {
             ret["next_cursor"] = Json::nullValue;
@@ -148,6 +150,19 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         http_cache::applyCacheHeaders(resp, etag);
+        // RFC 5988 Link header for cursor pagination — gives an
+        // HTTP-aware client (curl --get, a generic API explorer, a
+        // Cloudflare Worker) the next-page URL without making them
+        // parse the JSON body. We only emit `next` because the
+        // pagination is one-way (newest → oldest by id); a reverse
+        // would need to remember the head cursor we started from.
+        if (nextCursor > 0) {
+            char link[128];
+            std::snprintf(link, sizeof(link),
+                "</posts?cursor=%lld&limit=%d>; rel=\"next\"",
+                static_cast<long long>(nextCursor), limit);
+            resp->addHeader("Link", link);
+        }
         callback(resp);
     };
     auto onErr = [callback](const DrogonDbException& e) {

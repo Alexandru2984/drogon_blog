@@ -60,6 +60,12 @@ const std::string& csrfCookieName();
 struct RateLimitDecision {
     bool   allowed;
     double retryAfterSeconds; // populated when !allowed
+    // Snapshot of the bucket state AFTER the take attempt — used to
+    // emit X-RateLimit-{Limit,Remaining,Reset} on the response so
+    // polite clients can self-pace before they hit 429.
+    double limit;             // capacity passed in
+    double remaining;         // tokens left in the bucket, clamped >= 0
+    double resetSeconds;      // seconds until the bucket is full again
 };
 
 RateLimitDecision rateLimitTake(const std::string& bucketName,
