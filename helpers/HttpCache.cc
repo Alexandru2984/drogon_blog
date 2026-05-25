@@ -95,6 +95,13 @@ std::int64_t parseTimestampMicros(std::string_view isoUtc)
     return static_cast<std::int64_t>(epoch) * 1000000LL + micros;
 }
 
+// cppcheck-suppress passedByValue
+// `etag` is std::string_view — already a small (16-byte) value handle.
+// cppcheck < 2.8 (the version on Ubuntu 22.04, which is what the
+// drogon CI image carries) doesn't recognise string_view as a
+// small-by-value type and recommends pass-by-const-ref, which would
+// in fact add a level of indirection. Suppressed here, not globally,
+// so a future real passedByValue on std::string still surfaces.
 bool ifNoneMatchHit(const drogon::HttpRequestPtr& req, std::string_view etag)
 {
     const std::string& header = req->getHeader("If-None-Match");
@@ -145,8 +152,14 @@ void applyCacheHeaders(const drogon::HttpResponsePtr& resp,
     }
 }
 
+// Both string_view args; see the rationale on ifNoneMatchHit above.
+// Each parameter needs its own cppcheck-suppress because inline-suppr
+// only consumes a comment on the line immediately preceding the
+// diagnostic line.
+// cppcheck-suppress passedByValue
 drogon::HttpResponsePtr makeNotModified(std::string_view etag,
                                         int maxAgeSeconds,
+                                        // cppcheck-suppress passedByValue
                                         std::string_view varyHeader)
 {
     auto r = drogon::HttpResponse::newHttpResponse();
