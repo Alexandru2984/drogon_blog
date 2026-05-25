@@ -25,12 +25,12 @@ async function submit() {
 
 <template>
   <div class="card" style="max-width: 420px; margin: 2rem auto;">
-    <h2>Forgot password</h2>
+    <h2>{{ $t('auth.forgot_heading') }}</h2>
     <form @submit.prevent="submit">
-      <label>Email</label>
+      <label>{{ $t('auth.email') }}</label>
       <input v-model="email" type="email" required autofocus />
       <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
-        {{ loading ? 'Sending…' : 'Send reset link' }}
+        {{ loading ? $t('common.loading') : $t('auth.send_reset') }}
       </button>
     </form>
     <p v-if="message" :class="isError ? 'error' : 'ok'" style="margin-top: 1rem;">{{ message }}</p>

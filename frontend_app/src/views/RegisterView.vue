@@ -33,24 +33,24 @@ async function submit() {
 
 <template>
   <div class="card" style="max-width: 420px; margin: 2rem auto;">
-    <h2>Create account</h2>
+    <h2>{{ $t('auth.register_heading') }}</h2>
     <form v-if="!done" @submit.prevent="submit">
-      <label for="reg-username">Username</label>
+      <label for="reg-username">{{ $t('auth.username') }}</label>
       <input id="reg-username" v-model="username" autofocus required minlength="3" maxlength="64" />
-      <label for="reg-email">Email</label>
+      <label for="reg-email">{{ $t('auth.email') }}</label>
       <input id="reg-email" v-model="email" type="email" required />
-      <label for="reg-password">Password</label>
+      <label for="reg-password">{{ $t('auth.password') }}</label>
       <input id="reg-password" v-model="password" type="password" autocomplete="new-password" required minlength="8" />
       <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
       <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
-        {{ loading ? 'Creating…' : 'Sign up' }}
+        {{ loading ? $t('common.loading') : $t('auth.sign_up') }}
       </button>
     </form>
     <p v-else class="ok">
-      Account created. Please check your email to verify your address.
+      {{ $t('auth.verify_email_hint') }}
     </p>
     <p class="muted" style="margin-top: 1rem; text-align: center;">
-      Already have one? <router-link to="/login">Log in</router-link>
+      <router-link to="/login">{{ $t('auth.log_in_link') }}</router-link>
     </p>
   </div>
 </template>

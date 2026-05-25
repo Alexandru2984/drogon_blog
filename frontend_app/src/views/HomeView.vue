@@ -53,17 +53,17 @@ onBeforeUnmount(() => { observer?.disconnect() })
 </script>
 
 <template>
-  <h1>Feed</h1>
+  <h1>{{ $t('feed.heading') }}</h1>
   <p v-if="error" class="error">{{ error }}</p>
   <p v-else-if="!posts.length && !loading" class="muted">
-    No posts yet. Be the first to write one!
+    {{ $t('feed.empty') }}
   </p>
 
   <PostCard v-for="p in posts" :key="p.id" :post="p" clamp />
 
   <div ref="sentinel"></div>
-  <p v-if="loading" class="muted" style="text-align: center;">Loading…</p>
+  <p v-if="loading" class="muted" style="text-align: center;">{{ $t('common.loading') }}</p>
   <p v-else-if="!hasMore && posts.length" class="muted" style="text-align: center;">
-    — end of feed —
+    — {{ $t('feed.heading') }} —
   </p>
 </template>

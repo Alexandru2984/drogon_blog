@@ -6,6 +6,7 @@ import { useAuthStore }     from '@/stores/auth'
 import { useToastStore }    from '@/stores/toast'
 import { useMessagesStore } from '@/stores/messages'
 import ToastList            from '@/components/ToastList.vue'
+import LocaleSwitcher        from '@/components/LocaleSwitcher.vue'
 
 const auth     = useAuthStore()
 const { user, isAuthed } = storeToRefs(auth)
@@ -56,28 +57,29 @@ watch(isAuthed, (now, prev) => {
         <input
           v-model="searchInput"
           type="search"
-          placeholder="Search posts…"
-          aria-label="Search posts"
+          :placeholder="$t('nav.search_placeholder')"
+          :aria-label="$t('nav.search_aria')"
         />
       </form>
       <div class="nav-links">
-        <router-link to="/">Feed</router-link>
+        <router-link to="/">{{ $t('nav.feed') }}</router-link>
         <template v-if="isAuthed">
-          <router-link to="/posts/new">New post</router-link>
+          <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
           <router-link to="/messages" class="nav-messages">
-            Messages
+            {{ $t('nav.messages') }}
             <span v-if="messages.totalUnread" class="nav-badge">{{ messages.totalUnread }}</span>
           </router-link>
           <router-link :to="{ name: 'profile', params: { id: user!.id } }" class="username">
             {{ user!.username }}
           </router-link>
-          <router-link to="/account/security" class="ghost-link" title="Two-factor authentication">2FA</router-link>
-          <button class="ghost" @click="doLogout">Logout</button>
+          <router-link to="/account/security" class="ghost-link" :title="$t('nav.two_fa')">{{ $t('nav.two_fa') }}</router-link>
+          <button class="ghost" @click="doLogout">{{ $t('nav.logout') }}</button>
         </template>
         <template v-else>
-          <router-link to="/login">Login</router-link>
-          <router-link to="/register">Register</router-link>
+          <router-link to="/login">{{ $t('nav.login') }}</router-link>
+          <router-link to="/register">{{ $t('nav.register') }}</router-link>
         </template>
+        <LocaleSwitcher />
       </div>
     </div>
   </nav>

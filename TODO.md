@@ -49,7 +49,12 @@ not deadline. Strike through when shipped.
 
 ## Feature gaps
 
-- [ ] **i18n SPA** with vue-i18n (RO / EN switcher).
+- [x] **i18n SPA** — vue-i18n 11 with EN/RO locale files under
+      `src/locales/`. LocaleSwitcher.vue persists choice to
+      localStorage; initial pick falls back through stored → browser
+      `navigator.language` → `en`. Navbar + auth flows + feed
+      headings translated; remaining views ride on $t() with
+      missing-key fallback to the literal.
 - [x] **Storybook** — Storybook 10 + Vue3 + Vite. Stories for
       `PostCard`, `ToastList`, `Avatar` (the last two extracted out
       of inline templates). Frontend CI runs `build-storybook` and

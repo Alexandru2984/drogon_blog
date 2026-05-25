@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import * as Sentry from '@sentry/vue'
 import App from './App.vue'
 import { router } from './router'
+import { i18n } from './i18n'
 import { useAuthStore } from './stores/auth'
 import './style.css'
 
@@ -32,6 +33,7 @@ if (sentryDsn) {
 
 app.use(createPinia())
 app.use(router)
+app.use(i18n)
 
 // Resolve current session before first render so auth-aware UI doesn't flicker.
 const auth = useAuthStore()

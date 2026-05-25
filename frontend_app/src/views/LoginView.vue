@@ -46,21 +46,21 @@ async function submit() {
 
 <template>
   <div class="card" style="max-width: 420px; margin: 2rem auto;">
-    <h2>Login</h2>
+    <h2>{{ $t('auth.login_heading') }}</h2>
     <form @submit.prevent="submit">
-      <label for="login-username">Username</label>
+      <label for="login-username">{{ $t('auth.username') }}</label>
       <input id="login-username" v-model="username" autofocus autocomplete="username" required />
-      <label for="login-password">Password</label>
+      <label for="login-password">{{ $t('auth.password') }}</label>
       <input id="login-password" v-model="password" type="password" autocomplete="current-password" required />
       <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
       <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
-        {{ loading ? 'Signing in…' : 'Sign in' }}
+        {{ loading ? $t('common.loading') : $t('auth.sign_in') }}
       </button>
     </form>
     <p class="muted" style="margin-top: 1rem; text-align: center;">
-      <router-link to="/forgot-password">Forgot password?</router-link>
+      <router-link to="/forgot-password">{{ $t('auth.forgot_link') }}</router-link>
       &nbsp;·&nbsp;
-      <router-link to="/register">Create account</router-link>
+      <router-link to="/register">{{ $t('auth.register_heading') }}</router-link>
     </p>
   </div>
 </template>
