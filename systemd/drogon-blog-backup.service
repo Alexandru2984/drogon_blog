@@ -1,0 +1,55 @@
+[Unit]
+Description=Drogon Blog — daily PostgreSQL backup
+Documentation=file:/home/micu/drogon_blog/scripts/backup.sh
+Wants=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/drogon_blog
+
+# Reuse the same .env the application uses so DB_* stay in lockstep
+# with the running process — no second source of truth for credentials.
+EnvironmentFile=/home/micu/drogon_blog/.env
+
+# Override the backup destination from /var/backups/drogon-blog (which
+# the unprivileged `micu` user can't create) to a dir we provision
+# below via StateDirectory.
+Environment=BLOG_BACKUP_DIR=/var/lib/drogon-blog/backups
+
+# StateDirectory makes systemd create / chown the dir to User=micu on
+# unit start, idempotent. Mode 0700 keeps dumps off other-readable —
+# the directory contains every row in the DB.
+StateDirectory=drogon-blog/backups
+StateDirectoryMode=0700
+
+ExecStart=/home/micu/drogon_blog/scripts/backup.sh
+
+# Sandboxing: backup only reads the .env and writes to its own state
+# directory. Everything else stays read-only / inaccessible.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/drogon-blog
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# Nice + IOSchedulingClass shifts the backup well below interactive
+# load so a slow pg_dump can't degrade /posts latency on a small VPS.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Backup runs over 127.0.0.1 to the local PostgreSQL — no outbound
+# DNS / TCP needed. Sealing the network surface prevents a future
+# accidental ExecStart change from quietly shipping dumps elsewhere.
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+IPAddressAllow=::1

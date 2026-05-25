@@ -26,9 +26,10 @@ not deadline. Strike through when shipped.
 
 ## Operational
 
-- [ ] **Backup + restore** — cron `pg_dump --format=custom`, rolling
-      retention, restore exercised in CI (compose up → import → smoke).
-      The only thing standing between us and a real production posture.
+- [x] **Backup + restore** — `pg_dump --format=custom` daily via
+      `drogon-blog-backup.timer`, rolling retention (7d / 4w / 6m),
+      CI round-trip job in `backup-restore`, runbook in
+      `ops/RUNBOOK-backup-restore.md`.
 - [ ] **PgBouncer sidecar / sub-deployment in Helm** — connection
       pooling layer; the chart currently assumes app talks straight
       to Postgres.
