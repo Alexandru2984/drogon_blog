@@ -87,7 +87,13 @@ not deadline. Strike through when shipped.
       30s TTL heartbeat refresh. `/users/{id}` surfaces `online: true`
       across pods. Optional (CMake gates on libhiredis-dev;
       `BLOG_REDIS_URL` env opt-in at runtime).
-- [ ] A/B testing flag system.
+- [x] A/B testing flag system — `feature_flags` table (migration
+      0006 + 0007), `helpers/Flags` with snapshot-publish cache
+      invalidated via `kind="flag_changed"` on the existing
+      `blog_event` pg_notify channel. Deterministic bucketing
+      `sha256(key:user_id) % 100`. Endpoints `/flags` + `/flags/{key}`.
+      Frontend composable `useFlag` lazy-loads + re-fetches on
+      auth state change.
 - [x] Sentry / error tracking — `helpers/Sentry` ships a minimal
       HTTP-based ingest client (no sentry-native dep); AccessLog
       fires capture on 5xx with request context. Frontend uses
