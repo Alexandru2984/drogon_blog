@@ -261,20 +261,23 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     }
     const auto secret =
         security::unwrapTotpSecret(rows[0]["secret_b32"].as<std::string>());
-    const std::uint64_t matchedStep = totp::verifyWithStep(secret, code);
-    if (matchedStep == 0) {
+    if (!totp::verify(secret, code)) {
         audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
                                 std::nullopt, std::nullopt, Json::objectValue});
         callback(jsonError(k400BadRequest, "Invalid code")); return;
     }
 
-    // Seed last_used_step with the confirmation code's step so the very same
-    // code cannot then be replayed at /auth/login/verify-totp seconds later.
+    // NB: we deliberately do NOT seed last_used_step here. Enrolment commonly
+    // happens seconds before the first login, often inside the same 30 s TOTP
+    // window, so the confirmation code and the first login code are the same
+    // value at the same step. Burning the step at confirm time would make that
+    // first legitimate login look like a replay and reject it. Replay
+    // protection is enforced only on the login path — that's where a captured
+    // login code would be reused — and last_used_step stays 0 until the first
+    // successful login verifies and claims a step.
     db->execSqlSync(
-        "UPDATE user_totp_secrets "
-        "   SET enabled = TRUE, confirmed_at = NOW(), last_used_step = $2 "
-        " WHERE user_id = $1",
-        *userIdOpt, static_cast<std::int64_t>(matchedStep));
+        "UPDATE user_totp_secrets SET enabled = TRUE, confirmed_at = NOW() "
+        "WHERE user_id = $1", *userIdOpt);
     auto codes = issueFreshRecoveryCodes(*userIdOpt);
 
     audit_log::record(req, {"2fa.totp.enable", userIdOpt,
