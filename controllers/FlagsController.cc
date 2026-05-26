@@ -3,7 +3,30 @@
 
 #include <trantor/utils/Logger.h>
 
+#include <optional>
+#include <string>
+#include <unordered_set>
+
 namespace {
+
+// Only flags the SPA legitimately needs client-side are exposed over the
+// public /flags API. Everything else (kill-switches, internal experiments,
+// staged rollouts of unreleased features) stays server-side: leaking the key
+// names alone is information disclosure about the roadmap. To surface a new
+// flag to the frontend, add its key here deliberately. Server-side code keeps
+// using flags::isEnabled() directly and is unaffected by this allowlist.
+const std::unordered_set<std::string>& publicFlags()
+{
+    static const std::unordered_set<std::string> s = {
+        "new_feed",
+    };
+    return s;
+}
+
+bool isPublicFlag(const std::string& key)
+{
+    return publicFlags().count(key) != 0;
+}
 
 // Anonymous callers bucket against user_id=0. Session-bound flags
 // (rare for a blog — most flags are global rollouts) would need a
@@ -35,7 +58,10 @@ void FlagsController::get(const HttpRequestPtr& req,
         return;
     }
     const int userId = callerUserId(req);
-    const auto val = flags::lookup(key, userId);
+    // Non-public flags are reported as unknown regardless of whether they
+    // exist, so the endpoint can't be used to probe for internal flag names.
+    const auto val = isPublicFlag(key) ? flags::lookup(key, userId)
+                                       : std::optional<bool>{};
 
     Json::Value ret;
     ret["key"] = key;
@@ -68,6 +94,7 @@ void FlagsController::list(const HttpRequestPtr& req,
     Json::Value ret;
     ret["flags"] = Json::Value(Json::arrayValue);
     for (const auto& r : results) {
+        if (!isPublicFlag(r.key)) continue;   // don't leak non-public flag keys
         Json::Value e;
         e["key"]     = r.key;
         e["enabled"] = r.enabled;

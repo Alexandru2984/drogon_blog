@@ -2,6 +2,7 @@
 #include "../models/Comments.h"
 #include "../models/Users.h"
 #include "../helpers/HttpCache.h"
+#include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -112,6 +113,14 @@ void CommentController::createComment(const HttpRequestPtr &req,
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k401Unauthorized);
         callback(resp);
+        return;
+    }
+
+    // Per-user comment cap: 20 burst, 20/min — bounds comment spam.
+    if (auto rl = security::rateLimitOr429(
+            "comment_create", "uid:" + std::to_string(userIdOpt.value()),
+            20.0, 20.0 / 60.0)) {
+        callback(rl);
         return;
     }
 

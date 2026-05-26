@@ -14,6 +14,43 @@ EnvironmentFile=/home/micu/drogon_blog/.env
 Restart=on-failure
 RestartSec=5
 
+# ---- Sandboxing ----
+# Defence-in-depth so an RCE in a C++ parser (libvips / cmark / grpc / libpq)
+# is confined. Kept compatible with running in-tree as User=micu: the app
+# lives under /home/micu/drogon_blog and must read its code/config there, so
+# ProtectHome stays off and we use ProtectSystem=strict (whole FS read-only)
+# plus an explicit ReadWritePaths for the only directory it writes — uploads.
+# Logs go to journald (stdout), so nothing else needs write access.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+# ProtectSystem=strict alone leaves the user's home writable on this host, so
+# pin the app tree read-only explicitly (verified: a write to the repo root is
+# then blocked) while ReadWritePaths re-grants the uploads subdir.
+ReadOnlyPaths=/home/micu/drogon_blog
+ReadWritePaths=/home/micu/drogon_blog/uploads
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+# TCP (HTTP/PG/Redis/SMTP/gRPC) + AF_UNIX (journald) + AF_NETLINK (glibc
+# getaddrinfo interface enumeration). No raw sockets.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Binds only high ports (8092 HTTP, 50051 gRPC) so no capabilities are needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
 # Graceful shutdown window.
 #
 # main.cc's SIGTERM handler: flip /readyz to 503, sleep 2 s for the

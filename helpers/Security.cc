@@ -164,6 +164,27 @@ std::string randomToken(std::size_t bytes)
 
 const std::string& csrfCookieName() { return kCsrfCookieName; }
 
+void issueCsrfCookie(const drogon::HttpRequestPtr& req,
+                     const drogon::HttpResponsePtr& resp)
+{
+    auto session = req->session();
+    std::string token;
+    auto existing = session->getOptional<std::string>("csrf_token");
+    if (existing.has_value() && !existing.value().empty()) {
+        token = existing.value();
+    } else {
+        token = randomToken();
+        session->insert("csrf_token", token);
+    }
+
+    drogon::Cookie c(csrfCookieName(), token);
+    c.setPath("/");
+    c.setHttpOnly(false);                       // frontend reads it to echo in header
+    c.setSameSite(drogon::Cookie::SameSite::kLax);
+    c.setSecure(secureCookies());
+    resp->addCookie(std::move(c));
+}
+
 RateLimitDecision rateLimitTake(const std::string& bucketName,
                                 const std::string& key,
                                 double capacity,
@@ -221,6 +242,24 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
         return makeDecision(true, b.tokens, 0.0);
     }
     return makeDecision(false, b.tokens, (1.0 - b.tokens) / refillPerSecond);
+}
+
+drogon::HttpResponsePtr rateLimitOr429(const std::string& bucketName,
+                                       const std::string& key,
+                                       double capacity,
+                                       double refillPerSecond)
+{
+    const char* dis = std::getenv("BLOG_DISABLE_RATE_LIMIT");
+    if (dis && std::string(dis) == "1") return nullptr;
+    auto d = rateLimitTake(bucketName, key, capacity, refillPerSecond);
+    if (d.allowed) return nullptr;
+    Json::Value body;
+    body["error"] = "Too many requests";
+    auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+    resp->setStatusCode(drogon::k429TooManyRequests);
+    resp->addHeader("Retry-After",
+        std::to_string(static_cast<int>(d.retryAfterSeconds) + 1));
+    return resp;
 }
 
 void registerAdvices()

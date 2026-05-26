@@ -54,6 +54,15 @@ std::string unwrapTotpSecret(const std::string& stored);
 // stay in sync.
 const std::string& csrfCookieName();
 
+// Ensures the current session has a CSRF token and that `resp` carries the
+// matching readable (non-HttpOnly), Lax cookie. Idempotent — re-emits the
+// existing token when one is already on the session. Shared between the
+// password-step login, /auth/me bootstrap, and the two-step (2FA) login
+// completion so every path that hands back an authenticated session also
+// hands back a usable CSRF token.
+void issueCsrfCookie(const drogon::HttpRequestPtr& req,
+                     const drogon::HttpResponsePtr& resp);
+
 // Acquires (or returns false / 429-able state) one slot from the per-IP token
 // bucket identified by `bucketName`. Different bucket names give independent
 // budgets (e.g. "login" vs "register").
@@ -72,6 +81,17 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
                                 const std::string& key,
                                 double capacity,
                                 double refillPerSecond);
+
+// Convenience for inline use inside authenticated mutating handlers: takes one
+// token from the (bucketName,key) bucket and, when the bucket is empty, returns
+// a ready-to-send 429 with Retry-After. Returns nullptr when the request is
+// allowed (or when BLOG_DISABLE_RATE_LIMIT=1). Key on the user id for
+// per-account fairness so a single authenticated client can't spam regardless
+// of source IP. Mirrors the per-username guard already used by /auth/login.
+drogon::HttpResponsePtr rateLimitOr429(const std::string& bucketName,
+                                       const std::string& key,
+                                       double capacity,
+                                       double refillPerSecond);
 
 // Applies CSP, HSTS, X-Frame-Options and friends to the response. Idempotent.
 void applySecurityHeaders(const drogon::HttpResponsePtr& resp);

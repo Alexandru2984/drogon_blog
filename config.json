@@ -1,9 +1,14 @@
 /* This is a JSON format configuration file
  */
 {
+    // Hardening: bind loopback only. Production sits behind nginx
+    // (upstream blog_backend -> 127.0.0.1:8092) which terminates TLS and
+    // forwards from Cloudflare. Binding 0.0.0.0 made the app reachable on the
+    // host's public interface; ufw default-denies 8092 so it wasn't exposed,
+    // but loopback binding removes the single-barrier dependency on ufw.
     "listeners": [
         {
-            "address": "0.0.0.0",
+            "address": "127.0.0.1",
             "port": 8092,
             "https": false
         }
@@ -113,7 +118,11 @@
                 //is_case_sensitive: indicates whether the URI prefix is case sensitive.
                 "is_case_sensitive": false,
                 //allow_all: true by default. If it is set to false, only static files with a valid extension can be accessed.
-                "allow_all": true,
+                // Hardening: only files whose extension is in file_types above
+                // are served. Belt-and-suspenders with the restricted
+                // file_types list so a stray .map/.txt/.env/backup/dump that
+                // lands under public/ (or the uploads symlink) is not served.
+                "allow_all": false,
                 //is_recursive: true by default. If it is set to false, files in sub directories can't be accessed.
                 "is_recursive": true,
                 //filters: string array, the filters applied to the location.
@@ -121,8 +130,15 @@
             }
         ],
         //max_connections: maximum number of connections, 100000 by default
-        "max_connections": 100000,
+        // Hardening: bound total connections to a sane ceiling. Behind nginx on
+        // loopback this is plenty (upstream concurrency is modest) while
+        // capping memory under a connection flood.
+        "max_connections": 4096,
         //max_connections_per_ip: maximum number of connections per client, 0 by default which means no limit
+        // Deliberately left at 0 (unlimited): every connection originates from
+        // nginx at 127.0.0.1, so a per-IP cap here would throttle the entire
+        // site to that number. Per-client connection/request limiting belongs
+        // in nginx (limit_conn / limit_req on $binary_remote_addr).
         "max_connections_per_ip": 0,
         //Load_dynamic_views: False by default, when set to true, drogon
         //compiles and loads dynamically "CSP View Files" in directories defined

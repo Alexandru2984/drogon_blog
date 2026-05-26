@@ -42,7 +42,10 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
         Json::Value ret;
         ret["id"] = user.getValueOfId();
         ret["username"] = user.getValueOfUsername();
-        ret["email"] = user.getValueOfEmail();
+        // NB: email is deliberately NOT exposed here. /users/{id} is a public,
+        // unauthenticated endpoint — returning the address leaked PII and aided
+        // account enumeration. The owner sees their own email via /auth/me
+        // (session-scoped) and /users/profile.
         ret["bio"] = user.getValueOfBio();
         ret["created_at"] = user.getValueOfCreatedAt().toDbStringLocal();
 
@@ -213,6 +216,15 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
         return;
     }
 
+    // Per-user avatar cap: 3 burst, 3/10min — image processing (libvips) is
+    // the most expensive authenticated operation; this bounds CPU abuse.
+    if (auto rl = security::rateLimitOr429(
+            "avatar_upload", "uid:" + std::to_string(userIdOpt.value()),
+            3.0, 3.0 / 600.0)) {
+        callback(rl);
+        return;
+    }
+
     MultiPartParser fileUpload;
     if (fileUpload.parse(req) != 0) {
         Json::Value ret;
@@ -344,14 +356,40 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
     try {
-        auto users = mapper.findAll();
+        // Bounded directory listing. findAll() returned every row, which is
+        // unbounded enumeration + a DoS vector as the user count grows. Cap at
+        // 100 rows ordered by id, with an optional `?q=` username prefix search
+        // for the SPA's "start a conversation" picker. `before` pages further.
+        using Cols = drogon_model::blog_db::Users::Cols;
+        constexpr int kMaxUserPage = 100;
+        int limit = kMaxUserPage;
+        const auto l = req->getParameter("limit");
+        if (!l.empty()) { try { const int v = std::stoi(l); if (v > 0 && v < kMaxUserPage) limit = v; } catch (...) {} }
+
+        Criteria crit(Cols::_id, CompareOperator::GE, 1);   // always-true base
+        const auto q = req->getParameter("q");
+        if (!q.empty() && q.size() <= 64)
+            crit = crit && Criteria(Cols::_username, CompareOperator::Like, q + "%");
+        const auto before = req->getParameter("before");
+        if (!before.empty()) {
+            try { const long long v = std::stoll(before); if (v > 0)
+                crit = crit && Criteria(Cols::_id, CompareOperator::LT, v); }
+            catch (...) {}
+        }
+
+        auto users = mapper.orderBy(Cols::_id, SortOrder::DESC)
+                           .limit(static_cast<std::size_t>(limit))
+                           .findBy(crit);
 
         Json::Value ret;
         ret["users"] = Json::Value(Json::arrayValue);
+        std::int64_t minId = 0;
 
         for (const auto &user : users) {
+            const auto uid = user.getValueOfId();
+            if (minId == 0 || uid < minId) minId = uid;
             // Don't include current user
-            if (user.getValueOfId() == userIdOpt.value()) {
+            if (uid == userIdOpt.value()) {
                 continue;
             }
 
@@ -365,6 +403,9 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
 
             ret["users"].append(userJson);
         }
+
+        ret["next_cursor"] = (static_cast<int>(users.size()) == limit && minId > 0)
+            ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);

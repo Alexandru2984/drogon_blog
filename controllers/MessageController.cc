@@ -2,9 +2,13 @@
 #include "../models/Messages.h"
 #include "../models/Users.h"
 #include "../helpers/HttpCache.h"
+#include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
+
+#include <algorithm>
+#include <cstdint>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -15,7 +19,36 @@ namespace {
 // before json_build_object so the websocket payload stays under that
 // envelope even if this cap is raised later.
 constexpr std::size_t kMaxMessageBytes = std::size_t{10} * 1024;
+
+// Pagination caps. Previously these endpoints did an unbounded findBy and
+// returned every row a user had ever sent/received — a slow, memory-heavy
+// query and JSON serialization that grows without limit per account. We now
+// return at most kMaxPageLimit rows (newest first by id, which is monotonic
+// with created_at), with an optional `before` cursor for older pages. No
+// params => latest kDefaultPageLimit, which is backward-compatible for the
+// SPA (it just gets a bounded, most-recent window).
+constexpr int kDefaultPageLimit = 50;
+constexpr int kMaxPageLimit     = 100;
+
+struct PageParams { int limit; std::int64_t before; };
+
+PageParams parsePage(const HttpRequestPtr& req)
+{
+    int limit = kDefaultPageLimit;
+    const auto l = req->getParameter("limit");
+    if (!l.empty()) {
+        try { const int v = std::stoi(l); if (v > 0) limit = std::min(v, kMaxPageLimit); }
+        catch (...) {}
+    }
+    std::int64_t before = 0;
+    const auto b = req->getParameter("before");
+    if (!b.empty()) {
+        try { const long long v = std::stoll(b); if (v > 0) before = v; }
+        catch (...) {}
+    }
+    return {limit, before};
 }
+} // namespace
 
 void MessageController::getReceivedMessages(const HttpRequestPtr &req,
                                            std::function<void(const HttpResponsePtr &)> &&callback)
@@ -37,21 +70,28 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
     Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
-                                             SortOrder::DESC)
-                                    .findBy(Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
-                                                    CompareOperator::EQ, userIdOpt.value()));
+        const auto page = parsePage(req);
+        using Cols = drogon_model::blog_db::Messages::Cols;
+        auto crit = Criteria(Cols::_receiver_id, CompareOperator::EQ, userIdOpt.value());
+        if (page.before > 0)
+            crit = crit && Criteria(Cols::_id, CompareOperator::LT, page.before);
+        auto messages = messageMapper.orderBy(Cols::_id, SortOrder::DESC)
+                                     .limit(static_cast<std::size_t>(page.limit))
+                                     .findBy(crit);
 
         Json::Value ret;
         ret["messages"] = Json::Value(Json::arrayValue);
+        std::int64_t minId = 0;
 
         for (const auto &message : messages) {
+            const auto id = message.getValueOfId();
+            if (minId == 0 || id < minId) minId = id;
             Json::Value msgJson;
-            msgJson["id"] = message.getValueOfId();
+            msgJson["id"] = id;
             msgJson["content"] = message.getValueOfContent();
             msgJson["is_read"] = message.getValueOfIsRead();
             msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
-            
+
             // Best-effort sender enrichment. The author row may have been
             // deleted between the message SELECT and now (ON DELETE CASCADE
             // wipes their messages but the in-flight read can still race);
@@ -71,6 +111,11 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
 
             ret["messages"].append(msgJson);
         }
+
+        // Cursor for the next (older) page: only when this page filled the
+        // limit, otherwise the client knows it has reached the end.
+        ret["next_cursor"] = (static_cast<int>(messages.size()) == page.limit && minId > 0)
+            ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);
@@ -104,21 +149,28 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
     Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
-                                             SortOrder::DESC)
-                                    .findBy(Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
-                                                    CompareOperator::EQ, userIdOpt.value()));
+        const auto page = parsePage(req);
+        using Cols = drogon_model::blog_db::Messages::Cols;
+        auto crit = Criteria(Cols::_sender_id, CompareOperator::EQ, userIdOpt.value());
+        if (page.before > 0)
+            crit = crit && Criteria(Cols::_id, CompareOperator::LT, page.before);
+        auto messages = messageMapper.orderBy(Cols::_id, SortOrder::DESC)
+                                     .limit(static_cast<std::size_t>(page.limit))
+                                     .findBy(crit);
 
         Json::Value ret;
         ret["messages"] = Json::Value(Json::arrayValue);
+        std::int64_t minId = 0;
 
         for (const auto &message : messages) {
+            const auto id = message.getValueOfId();
+            if (minId == 0 || id < minId) minId = id;
             Json::Value msgJson;
-            msgJson["id"] = message.getValueOfId();
+            msgJson["id"] = id;
             msgJson["content"] = message.getValueOfContent();
             msgJson["is_read"] = message.getValueOfIsRead();
             msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
-            
+
             // Best-effort receiver enrichment; see getReceivedMessages.
             try {
                 auto receiver = userMapper.findByPrimaryKey(message.getValueOfReceiverId());
@@ -135,6 +187,9 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
 
             ret["messages"].append(msgJson);
         }
+
+        ret["next_cursor"] = (static_cast<int>(messages.size()) == page.limit && minId > 0)
+            ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);
@@ -169,19 +224,25 @@ void MessageController::getConversation(const HttpRequestPtr &req,
     Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
-        // Get messages between current user and other user
-        auto messages = messageMapper.orderBy(drogon_model::blog_db::Messages::Cols::_created_at, 
-                                             SortOrder::ASC)
-                                    .findBy(
-                                        (Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
-                                                CompareOperator::EQ, userIdOpt.value()) &&
-                                         Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
-                                                CompareOperator::EQ, otherUserId)) ||
-                                        (Criteria(drogon_model::blog_db::Messages::Cols::_sender_id, 
-                                                CompareOperator::EQ, otherUserId) &&
-                                         Criteria(drogon_model::blog_db::Messages::Cols::_receiver_id, 
-                                                CompareOperator::EQ, userIdOpt.value()))
-                                    );
+        // Messages between the two users. Fetch the newest kMaxPageLimit by id
+        // DESC (bounded — a long-running conversation must not pull every row),
+        // then reverse to chronological order for display. `before` pages
+        // further back. The pair-scoping criteria is unchanged.
+        const auto page = parsePage(req);
+        using Cols = drogon_model::blog_db::Messages::Cols;
+        auto pairCrit =
+            (Criteria(Cols::_sender_id,   CompareOperator::EQ, userIdOpt.value()) &&
+             Criteria(Cols::_receiver_id, CompareOperator::EQ, otherUserId)) ||
+            (Criteria(Cols::_sender_id,   CompareOperator::EQ, otherUserId) &&
+             Criteria(Cols::_receiver_id, CompareOperator::EQ, userIdOpt.value()));
+        if (page.before > 0)
+            pairCrit = pairCrit && Criteria(Cols::_id, CompareOperator::LT, page.before);
+        auto messages = messageMapper.orderBy(Cols::_id, SortOrder::DESC)
+                                     .limit(static_cast<std::size_t>(page.limit))
+                                     .findBy(pairCrit);
+        // Reverse the newest-first page into chronological (ascending) order so
+        // the rest of the handler (ETag + render loop) sees oldest→newest.
+        std::reverse(messages.begin(), messages.end());
 
         // ETag derives from (peer_id, count, max(created_at) + max(updated_at-equivalent)).
         // Messages don't track updated_at — the only mutation post-insert is
@@ -274,6 +335,16 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
             Json::Value("error: Invalid JSON"));
         resp->setStatusCode(k400BadRequest);
         callback(resp);
+        return;
+    }
+
+    // Per-user send cap: 30 burst, 30/min. Stops a single authenticated
+    // account from flooding messages (DB bloat + notification spam) even if
+    // it rotates source IPs.
+    if (auto rl = security::rateLimitOr429(
+            "msg_send", "uid:" + std::to_string(userIdOpt.value()),
+            30.0, 30.0 / 60.0)) {
+        callback(rl);
         return;
     }
 

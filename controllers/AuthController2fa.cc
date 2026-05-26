@@ -154,9 +154,13 @@ void completeTwoStepLogin(const HttpRequestPtr& req,
     ret["user"]["email"]    = rows[0]["email"].as<std::string>();
 
     auto resp = HttpResponse::newHttpJsonResponse(ret);
-    // The login handler issued the CSRF cookie earlier in the password
-    // step; we don't reissue here so the frontend's first authenticated
-    // request finds the same token. The session already exists.
+    // Issue the CSRF cookie here. The password step's no-2FA branch issues it,
+    // but the 2FA branch only planted pending_user_id and returned
+    // requires_2fa — it never set a csrf_token. And completeTwoStepLogin just
+    // rotated the session id, so any earlier token is gone. Without this the
+    // first mutating request after a 2FA login would 403 until the SPA happened
+    // to call /auth/me and rehydrate the token.
+    security::issueCsrfCookie(req, resp);
     callback(resp);
 }
 
@@ -202,6 +206,13 @@ void AuthController::setupTotp(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
+    // 3 burst, 3/10min: rotating the secret repeatedly is never legitimate.
+    if (auto rl = security::rateLimitOr429(
+            "totp_setup", "uid:" + std::to_string(*userIdOpt), 3.0, 3.0 / 600.0)) {
+        callback(rl);
+        return;
+    }
+
     auto db = drogon::app().getDbClient();
     auto rows = db->execSqlSync(
         "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
@@ -245,6 +256,14 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
 {
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
+
+    // 5 burst, 5/min: caps brute-force of the 6-digit confirmation code.
+    if (auto rl = security::rateLimitOr429(
+            "totp_confirm", "uid:" + std::to_string(*userIdOpt), 5.0, 5.0 / 60.0)) {
+        callback(rl);
+        return;
+    }
+
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
     const std::string code = (*json)["code"].asString();
@@ -562,7 +581,7 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
 
     auto db = drogon::app().getDbClient();
     auto r = db->execSqlSync(
-        "SELECT secret_b32, last_used_step FROM user_totp_secrets "
+        "SELECT secret_b32 FROM user_totp_secrets "
         "WHERE user_id = $1 AND enabled = TRUE",
         *pendingOpt);
 
@@ -579,10 +598,18 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
         return;
     }
 
-    // Replay guard: a code is accepted at most once. If this step was already
-    // consumed (same code presented twice inside its ~90 s window), reject.
-    const std::int64_t lastUsed = r[0]["last_used_step"].as<std::int64_t>();
-    if (static_cast<std::int64_t>(matchedStep) <= lastUsed) {
+    // Atomic replay guard: claim this time-step in a single statement. A code
+    // is accepted at most once — the UPDATE only fires when the matched step is
+    // strictly newer than last_used_step, so two parallel requests presenting
+    // the same code can't both win (the previous SELECT-check-then-UPDATE had a
+    // TOCTOU window where both saw the same last_used_step and both passed).
+    auto claim = db->execSqlSync(
+        "UPDATE user_totp_secrets SET last_used_step = $2 "
+        " WHERE user_id = $1 AND enabled = TRUE "
+        "   AND COALESCE(last_used_step, 0) < $2 "
+        "RETURNING user_id",
+        *pendingOpt, static_cast<std::int64_t>(matchedStep));
+    if (claim.empty()) {
         Json::Value meta;
         meta["reason"] = "replay";
         audit_log::record(req, {"2fa.verify.totp.fail", pendingOpt,
@@ -590,9 +617,6 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
         callback(jsonError(k401Unauthorized, "Invalid code"));
         return;
     }
-    db->execSqlSync(
-        "UPDATE user_totp_secrets SET last_used_step = $2 WHERE user_id = $1",
-        *pendingOpt, static_cast<std::int64_t>(matchedStep));
 
     audit_log::record(req, {"login.ok", pendingOpt,
                             std::nullopt, std::nullopt, Json::objectValue});
@@ -642,8 +666,24 @@ void AuthController::verifyLoginRecovery(const HttpRequestPtr& req,
         return;
     }
 
-    db->execSqlSync(
-        "UPDATE user_recovery_codes SET used_at = NOW() WHERE id = $1", matchedId);
+    // Atomic single-use consume. The SELECT above ran in C++ to match the
+    // hash, but matching then updating unconditionally left a TOCTOU window:
+    // two parallel requests with the same code could both pass the match and
+    // both complete the login. Gating the UPDATE on `used_at IS NULL` and
+    // requiring a returned row means exactly one request wins; the loser sees
+    // zero rows and is rejected as a replay.
+    auto consumed = db->execSqlSync(
+        "UPDATE user_recovery_codes SET used_at = NOW() "
+        " WHERE id = $1 AND user_id = $2 AND used_at IS NULL "
+        "RETURNING id",
+        matchedId, *pendingOpt);
+    if (consumed.empty()) {
+        audit_log::record(req, {"2fa.verify.recovery.replay", pendingOpt,
+                                std::string{"recovery_code"}, matchedId,
+                                Json::objectValue});
+        callback(jsonError(k401Unauthorized, "Invalid recovery code"));
+        return;
+    }
     audit_log::record(req, {"2fa.verify.recovery.used", pendingOpt,
                             std::string{"recovery_code"}, matchedId,
                             Json::objectValue});

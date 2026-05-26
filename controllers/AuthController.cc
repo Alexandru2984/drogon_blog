@@ -30,30 +30,10 @@ const std::string& dummyHash()
     return h;
 }
 
-// Ensures a CSRF token exists for the current session and that the response
-// carries the matching readable (non-HttpOnly) Lax cookie. Idempotent: when
-// the session already has a token (returning user, /auth/me), the same value
-// is re-emitted so the frontend can pick it up after a reload.
-void issueCsrfCookie(const drogon::HttpRequestPtr& req,
-                     const drogon::HttpResponsePtr& resp)
-{
-    auto session = req->session();
-    std::string token;
-    auto existing = session->getOptional<std::string>("csrf_token");
-    if (existing.has_value() && !existing.value().empty()) {
-        token = existing.value();
-    } else {
-        token = security::randomToken();
-        session->insert("csrf_token", token);
-    }
-
-    drogon::Cookie c(security::csrfCookieName(), token);
-    c.setPath("/");
-    c.setHttpOnly(false);                       // frontend reads it to echo in header
-    c.setSameSite(drogon::Cookie::SameSite::kLax);
-    c.setSecure(security::secureCookies());
-    resp->addCookie(std::move(c));
-}
+// CSRF cookie issuance moved to security::issueCsrfCookie (helpers/Security)
+// so the two-step (2FA) login completion in AuthController2fa.cc can emit it
+// too — see fix for the post-2FA "first mutating request 403s" flow bug.
+using security::issueCsrfCookie;
 
 constexpr std::size_t kMinPasswordLen = 8;
 constexpr std::size_t kMaxPasswordLen = 256;

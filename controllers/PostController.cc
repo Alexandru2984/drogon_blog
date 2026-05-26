@@ -5,6 +5,7 @@
 #include "../helpers/AuditLog.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/Markdown.h"
+#include "../helpers/Security.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -381,6 +382,14 @@ void PostController::createPost(const HttpRequestPtr &req,
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k401Unauthorized);
         callback(resp);
+        return;
+    }
+
+    // Per-user create cap: 10 burst, 10/min — bounds post spam / DB bloat.
+    if (auto rl = security::rateLimitOr429(
+            "post_create", "uid:" + std::to_string(userIdOpt.value()),
+            10.0, 10.0 / 60.0)) {
+        callback(rl);
         return;
     }
 
