@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { messagesApi, type MessageRow } from '@/api/messages'
+import { usersApi } from '@/api/users'
 import type { Comment } from '@/api/comments'
 import { useAuthStore } from './auth'
 
@@ -57,7 +58,8 @@ export const useMessagesStore = defineStore('messages', () => {
   function ingest(m: MessageRow, opts: { markRead?: boolean } = {}) {
     const peerId = peerIdFor(m)
     if (peerId == null) return
-    const conv = conversations.value.get(peerId)
+    const existing = conversations.value.get(peerId)
+    const conv = existing
                 ?? { peer: { id: peerId }, messages: [], unread: 0 }
     // Dedup on id (REST + WS can race for sender's own outbound message).
     if (!conv.messages.some(x => x.id === m.id)) {
@@ -68,6 +70,20 @@ export const useMessagesStore = defineStore('messages', () => {
     if (!fromMe && !m.is_read && !opts.markRead) conv.unread += 1
     if (opts.markRead) conv.unread = 0
     conversations.value.set(peerId, conv)
+
+    // WS push payloads carry only the raw `messages` row — no
+    // peer username / avatar (the trg_messages_notify trigger
+    // truncates the JSON to fit under PG's 8 KiB NOTIFY cap, so
+    // shipping the JOIN'd author is impractical there). Enrich
+    // lazily on the client: when we see a new peer with no
+    // username yet, fire-and-forget GET /users/{id}. Failure is
+    // non-fatal — the UI degrades to "User #N" which is the same
+    // shape it shows when the lookup is in flight.
+    if (!conv.peer.username) {
+      usersApi.get(peerId)
+        .then(u => upsertPeer({ id: u.id, username: u.username, profile_image: u.profile_image }))
+        .catch(() => { /* ignore — UI shows User #N */ })
+    }
   }
 
   function clear() {

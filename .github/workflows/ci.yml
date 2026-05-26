@@ -138,8 +138,15 @@ jobs:
           # -P "$(nproc)" parallelises across cores. clang-tidy is CPU-bound
           # per file, so the speedup scales linearly until we run out of TUs.
           # pipefail preserves clang-tidy's exit code through the awk filter.
+          # controllers/grpc/ is excluded because its sources include
+          # the protoc-generated `blog.grpc.pb.h` from build/proto/,
+          # and clang-tidy without a compile-commands entry can't
+          # resolve that header (the build dir uses add_custom_command,
+          # not a target the static-analysis CMake configures). The
+          # service impl is exercised end-to-end via grpcurl smoke and
+          # the BlogReader gRPC roundtrip — not via clang-tidy.
           set -o pipefail
-          find controllers helpers -name '*.cc' -print0 \
+          find controllers helpers -name '*.cc' -not -path '*/controllers/grpc/*' -print0 \
             | xargs -0 -P "$(nproc)" -n 1 clang-tidy -p build --quiet --warnings-as-errors='*' 2>&1 \
             | awk '!/^[0-9]+ warnings generated\.$/ && \
                    !/^Suppressed [0-9]+ warnings / && \
@@ -333,12 +340,18 @@ jobs:
           # spec can plant a known reset token directly (the SHA-256 in DB
           # is one-way and EmailHelper isn't wired in CI). Same channel
           # used by the WS spec to look up Bob's user id.
+          # BLOG_SITE_ORIGIN uses localhost (not 127.0.0.1) so the
+          # WebAuthn specs can register passkeys: Chromium's WebAuthn
+          # rejects bare IPs as RP IDs (must be a valid domain string);
+          # `localhost` is the spec-blessed dev exception. Playwright's
+          # baseURL below switches to the same hostname so the Origin
+          # header matches.
           cat > docker-compose.e2e.yml <<'EOF'
           services:
             app:
               environment:
                 BLOG_DISABLE_RATE_LIMIT: "1"
-                BLOG_SITE_ORIGIN:        "http://127.0.0.1:8092"
+                BLOG_SITE_ORIGIN:        "http://localhost:8092"
             db:
               ports:
                 - "55432:5432"
@@ -362,7 +375,7 @@ jobs:
       - name: Run Playwright
         working-directory: e2e
         env:
-          E2E_BASE_URL:    http://127.0.0.1:8092
+          E2E_BASE_URL:    http://localhost:8092
           E2E_DB_HOST:     127.0.0.1
           E2E_DB_PORT:     "55432"
           E2E_DB_USER:     blog_user

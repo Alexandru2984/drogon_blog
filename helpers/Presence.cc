@@ -113,6 +113,13 @@ void reconnectLocked()
 // Run a redis command under g_mu, with one reconnect retry. Caller
 // passes ownership of the reply to discardReply via a unique_ptr-
 // like RAII would; for brevity we just call freeReplyObject.
+//
+// C-style variadic on purpose: hiredis's `redisvCommand` takes a
+// va_list — wrapping that with a template variadic + std::apply
+// would force boxing every arg into std::any, defeating the point
+// of the hiredis printf-style format. The trade-off is captured in
+// the NOLINT below so cert-dcl50-cpp doesn't keep firing on it.
+// NOLINTNEXTLINE(cert-dcl50-cpp)
 bool runCmd(const char* fmt, ...)
 {
     if (!g_ctx) return false;
