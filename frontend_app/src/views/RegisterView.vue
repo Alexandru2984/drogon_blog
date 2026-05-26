@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useToastStore } from '@/stores/toast'
@@ -15,6 +15,17 @@ const auth = useAuthStore()
 const router = useRouter()
 const toasts = useToastStore()
 
+// Held so the redirect-to-login setTimeout can be cancelled when the
+// component unmounts (the user navigated away on their own, or in
+// tests when registerAndLogin synthetically drives login immediately
+// after registration). Without this, the timer kept firing 1.5 s
+// later and kicked the user off whatever route they had reached.
+let redirectTimer: ReturnType<typeof setTimeout> | null = null
+
+onBeforeUnmount(() => {
+  if (redirectTimer) { clearTimeout(redirectTimer); redirectTimer = null }
+})
+
 async function submit() {
   error.value = ''
   loading.value = true
@@ -22,7 +33,7 @@ async function submit() {
     await auth.register({ username: username.value, email: email.value, password: password.value })
     done.value = true
     toasts.push('Check your email to verify your account', 'ok')
-    setTimeout(() => router.push({ name: 'login' }), 1500)
+    redirectTimer = setTimeout(() => router.push({ name: 'login' }), 1500)
   } catch (e: any) {
     error.value = e?.response?.data?.error ?? 'Registration failed'
   } finally {

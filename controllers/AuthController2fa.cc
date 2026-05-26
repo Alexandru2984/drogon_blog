@@ -51,6 +51,25 @@ std::string envOr(const char* name, const char* fallback)
     return (v && *v) ? std::string(v) : std::string(fallback);
 }
 
+// Format raw bytes as a PostgreSQL bytea literal: '\x<hex>'. libpq's
+// text parameter binding then hands this to PG which parses it back
+// to the original bytes. The previous code passed a std::string built
+// straight from CBOR bytes, which PG rejected with "invalid byte
+// sequence for encoding UTF8" the moment a high-bit byte appeared in
+// the COSE key (0xa5 is the CBOR map marker, basically guaranteed).
+std::string toByteaLiteral(const std::vector<unsigned char>& bytes)
+{
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(2 + bytes.size() * 2);
+    out += "\\x";
+    for (auto b : bytes) {
+        out.push_back(kHex[(b >> 4) & 0xF]);
+        out.push_back(kHex[b & 0xF]);
+    }
+    return out;
+}
+
 std::string siteOrigin()
 {
     return envOr("BLOG_SITE_ORIGIN", "https://blog.micutu.com");
@@ -439,7 +458,7 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
         "(user_id, credential_id, public_key, sign_count, nickname) "
         "VALUES ($1, $2, $3, $4, $5)",
         *userIdOpt, res->credential_id_b64u,
-        std::string(res->cose_public_key.begin(), res->cose_public_key.end()),
+        toByteaLiteral(res->cose_public_key),
         static_cast<std::int64_t>(res->sign_count),
         nickname);
 

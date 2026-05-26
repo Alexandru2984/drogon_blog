@@ -28,12 +28,17 @@ test('add a passkey, then sign in with it', async ({ page }) => {
     .toBeVisible({ timeout: 5_000 })
 
   // Sign out and back in. The login flow detects 2FA and bounces to /login/2fa.
+  // The virtual authenticator from line 20 persists across the logout +
+  // sign-in cycle — Chrome scopes it to the BrowserContext, not the
+  // session. Re-attaching here would trip `Chrome only supports one
+  // internal authenticator per environment`.
   await logout(page)
-  await attachVirtualAuthenticator(page)
   await startLoginExpecting2fa(page, user)
 
-  // Switch to the passkey tab and trigger the assertion.
-  await page.getByRole('button', { name: /passkey/i }).click()
+  // Switch to the passkey tab and trigger the assertion. The full tab
+  // label is "Passkey / security key" — anchor to that so we don't
+  // double-match the "Authenticate with passkey" action button below.
+  await page.getByRole('button', { name: /passkey \/ security key/i }).click()
   await page.getByRole('button', { name: /authenticate with passkey/i }).click()
 
   await expect(page.locator('.navbar')).toContainText(user.username, { timeout: 10_000 })

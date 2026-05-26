@@ -24,9 +24,19 @@ export const router = createRouter({
   scrollBehavior() { return { top: 0 } },
 })
 
-router.beforeEach((to) => {
-  if (to.meta?.auth) {
-    const auth = useAuthStore()
-    if (!auth.isAuthed) return { name: 'login', query: { next: to.fullPath } }
+// Wait for the auth store's first /auth/me probe to land before the guard
+// decides. main.ts awaits fetchMe via .finally(() => app.mount()), so in
+// the happy path `ready` is already true when the guard runs — this is
+// just defensive for the rare path where the initial navigation fires
+// before fetchMe's microtask completes (observed on page.reload() into a
+// `meta.auth` route during e2e). Without it, the guard reads
+// `isAuthed=false`, bounces to /login, and the SPA gets stuck even though
+// /auth/me would have come back 200.
+router.beforeEach(async (to) => {
+  if (!to.meta?.auth) return
+  const auth = useAuthStore()
+  if (!auth.ready) {
+    await auth.fetchMe()
   }
+  if (!auth.isAuthed) return { name: 'login', query: { next: to.fullPath } }
 })
