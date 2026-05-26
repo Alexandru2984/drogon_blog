@@ -284,8 +284,11 @@ void MessageWebSocket::shutdownAll()
     {
         std::lock_guard<std::mutex> lk(g_mu);
         conns.reserve(g_byUser.size());
-        for (auto& [_, set] : g_byUser) {
-            for (const auto& c : set) conns.push_back(c);
+        // Iterate by value; we only need the connection set, the user-id
+        // key is unused here. (Older cppcheck flags `auto& [_, set]` as
+        // an unused-variable false-positive on the discarded binding.)
+        for (auto& entry : g_byUser) {
+            for (const auto& c : entry.second) conns.push_back(c);
         }
         g_byUser.clear();
         g_byPost.clear();

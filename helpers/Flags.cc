@@ -130,7 +130,11 @@ std::vector<EvalResult> evaluateAll(int userId)
     auto snap = snapshot();
     std::vector<EvalResult> out;
     out.reserve(snap->size());
-    for (const auto& [_, f] : *snap) {
+    // entry.second is the Flag; the key lives in flag.key already so
+    // the structured binding's first element would be redundant —
+    // avoid it because older cppcheck flags `[_, f]` as unused-variable.
+    for (const auto& entry : *snap) {
+        const auto& f = entry.second;
         out.push_back({f.key, evaluateLocked(f, userId)});
     }
     return out;
