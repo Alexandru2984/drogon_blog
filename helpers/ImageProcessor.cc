@@ -1,6 +1,7 @@
 #include "ImageProcessor.h"
 
 #include <vips/vips8>
+#include <trantor/utils/Logger.h>
 
 #include <array>
 #include <cstdio>
@@ -122,10 +123,15 @@ AvatarResult processAvatar(const std::string& srcPath,
         return AvatarResult{true, outPath, "", 200};
     }
     catch (const vips::VError& e) {
-        return fail(422, std::string("Image processing failed: ") + e.what());
+        // libvips error text can name codec internals / temp paths — log it
+        // server-side for debugging but hand the client a generic message so
+        // we don't leak the processing pipeline's shape to an uploader.
+        LOG_WARN << "libvips failed on avatar upload: " << e.what();
+        return fail(422, "Image processing failed");
     }
     catch (const std::exception& e) {
-        return fail(500, std::string("Unexpected error: ") + e.what());
+        LOG_ERROR << "Unexpected error processing avatar: " << e.what();
+        return fail(500, "Unexpected error");
     }
     catch (...) {
         return fail(500, "Unexpected error");

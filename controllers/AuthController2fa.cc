@@ -261,15 +261,20 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     }
     const auto secret =
         security::unwrapTotpSecret(rows[0]["secret_b32"].as<std::string>());
-    if (!totp::verify(secret, code)) {
+    const std::uint64_t matchedStep = totp::verifyWithStep(secret, code);
+    if (matchedStep == 0) {
         audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
                                 std::nullopt, std::nullopt, Json::objectValue});
         callback(jsonError(k400BadRequest, "Invalid code")); return;
     }
 
+    // Seed last_used_step with the confirmation code's step so the very same
+    // code cannot then be replayed at /auth/login/verify-totp seconds later.
     db->execSqlSync(
-        "UPDATE user_totp_secrets SET enabled = TRUE, confirmed_at = NOW() "
-        "WHERE user_id = $1", *userIdOpt);
+        "UPDATE user_totp_secrets "
+        "   SET enabled = TRUE, confirmed_at = NOW(), last_used_step = $2 "
+        " WHERE user_id = $1",
+        *userIdOpt, static_cast<std::int64_t>(matchedStep));
     auto codes = issueFreshRecoveryCodes(*userIdOpt);
 
     audit_log::record(req, {"2fa.totp.enable", userIdOpt,
@@ -554,19 +559,37 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
 
     auto db = drogon::app().getDbClient();
     auto r = db->execSqlSync(
-        "SELECT secret_b32 FROM user_totp_secrets "
+        "SELECT secret_b32, last_used_step FROM user_totp_secrets "
         "WHERE user_id = $1 AND enabled = TRUE",
         *pendingOpt);
-    if (r.empty() ||
-        !totp::verify(
-            security::unwrapTotpSecret(r[0]["secret_b32"].as<std::string>()),
-            code))
-    {
+
+    const std::uint64_t matchedStep =
+        r.empty() ? 0
+                  : totp::verifyWithStep(
+                        security::unwrapTotpSecret(r[0]["secret_b32"].as<std::string>()),
+                        code);
+
+    if (matchedStep == 0) {
         audit_log::record(req, {"2fa.verify.totp.fail", pendingOpt,
                                 std::nullopt, std::nullopt, Json::objectValue});
         callback(jsonError(k401Unauthorized, "Invalid code"));
         return;
     }
+
+    // Replay guard: a code is accepted at most once. If this step was already
+    // consumed (same code presented twice inside its ~90 s window), reject.
+    const std::int64_t lastUsed = r[0]["last_used_step"].as<std::int64_t>();
+    if (static_cast<std::int64_t>(matchedStep) <= lastUsed) {
+        Json::Value meta;
+        meta["reason"] = "replay";
+        audit_log::record(req, {"2fa.verify.totp.fail", pendingOpt,
+                                std::nullopt, std::nullopt, std::move(meta)});
+        callback(jsonError(k401Unauthorized, "Invalid code"));
+        return;
+    }
+    db->execSqlSync(
+        "UPDATE user_totp_secrets SET last_used_step = $2 WHERE user_id = $1",
+        *pendingOpt, static_cast<std::int64_t>(matchedStep));
 
     audit_log::record(req, {"login.ok", pendingOpt,
                             std::nullopt, std::nullopt, Json::objectValue});

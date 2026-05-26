@@ -33,6 +33,15 @@ unsigned int generateCode(const std::string& secret_b32,
 bool verify(const std::string& secret_b32,
             const std::string& candidate_code);
 
+// As verify(), but returns the absolute time-step (UNIX seconds / 30) that
+// matched, or 0 when no step in the window matched. Callers persist the
+// returned step so a code cannot be replayed within its ~90 s validity
+// window: a second attempt presenting a step <= the last accepted one is
+// rejected. Step 0 (1970) is never a real value, so it doubles as the
+// "no match" sentinel.
+std::uint64_t verifyWithStep(const std::string& secret_b32,
+                             const std::string& candidate_code);
+
 // RFC 4648 Base32 (no padding) — exposed for the tests and for code paths
 // that want to render the secret in groups of 4 for manual entry.
 std::string base32Encode(const unsigned char* data, std::size_t len);

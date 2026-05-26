@@ -170,25 +170,32 @@ unsigned int generateCode(const std::string& secret_b32,
     return hotp(secretBin, unix_seconds / kStepSeconds);
 }
 
-bool verify(const std::string& secret_b32,
-            const std::string& candidate_code)
+std::uint64_t verifyWithStep(const std::string& secret_b32,
+                             const std::string& candidate_code)
 {
-    if (candidate_code.size() != static_cast<std::size_t>(kCodeDigits)) return false;
+    if (candidate_code.size() != static_cast<std::size_t>(kCodeDigits)) return 0;
     std::string secretBin;
-    if (!base32Decode(secret_b32, secretBin) || secretBin.empty()) return false;
+    if (!base32Decode(secret_b32, secretBin) || secretBin.empty()) return 0;
 
     const std::uint64_t step = nowUnix() / kStepSeconds;
     // Iterate over [step - kWindow, step + kWindow]. Constant-time compare
     // each candidate so the loop's branch-predictor footprint does not
-    // leak which step (if any) matched.
-    bool matched = false;
+    // leak which step (if any) matched. We always run the full window
+    // (no early break) and only record the matched step at the end, so the
+    // accept/reject timing is independent of which step hit.
+    std::uint64_t matchedStep = 0;
     for (int delta = -kWindow; delta <= kWindow; ++delta) {
-        const auto expected = padCode(hotp(secretBin,
-                                           step + static_cast<std::uint64_t>(delta)));
-        // Bitwise OR so we always run the comparison even after a hit.
-        matched = static_cast<bool>(matched | constTimeEqual(expected, candidate_code));
+        const std::uint64_t candStep = step + static_cast<std::uint64_t>(delta);
+        const auto expected = padCode(hotp(secretBin, candStep));
+        if (constTimeEqual(expected, candidate_code)) matchedStep = candStep;
     }
-    return matched;
+    return matchedStep;
+}
+
+bool verify(const std::string& secret_b32,
+            const std::string& candidate_code)
+{
+    return verifyWithStep(secret_b32, candidate_code) != 0;
 }
 
 } // namespace totp

@@ -81,6 +81,18 @@ std::string lastHop(const std::string& xff)
 
 const std::string kCsrfCookieName = "csrf_token";
 
+// Constant-time equality for the CSRF double-submit check. The token is not
+// a long-term secret (an off-origin attacker cannot read the cookie to begin
+// with), but using sodium_memcmp keeps one consistent rule across the
+// codebase — every other token comparison is already constant-time — and
+// removes a byte-at-a-time early-exit `==` from a request-path hot loop.
+bool constTimeEq(const std::string& a, const std::string& b)
+{
+    if (a.size() != b.size()) return false;
+    if (a.empty()) return true;
+    return sodium_memcmp(a.data(), b.data(), a.size()) == 0;
+}
+
 struct Bucket {
     double tokens;
     std::chrono::steady_clock::time_point lastRefill;
@@ -308,7 +320,7 @@ void registerAdvices()
             {
                 const auto cookieTok = req->getCookie(csrfCookieName());
                 const auto headerTok = req->getHeader("X-CSRF-Token");
-                if (cookieTok.empty() || cookieTok != headerTok) {
+                if (cookieTok.empty() || !constTimeEq(cookieTok, headerTok)) {
                     Json::Value body;
                     body["error"] = "Invalid or missing CSRF token";
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(body);

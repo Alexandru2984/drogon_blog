@@ -30,14 +30,20 @@
         //app: Set application global parameters.
         //enable_session: False by default
         "enable_session": true,
-        "session_timeout": 0,
+        // Hardening: a stolen JSESSIONID must not be valid forever. 0 meant
+        // "never expire server-side"; 1209600s = 14 days of idle lifetime,
+        // refreshed on each request, after which the session is dropped.
+        "session_timeout": 1209600,
         //string value of SameSite attribute of the Set-Cookie HTTP response header
         //valid value is either 'Null' (default), 'Lax', 'Strict' or 'None'
         "session_same_site" : "Lax",
         //session_cookie_key: The cookie key of the session, "JSESSIONID" by default
         "session_cookie_key": "JSESSIONID",
         //session_max_age: The max age of the session cookie, -1 by default
-        "session_max_age": -1,
+        // Hardening: bound the cookie's client-side lifetime to match the
+        // 14-day server-side session_timeout above (was -1 = session cookie
+        // with no Max-Age, which some clients keep across restarts).
+        "session_max_age": 1209600,
         //document_root: Root path of HTTP document, default path is ./
         "document_root": "./public/",
         //home_page: Set the HTML file of the home page, the default value is "index.html"
@@ -65,21 +71,25 @@
          * by default are "html", "js", "css", "xml", "xsl", "txt", "svg",
          * "ttf", "otf", "woff2", "woff" , "eot", "png", "jpg", "jpeg",
          * "gif", "bmp", "ico", "icns", etc. */
+        // Hardening: restricted to exactly what the SPA + avatar uploads
+        // need. Dropped svg/html-as-upload/swf/xap/apk/cur — the uploads
+        // symlink (public/uploads -> ../uploads) is served from this same
+        // document_root, so any extension that can carry active content
+        // (SVG with <script>, Flash, Android packages) would become a
+        // stored-XSS / content-confusion vector the moment a future upload
+        // path accepts something other than the re-encoded JPEG it does today.
+        // The built frontend only ships js/css/html; favicon is ico; avatars
+        // are jpg. webp/png/jpeg/gif kept for image flexibility.
         "file_types": [
-            "gif",
-            "png",
-            "jpg",
+            "html",
             "js",
             "css",
-            "html",
             "ico",
-            "swf",
-            "xap",
-            "apk",
-            "cur",
-            "xml",
-            "webp",
-            "svg"
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "webp"
         ],
         // mime: A dictionary that extends the internal MIME type support. Maps extensions into new MIME types
         // note: This option only adds MIME to the sever. `file_types` above have to be set for the server to serve them.
@@ -157,7 +167,10 @@
             "max_files": 0,
             //log_level: "DEBUG" by default,options:"TRACE","DEBUG","INFO","WARN"
             //The TRACE level is only valid when built in DEBUG mode.
-            "log_level": "DEBUG",
+            // Hardening: DEBUG on prod leaks framework internals (statements,
+            // connection details), floods the disk and adds hot-path overhead.
+            // INFO keeps the structured access log + warnings without the noise.
+            "log_level": "INFO",
             //display_local_time: false by default, if true, the log time is displayed in local time
             "display_local_time": false
         },
