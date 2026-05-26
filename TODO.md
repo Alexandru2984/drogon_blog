@@ -9,11 +9,14 @@ not deadline. Strike through when shipped.
       covers 42 paths / 19 schemas; served at `/api/openapi.yaml` and
       rendered by self-hosted Redoc at `/api/docs`. Spectral linted in
       CI (`openapi` job) against `.spectral.yaml`.
-- [ ] **Architecture Decision Records** under `docs/adr/` — why Drogon,
-      why Argon2id, why weak ETag derivation, why no-PG-bundle in Helm,
-      why per-request `write(2)` over async log queue.
-- [ ] **CONTRIBUTING.md** — build / test workflow, branch + commit
-      conventions, link to CI matrix.
+- [x] **Architecture Decision Records** — 10 ADRs under
+      `docs/adr/` covering Drogon, Argon2id, weak ETag, no-PG-bundle
+      Helm, Sentry-via-HTTP, pg_notify over Redis pub/sub,
+      hiredis sync, sync write(2) access log, read-only gRPC,
+      deterministic flag bucketing.
+- [x] **CONTRIBUTING.md** — at repo root. Build prereqs, run-local
+      paths, full test matrix (8 suites), code style, commit
+      conventions, PR flow, link to ADR README.
 
 ## Tests
 
