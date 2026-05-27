@@ -6,6 +6,10 @@
 #include "../helpers/HttpCache.h"
 #include "../helpers/Markdown.h"
 #include "../helpers/Security.h"
+#include "../helpers/ImageProcessor.h"
+
+#include <filesystem>
+#include <system_error>
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -457,6 +461,103 @@ void PostController::createPost(const HttpRequestPtr &req,
         resp->setStatusCode(k500InternalServerError);
         callback(resp);
     }
+}
+
+void PostController::uploadPostImage(const HttpRequestPtr &req,
+                                    std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    auto session = req->session();
+    auto userIdOpt = session->getOptional<int>("user_id");
+    if (!userIdOpt.has_value()) {
+        Json::Value ret;
+        ret["error"] = "Not authenticated";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k401Unauthorized);
+        callback(resp);
+        return;
+    }
+
+    // 30 burst, 30/10min — a post may legitimately embed several images, but
+    // image processing (libvips) is CPU-heavy so we still bound abuse per user.
+    if (auto rl = security::rateLimitOr429(
+            "post_image", "uid:" + std::to_string(userIdOpt.value()),
+            30.0, 30.0 / 600.0)) {
+        callback(rl);
+        return;
+    }
+
+    MultiPartParser fileUpload;
+    if (fileUpload.parse(req) != 0) {
+        Json::Value ret;
+        ret["error"] = "Invalid file upload";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+    const auto &files = fileUpload.getFiles();
+    if (files.size() != 1) {
+        Json::Value ret;
+        ret["error"] = "Exactly one image file is required";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+    auto &file = files[0];
+
+    // First land in uploads/tmp, then re-encode into uploads/posts. The
+    // filename is stamped server-side with a 96-bit random suffix — the
+    // user-supplied name is never trusted for path construction. The image
+    // pipeline always emits JPEG, so the served extension is fixed.
+    const std::string postsDir = "./uploads/posts/";
+    const std::string tmpDir   = "./uploads/tmp/";
+    std::error_code ec;
+    std::filesystem::create_directories(postsDir, ec);
+    std::filesystem::create_directories(tmpDir,   ec);
+    if (ec) {
+        LOG_ERROR << "Failed to create post-image dirs: " << ec.message();
+        Json::Value ret;
+        ret["error"] = "Failed to save upload";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k500InternalServerError);
+        callback(resp);
+        return;
+    }
+
+    const std::string stem = "post_" + std::to_string(userIdOpt.value())
+                           + "_" + security::randomToken(12);
+    const std::string tmpPath    = tmpDir   + stem + ".upload";
+    const std::string finalPath  = postsDir + stem + ".jpg";
+    const std::string publicPath = "/uploads/posts/" + stem + ".jpg";
+
+    file.saveAs(tmpPath);
+
+    // Validate (magic-byte sniff), downscale preserving aspect, strip EXIF.
+    const auto result = image::processPostImage(tmpPath, finalPath);
+
+    std::error_code rmEc;
+    std::filesystem::remove(tmpPath, rmEc);                // best effort
+
+    if (!result.ok) {
+        Json::Value ret;
+        ret["error"] = result.error;
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
+        callback(resp);
+        return;
+    }
+
+    audit_log::record(req, {"post.image.upload", userIdOpt,
+                            std::nullopt, std::nullopt, Json::objectValue});
+
+    // The SPA embeds this as Markdown: ![alt](url). cmark renders it in SAFE
+    // mode (no raw HTML) and the CSP img-src 'self' confines display to this
+    // origin, so a re-encoded same-origin JPEG carries no active content.
+    Json::Value ret;
+    ret["url"] = publicPath;
+    auto resp = HttpResponse::newHttpJsonResponse(ret);
+    callback(resp);
 }
 
 void PostController::updatePost(const HttpRequestPtr &req,

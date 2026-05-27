@@ -26,6 +26,16 @@ AvatarResult processAvatar(const std::string& srcPath,
                            int outDim  = 256,
                            int maxDim  = 6000);
 
+// Inline post images. Same magic-byte sniffing (JPEG/PNG/WebP only), EXIF/
+// metadata stripping and decompression-bomb guard as processAvatar, but
+// preserves aspect ratio: the image is downscaled so its longest edge is at
+// most `maxEdge` px (never upscaled, never cropped) and re-encoded to JPEG.
+// Reuses AvatarResult for the ok/path/error/status shape.
+AvatarResult processPostImage(const std::string& srcPath,
+                              const std::string& outPath,
+                              int maxEdge = 1600,
+                              int maxDim  = 10000);
+
 // Initializes libvips. Idempotent; call once at process startup.
 bool initLibrary();
 

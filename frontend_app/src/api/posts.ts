@@ -56,6 +56,18 @@ export const postsApi = {
   create(payload: { title: string; content: string }) {
     return api.post('/posts', payload).then(r => r.data)
   },
+  // Upload an inline image; returns a same-origin URL to embed as Markdown
+  // (![alt](url)). The server re-encodes to JPEG, strips EXIF and bounds the
+  // dimensions, so the returned asset is a safe same-origin image.
+  uploadImage(file: File) {
+    const fd = new FormData()
+    fd.append('image', file)
+    return api
+      .post<{ url: string }>('/posts/images', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then(r => r.data.url)
+  },
   update(id: number, payload: { title?: string; content?: string }) {
     return api.put(`/posts/${id}`, payload).then(r => r.data)
   },

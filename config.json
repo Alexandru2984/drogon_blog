@@ -250,7 +250,12 @@
         "br_static": true,
         //client_max_body_size: Set the maximum body size of HTTP requests received by drogon. The default value is "1M".
         //One can set it to "1024", "1k", "10M", "1G", etc. Setting it to "" means no limit.
-        "client_max_body_size": "1M",
+        // Raised to 8M so inline post images and avatars (phone photos are
+        // commonly 2-5 MB before server-side re-encode) can be uploaded.
+        // Drogon has no per-route body cap; nginx keeps the tighter 1M limit
+        // on all paths except the image upload locations (see site config),
+        // so only the upload endpoints actually accept up to 8M at the edge.
+        "client_max_body_size": "8M",
         //max_memory_body_size: Set the maximum body size in memory of HTTP requests received by drogon. The default value is "64K" bytes.
         //If the body size of a HTTP request exceeds this limit, the body is stored to a temporary file for processing.
         //Setting it to "" means no limit.

@@ -138,4 +138,73 @@ AvatarResult processAvatar(const std::string& srcPath,
     }
 }
 
+AvatarResult processPostImage(const std::string& srcPath,
+                              const std::string& outPath,
+                              int maxEdge,
+                              int maxDim)
+{
+    const Fmt fmt = sniff(srcPath);
+    if (fmt == Fmt::Unknown) {
+        return fail(415, "Unsupported image type — JPEG, PNG and WebP only");
+    }
+
+    try {
+        using vips::VImage;
+
+        VImage img = VImage::new_from_file(
+            srcPath.c_str(),
+            VImage::option()->set("access", "sequential"));
+
+        const int w = img.width();
+        const int h = img.height();
+        if (w <= 0 || h <= 0) {
+            return fail(422, "Decoded image has no pixels");
+        }
+        if (w > maxDim || h > maxDim) {
+            return fail(413, std::string("Image too large (") +
+                              std::to_string(w) + "x" + std::to_string(h) +
+                              "); maximum is " + std::to_string(maxDim) +
+                              "x" + std::to_string(maxDim));
+        }
+
+        // Fit within maxEdge x maxEdge preserving aspect ratio. No crop;
+        // size=down so smaller images pass through without upscaling.
+        VImage thumb = VImage::thumbnail(
+            srcPath.c_str(), maxEdge,
+            VImage::option()
+                ->set("height", maxEdge)
+                ->set("size",   VIPS_SIZE_DOWN));
+
+        for (const char* field : {
+                "exif-data", "xmp-data", "iptc-data",
+                "icc-profile-data", "photoshop-data"})
+        {
+            if (vips_image_get_typeof(thumb.get_image(), field) != 0) {
+                vips_image_remove(thumb.get_image(), field);
+            }
+        }
+        thumb.remove("orientation");
+
+        thumb.jpegsave(outPath.c_str(),
+            VImage::option()
+                ->set("Q",               85)
+                ->set("strip",           true)
+                ->set("interlace",       true)
+                ->set("optimize_coding", true));
+
+        return AvatarResult{true, outPath, "", 200};
+    }
+    catch (const vips::VError& e) {
+        LOG_WARN << "libvips failed on post image upload: " << e.what();
+        return fail(422, "Image processing failed");
+    }
+    catch (const std::exception& e) {
+        LOG_ERROR << "Unexpected error processing post image: " << e.what();
+        return fail(500, "Unexpected error");
+    }
+    catch (...) {
+        return fail(500, "Unexpected error");
+    }
+}
+
 } // namespace image

@@ -15,6 +15,10 @@ class PostController : public drogon::HttpController<PostController>
     ADD_METHOD_TO(PostController::searchPosts, "/posts/search", Get);
     // Get single post
     ADD_METHOD_TO(PostController::getPost, "/posts/{1}", Get);
+    // Upload an inline image for use in a post body (returns a URL the client
+    // embeds as Markdown). Registered before the create route for clarity;
+    // distinct path so it never collides with /posts or /posts/{id}.
+    ADD_METHOD_TO(PostController::uploadPostImage, "/posts/images", Post);
     // Create post
     ADD_METHOD_TO(PostController::createPost, "/posts", Post);
     // Update post
@@ -40,6 +44,8 @@ class PostController : public drogon::HttpController<PostController>
                 int postId);
     void createPost(const HttpRequestPtr &req,
                    std::function<void(const HttpResponsePtr &)> &&callback);
+    void uploadPostImage(const HttpRequestPtr &req,
+                        std::function<void(const HttpResponsePtr &)> &&callback);
     void updatePost(const HttpRequestPtr &req,
                    std::function<void(const HttpResponsePtr &)> &&callback,
                    int postId);
