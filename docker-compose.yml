@@ -36,10 +36,7 @@ services:
       SMTP_FROM_EMAIL:  ${SMTP_FROM_EMAIL:-noreply@example.com}
       SMTP_FROM_NAME:   ${SMTP_FROM_NAME:-Micu's Blog}
     ports:
-      # Publish to loopback only — the app is meant to sit behind a reverse
-      # proxy, not be reachable on the host's public interface. Use a tunnel
-      # or an internal compose network for inter-container access.
-      - "127.0.0.1:8092:8092"
+      - "8092:8092"
     volumes:
       - uploads:/app/uploads
 

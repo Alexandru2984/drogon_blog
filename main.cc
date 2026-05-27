@@ -92,6 +92,15 @@ int main()
 
     loadEnvFile("./.env");
 
+    // Listener bind address is env-driven so the same config.json works in
+    // every deployment: bare-metal/systemd behind nginx wants loopback
+    // (set BLOG_LISTEN_ADDR=127.0.0.1 in .env), while a container MUST bind
+    // 0.0.0.0 or Docker's port publishing can't reach it. Default 0.0.0.0 so
+    // Docker/CI work out of the box; overwrite=0 keeps any value the env
+    // (.env / systemd / compose) already provided. config.json references
+    // ${BLOG_LISTEN_ADDR} in its listeners block.
+    setenv("BLOG_LISTEN_ADDR", "0.0.0.0", 0);
+
     std::ifstream cfg("./config.json");
     if (!cfg)
     {

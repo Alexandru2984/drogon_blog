@@ -1,14 +1,15 @@
 /* This is a JSON format configuration file
  */
 {
-    // Hardening: bind loopback only. Production sits behind nginx
-    // (upstream blog_backend -> 127.0.0.1:8092) which terminates TLS and
-    // forwards from Cloudflare. Binding 0.0.0.0 made the app reachable on the
-    // host's public interface; ufw default-denies 8092 so it wasn't exposed,
-    // but loopback binding removes the single-barrier dependency on ufw.
+    // Bind address is env-driven (see main.cc): defaults to 0.0.0.0 so
+    // containers/CI are reachable via Docker port publishing, while the prod
+    // .env sets BLOG_LISTEN_ADDR=127.0.0.1 so the systemd deploy binds loopback
+    // only (it sits behind nginx upstream 127.0.0.1:8092; ufw also default-
+    // denies 8092). This keeps prod hardened without breaking the container
+    // build, which must listen on all interfaces.
     "listeners": [
         {
-            "address": "127.0.0.1",
+            "address": "${BLOG_LISTEN_ADDR}",
             "port": 8092,
             "https": false
         }
