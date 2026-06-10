@@ -19,8 +19,18 @@ namespace {
 // because draining is a terminal state for the process lifecycle.
 std::atomic<bool> g_draining{false};
 
-bool isLoopbackPeer(const drogon::HttpRequestPtr& req)
+// Whether the request genuinely originated on this host (a local Prometheus
+// scrape over loopback), as opposed to being forwarded by the reverse proxy.
+//
+// The peer address alone is NOT sufficient: behind nginx every request shows
+// a 127.0.0.1 peer, so a naive loopback check would treat the whole internet
+// as local and hand /metrics to anyone. nginx always injects X-Real-IP /
+// X-Forwarded-For on proxied traffic, so the presence of either means the
+// request came through the edge and must not get the tokenless bypass.
+bool isDirectLocalRequest(const drogon::HttpRequestPtr& req)
 {
+    if (!req->getHeader("X-Forwarded-For").empty()) return false;
+    if (!req->getHeader("X-Real-IP").empty())        return false;
     const auto ip = req->getPeerAddr().toIp();
     return ip == "127.0.0.1" || ip == "::1";
 }
@@ -111,7 +121,7 @@ void install()
                     cb(r);
                     return;
                 }
-            } else if (!isLoopbackPeer(req)) {
+            } else if (!isDirectLocalRequest(req)) {
                 auto r = HttpResponse::newHttpResponse();
                 r->setStatusCode(k403Forbidden);
                 r->setBody("metrics disabled for remote peers (set METRICS_TOKEN to enable)\n");
