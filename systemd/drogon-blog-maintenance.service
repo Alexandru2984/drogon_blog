@@ -1,0 +1,44 @@
+[Unit]
+Description=Drogon Blog — periodic maintenance (prune expired tokens + orphaned uploads)
+Documentation=file:/home/micu/drogon_blog/scripts/cleanup.sh
+Wants=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/drogon_blog
+
+# Same .env as the app so DB_* stay in lockstep — one source of truth.
+EnvironmentFile=/home/micu/drogon_blog/.env
+
+ExecStart=/home/micu/drogon_blog/scripts/cleanup.sh
+
+# Sandboxing: reads .env, talks to local PostgreSQL, deletes orphaned files
+# under uploads/. Everything else read-only / inaccessible. Mirrors the
+# app unit's filesystem policy (ProtectSystem=strict + uploads writable).
+ProtectSystem=strict
+ReadOnlyPaths=/home/micu/drogon_blog
+ReadWritePaths=/home/micu/drogon_blog/uploads
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# Keep maintenance well below interactive load on the small VPS.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Local PostgreSQL over loopback only — no outbound network needed.
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+IPAddressAllow=::1
+
+[Install]
+WantedBy=multi-user.target

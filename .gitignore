@@ -573,8 +573,11 @@ build/
 
 # Uploaded user content
 uploads/profiles/*
+uploads/posts/*
 uploads/tmp/
+uploads/uploads/
 !uploads/profiles/.gitkeep
+!uploads/posts/.gitkeep
 
 # Environment / secrets
 .env

@@ -1,0 +1,19 @@
+[Unit]
+Description=Drogon Blog — periodic maintenance (timer)
+Documentation=file:/home/micu/drogon_blog/scripts/cleanup.sh
+
+[Timer]
+# 03:30 UTC daily — an hour after the backup (02:30) so the two never
+# contend, and still outside the European-hours read traffic peak.
+OnCalendar=*-*-* 03:30:00 UTC
+
+# Catch up on a missed run if the VPS was down at 03:30.
+Persistent=true
+
+# Spread the start so it doesn't stampede other 03:30 timers.
+RandomizedDelaySec=5min
+
+Unit=drogon-blog-maintenance.service
+
+[Install]
+WantedBy=timers.target
