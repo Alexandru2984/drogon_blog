@@ -161,6 +161,17 @@ void CommentController::createComment(const HttpRequestPtr &req,
     newComment.setContent(content);
 
     try {
+        // Confirm the post exists up front so commenting on a missing/deleted
+        // post returns a clean 404 instead of letting the FK constraint
+        // surface as a 500.
+        if (dbClient->execSqlSync("SELECT 1 FROM posts WHERE id = $1", postId).empty()) {
+            Json::Value ret;
+            ret["error"] = "Post not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+            return;
+        }
         mapper.insert(newComment);
 
         Json::Value ret;

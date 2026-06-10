@@ -37,12 +37,29 @@ using security::issueCsrfCookie;
 
 constexpr std::size_t kMinPasswordLen = 8;
 constexpr std::size_t kMaxPasswordLen = 256;
-constexpr std::size_t kMaxUsernameLen = 64;
+constexpr std::size_t kMinUsernameLen = 3;
+constexpr std::size_t kMaxUsernameLen = 32;
 constexpr std::size_t kMaxEmailLen    = 255;
 
 bool passwordTooWeak(const std::string& p)
 {
     return p.size() < kMinPasswordLen || p.size() > kMaxPasswordLen;
+}
+
+// Restrict usernames to a safe, predictable charset. Without this a username
+// could carry spaces, control characters, or unicode homoglyphs — enabling
+// visual impersonation (admin vs аdmin) and messy data downstream. Vue already
+// escapes on render so this is not an XSS fix; it is anti-spoofing + data
+// hygiene. Only enforced at registration, so existing accounts are unaffected.
+bool usernameValid(const std::string& u)
+{
+    if (u.size() < kMinUsernameLen || u.size() > kMaxUsernameLen) return false;
+    for (unsigned char c : u) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                        (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
 }
 
 // Email-shape sanity check moved to helpers/Security.h so the same
@@ -76,8 +93,13 @@ void AuthController::registerUser(const HttpRequestPtr &req,
         callback(jsonError(k400BadRequest, "All fields are required"));
         return;
     }
-    if (username.size() > kMaxUsernameLen || email.size() > kMaxEmailLen) {
+    if (email.size() > kMaxEmailLen) {
         callback(jsonError(k400BadRequest, "Field too long"));
+        return;
+    }
+    if (!usernameValid(username)) {
+        callback(jsonError(k400BadRequest,
+            "Username must be 3-32 characters: letters, digits, _ or -"));
         return;
     }
     if (!emailLooksValid(email)) {
