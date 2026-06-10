@@ -6,6 +6,7 @@ import { commentsApi, type Comment } from '@/api/comments'
 import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
 import { useToastStore } from '@/stores/toast'
+import { sanitizeHtml } from '@/lib/sanitize'
 
 const props = defineProps<{ id: number }>()
 
@@ -138,9 +139,10 @@ async function deletePost() {
       <h1>{{ post.title }}</h1>
       <!-- content_html is server-rendered by cmark-gfm in SAFE mode; raw
            HTML in the source is escaped before it ever reaches the client.
+           sanitizeHtml is a client-side second wall (defense-in-depth).
            Fall back to plain-text content for legacy rows where the column
            hasn't been backfilled. -->
-      <div v-if="post.content_html" class="post-body" v-html="post.content_html"></div>
+      <div v-if="post.content_html" class="post-body" v-html="sanitizeHtml(post.content_html)"></div>
       <p v-else class="post-content">{{ post.content }}</p>
 
       <div class="toolbar" style="margin-top: 1rem;">

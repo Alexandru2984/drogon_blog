@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { postsApi, type SearchHit } from '@/api/posts'
+import { sanitizeHtml } from '@/lib/sanitize'
 
 const route  = useRoute()
 const router = useRouter()
@@ -99,8 +100,9 @@ watch(q, (v) => {
     </router-link>
 
     <!-- Snippet is server-built HTML containing only <mark> tags around hit
-         terms; the rest is escaped by Postgres' ts_headline. -->
-    <p class="post-content snippet" v-html="h.snippet"></p>
+         terms; the rest is escaped by Postgres' ts_headline. sanitizeHtml is
+         a client-side second wall (defense-in-depth). -->
+    <p class="post-content snippet" v-html="sanitizeHtml(h.snippet)"></p>
 
     <div class="toolbar muted" style="margin-top: 0.5rem;">
       <router-link :to="{ name: 'post', params: { id: h.id } }">Open →</router-link>
