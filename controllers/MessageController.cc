@@ -66,47 +66,52 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Messages> messageMapper(dbClient);
-    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
+        // Single LEFT JOIN instead of a per-row findByPrimaryKey on the sender
+        // (was up to `limit` extra round-trips per page). LEFT JOIN preserves a
+        // message whose sender row was deleted concurrently — sender comes back
+        // NULL and we just omit the block, same as the old try/catch did.
         const auto page = parsePage(req);
-        using Cols = drogon_model::blog_db::Messages::Cols;
-        auto crit = Criteria(Cols::_receiver_id, CompareOperator::EQ, userIdOpt.value());
-        if (page.before > 0)
-            crit = crit && Criteria(Cols::_id, CompareOperator::LT, page.before);
-        auto messages = messageMapper.orderBy(Cols::_id, SortOrder::DESC)
-                                     .limit(static_cast<std::size_t>(page.limit))
-                                     .findBy(crit);
+        static const char* kSqlBase =
+            "SELECT m.id, m.content, m.is_read, m.created_at, "
+            "       u.id AS sender_id, u.username AS sender_username, "
+            "       u.profile_image AS sender_profile_image "
+            "FROM messages m LEFT JOIN users u ON u.id = m.sender_id "
+            "WHERE m.receiver_id = $1 ";
+        const std::string sql = std::string(kSqlBase)
+            + (page.before > 0 ? "AND m.id < $3 " : "")
+            + "ORDER BY m.id DESC LIMIT $2";
+
+        const auto run = [&] {
+            return page.before > 0
+                ? dbClient->execSqlSync(sql, userIdOpt.value(),
+                      static_cast<std::int64_t>(page.limit), page.before)
+                : dbClient->execSqlSync(sql, userIdOpt.value(),
+                      static_cast<std::int64_t>(page.limit));
+        };
+        const auto messages = run();
 
         Json::Value ret;
         ret["messages"] = Json::Value(Json::arrayValue);
         std::int64_t minId = 0;
 
-        for (const auto &message : messages) {
-            const auto id = message.getValueOfId();
+        for (const auto &row : messages) {
+            const auto id = row["id"].as<std::int64_t>();
             if (minId == 0 || id < minId) minId = id;
             Json::Value msgJson;
             msgJson["id"] = id;
-            msgJson["content"] = message.getValueOfContent();
-            msgJson["is_read"] = message.getValueOfIsRead();
-            msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
+            msgJson["content"] = row["content"].as<std::string>();
+            msgJson["is_read"] = row["is_read"].as<int>();
+            msgJson["created_at"] = row["created_at"].as<std::string>();
 
-            // Best-effort sender enrichment. The author row may have been
-            // deleted between the message SELECT and now (ON DELETE CASCADE
-            // wipes their messages but the in-flight read can still race);
-            // returning the message without sender info beats failing the list.
-            try {
-                auto sender = userMapper.findByPrimaryKey(message.getValueOfSenderId());
-                msgJson["sender"]["id"] = sender.getValueOfId();
-                msgJson["sender"]["username"] = sender.getValueOfUsername();
-                if (!sender.getValueOfProfileImage().empty()) {
-                    msgJson["sender"]["profile_image"] = sender.getValueOfProfileImage();
+            if (!row["sender_id"].isNull()) {
+                msgJson["sender"]["id"] = row["sender_id"].as<int>();
+                msgJson["sender"]["username"] = row["sender_username"].as<std::string>();
+                if (!row["sender_profile_image"].isNull()) {
+                    auto img = row["sender_profile_image"].as<std::string>();
+                    if (!img.empty()) msgJson["sender"]["profile_image"] = img;
                 }
-            } catch (const DrogonDbException& e) {
-                LOG_DEBUG << "sender lookup for message "
-                          << message.getValueOfId() << " failed: "
-                          << e.base().what();
             }
 
             ret["messages"].append(msgJson);
@@ -145,44 +150,47 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Messages> messageMapper(dbClient);
-    Mapper<drogon_model::blog_db::Users> userMapper(dbClient);
 
     try {
+        // Single LEFT JOIN on the receiver instead of a per-row lookup; see
+        // getReceivedMessages for the rationale.
         const auto page = parsePage(req);
-        using Cols = drogon_model::blog_db::Messages::Cols;
-        auto crit = Criteria(Cols::_sender_id, CompareOperator::EQ, userIdOpt.value());
-        if (page.before > 0)
-            crit = crit && Criteria(Cols::_id, CompareOperator::LT, page.before);
-        auto messages = messageMapper.orderBy(Cols::_id, SortOrder::DESC)
-                                     .limit(static_cast<std::size_t>(page.limit))
-                                     .findBy(crit);
+        static const char* kSqlBase =
+            "SELECT m.id, m.content, m.is_read, m.created_at, "
+            "       u.id AS receiver_id, u.username AS receiver_username, "
+            "       u.profile_image AS receiver_profile_image "
+            "FROM messages m LEFT JOIN users u ON u.id = m.receiver_id "
+            "WHERE m.sender_id = $1 ";
+        const std::string sql = std::string(kSqlBase)
+            + (page.before > 0 ? "AND m.id < $3 " : "")
+            + "ORDER BY m.id DESC LIMIT $2";
+
+        const auto messages = page.before > 0
+            ? dbClient->execSqlSync(sql, userIdOpt.value(),
+                  static_cast<std::int64_t>(page.limit), page.before)
+            : dbClient->execSqlSync(sql, userIdOpt.value(),
+                  static_cast<std::int64_t>(page.limit));
 
         Json::Value ret;
         ret["messages"] = Json::Value(Json::arrayValue);
         std::int64_t minId = 0;
 
-        for (const auto &message : messages) {
-            const auto id = message.getValueOfId();
+        for (const auto &row : messages) {
+            const auto id = row["id"].as<std::int64_t>();
             if (minId == 0 || id < minId) minId = id;
             Json::Value msgJson;
             msgJson["id"] = id;
-            msgJson["content"] = message.getValueOfContent();
-            msgJson["is_read"] = message.getValueOfIsRead();
-            msgJson["created_at"] = message.getValueOfCreatedAt().toDbStringLocal();
+            msgJson["content"] = row["content"].as<std::string>();
+            msgJson["is_read"] = row["is_read"].as<int>();
+            msgJson["created_at"] = row["created_at"].as<std::string>();
 
-            // Best-effort receiver enrichment; see getReceivedMessages.
-            try {
-                auto receiver = userMapper.findByPrimaryKey(message.getValueOfReceiverId());
-                msgJson["receiver"]["id"] = receiver.getValueOfId();
-                msgJson["receiver"]["username"] = receiver.getValueOfUsername();
-                if (!receiver.getValueOfProfileImage().empty()) {
-                    msgJson["receiver"]["profile_image"] = receiver.getValueOfProfileImage();
+            if (!row["receiver_id"].isNull()) {
+                msgJson["receiver"]["id"] = row["receiver_id"].as<int>();
+                msgJson["receiver"]["username"] = row["receiver_username"].as<std::string>();
+                if (!row["receiver_profile_image"].isNull()) {
+                    auto img = row["receiver_profile_image"].as<std::string>();
+                    if (!img.empty()) msgJson["receiver"]["profile_image"] = img;
                 }
-            } catch (const DrogonDbException& e) {
-                LOG_DEBUG << "receiver lookup for message "
-                          << message.getValueOfId() << " failed: "
-                          << e.base().what();
             }
 
             ret["messages"].append(msgJson);

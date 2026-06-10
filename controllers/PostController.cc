@@ -721,17 +721,30 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
-    try {
-        auto posts = mapper.findBy(
-            Criteria(drogon_model::blog_db::Posts::Cols::_user_id,
-                    CompareOperator::EQ, userId)
-        );
+    // Cursor pagination, same shape as getAllPosts: this used to return every
+    // post a user had ever written in one unbounded findBy — slow and a memory
+    // hog for prolific authors. `before` is the oldest id the client already
+    // holds; ids are monotonic so id DESC matches created_at DESC.
+    using Cols = drogon_model::blog_db::Posts::Cols;
+    const int limit  = clampLimit(req->getParameter("limit"));
+    const int cursor = parseCursor(req->getParameter("before"));
 
-        // ETag tracks (user_id, count, max(updated_at)). Adding /
-        // removing / editing one of this user's posts changes one of
-        // those three; other users' posts don't affect it.
+    try {
+        Criteria crit(Cols::_user_id, CompareOperator::EQ, userId);
+        if (cursor > 0)
+            crit = crit && Criteria(Cols::_id, CompareOperator::LT, cursor);
+        auto posts = mapper.orderBy(Cols::_id, SortOrder::DESC)
+                           .limit(static_cast<std::size_t>(limit))
+                           .findBy(crit);
+
+        // ETag tracks (user_id, page keys, count, max(updated_at)). Adding /
+        // removing / editing one of this user's posts changes one of those;
+        // other users' posts don't affect it.
         std::int64_t maxTs = 0;
+        std::int64_t minId = 0;
         for (const auto& p : posts) {
+            const auto id = static_cast<std::int64_t>(p.getValueOfId());
+            if (minId == 0 || id < minId) minId = id;
             const auto ts = http_cache::parseTimestampMicros(
                                 p.getValueOfUpdatedAt().toDbStringLocal());
             if (ts > maxTs) maxTs = ts;
@@ -740,6 +753,8 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
             "user-posts", std::to_string(userId),
             std::to_string(maxTs),
             std::to_string(static_cast<int>(posts.size())),
+            std::to_string(cursor),
+            std::to_string(limit),
         });
         if (http_cache::ifNoneMatchHit(req, etag)) {
             callback(http_cache::makeNotModified(etag));
@@ -757,6 +772,9 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
             postJson["created_at"] = post.getValueOfCreatedAt().toDbStringLocal();
             ret["posts"].append(postJson);
         }
+
+        ret["next_cursor"] = (static_cast<int>(posts.size()) == limit && minId > 0)
+            ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         http_cache::applyCacheHeaders(resp, etag);
@@ -880,20 +898,21 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
                                   int postId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
 
     try {
-        auto likes = mapper.findBy(
-            Criteria(drogon_model::blog_db::Likes::Cols::_post_id,
-                    CompareOperator::EQ, postId)
-        );
+        // count(*) instead of materialising every like row just to call
+        // .size() — a viral post would otherwise pull thousands of rows
+        // across the wire to produce a single integer.
+        auto r = dbClient->execSqlSync(
+            "SELECT count(*) AS n FROM likes WHERE post_id = $1", postId);
+        const long long count = r[0]["n"].as<long long>();
 
         // ETag = (post_id, count). likes is just a join row that gets
         // created/dropped by like/unlike — count is the entire payload,
         // so any change yields a new ETag without further state.
         const std::string etag = http_cache::makeWeakEtag({
             "likes-count", std::to_string(postId),
-            std::to_string(likes.size()),
+            std::to_string(count),
         });
         if (http_cache::ifNoneMatchHit(req, etag)) {
             callback(http_cache::makeNotModified(etag));
@@ -902,7 +921,7 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
 
         Json::Value ret;
         ret["post_id"] = postId;
-        ret["likes_count"] = (int)likes.size();
+        ret["likes_count"] = static_cast<Json::Int64>(count);
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         http_cache::applyCacheHeaders(resp, etag);
