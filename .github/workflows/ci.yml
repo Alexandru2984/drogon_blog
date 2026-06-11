@@ -560,3 +560,83 @@ jobs:
           # unreachable — that's an infra issue, not our code.
           ignore-unfixed: true
           vuln-type:    'os,library'
+
+  sanitizers:
+    name: Backend (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    container:
+      image: drogonframework/drogon:latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER:     blog_user
+          POSTGRES_PASSWORD: blog_ci_password
+          POSTGRES_DB:       blog_test_db
+        options: >-
+          --health-cmd "pg_isready -U blog_user -d blog_test_db"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build-time extras
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
+            libvips-dev \
+            libcmark-gfm-dev libcmark-gfm-extensions-dev \
+            postgresql-client
+
+      - name: Configure (Debug + ASan/UBSan)
+        run: |
+          cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+
+      - name: Build tests
+        run: cmake --build build-san -j"$(nproc)"
+
+      - name: Run integration tests under sanitizers
+        env:
+          TEST_DB_HOST:        postgres
+          TEST_DB_PORT:        "5432"
+          TEST_DB_USER:        blog_user
+          TEST_DB_PASSWORD:    blog_ci_password
+          TEST_DB_NAME:        blog_test_db
+          TEST_MIGRATIONS_DIR: ${{ github.workspace }}/migrations
+          # Leak detection off: libdrogon / libpq keep intentional
+          # process-lifetime globals LSan would flag. We're after
+          # use-after-free / OOB / UB, which ASan+UBSan still catch.
+          ASAN_OPTIONS:  "detect_leaks=0:abort_on_error=1:strict_string_checks=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: ./build-san/test/blog_test
+
+  secrets-and-deps:
+    name: Secret + dependency scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks walks the full history
+
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: osv-scanner (JS dependency CVEs)
+        run: |
+          docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:latest \
+            scan --lockfile=/src/frontend_app/package-lock.json \
+                 --lockfile=/src/e2e/package-lock.json
+
+      - name: npm audit (frontend)
+        working-directory: frontend_app
+        run: npm audit --audit-level=high
+
+      - name: npm audit (e2e)
+        working-directory: e2e
+        run: npm audit --audit-level=high
