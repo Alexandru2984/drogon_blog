@@ -800,10 +800,16 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     // replay. Counter-based clone detection is simply unavailable for these
     // keys; replay is instead prevented by the single-use challenge, which is
     // erased from the session immediately after finishAuthentication above.
+    //
+    // The `0::bigint` cast is load-bearing: an untyped `$1 = 0` makes Postgres
+    // infer $1 as `integer`, but we bind an int64 (sign_count is bigint), so
+    // the prepared statement then rejects the value as a binary-protocol size
+    // mismatch — every passkey login 500s. Pinning the literal to bigint keeps
+    // $1 inferred as bigint, matching the bound type.
     auto upd = db->execSqlSync(
         "UPDATE user_webauthn_credentials "
         "   SET sign_count = $1, last_used_at = NOW() "
-        " WHERE id = $2 AND ($1 = 0 OR sign_count < $1) "
+        " WHERE id = $2 AND ($1 = 0::bigint OR sign_count < $1) "
         "RETURNING id",
         static_cast<std::int64_t>(res->new_sign_count), credRowId);
     if (upd.empty()) {
