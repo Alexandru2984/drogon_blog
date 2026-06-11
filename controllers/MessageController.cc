@@ -83,10 +83,15 @@ void MessageController::getReceivedMessages(const HttpRequestPtr &req,
             + (page.before > 0 ? "AND m.id < $3 " : "")
             + "ORDER BY m.id DESC LIMIT $2";
 
+        // `before` binds as int32 because messages.id is int4 — Postgres infers
+        // $3 (m.id < $3) as integer, and binding an int64 there is a binary
+        // protocol size mismatch that aborts the statement. LIMIT stays int64
+        // (bigint internally). Same split getAllPosts uses for its cursor.
         const auto run = [&] {
             return page.before > 0
                 ? dbClient->execSqlSync(sql, userIdOpt.value(),
-                      static_cast<std::int64_t>(page.limit), page.before)
+                      static_cast<std::int64_t>(page.limit),
+                      static_cast<int>(page.before))
                 : dbClient->execSqlSync(sql, userIdOpt.value(),
                       static_cast<std::int64_t>(page.limit));
         };
@@ -165,9 +170,11 @@ void MessageController::getSentMessages(const HttpRequestPtr &req,
             + (page.before > 0 ? "AND m.id < $3 " : "")
             + "ORDER BY m.id DESC LIMIT $2";
 
+        // `before` binds as int32 (messages.id is int4); see getReceivedMessages.
         const auto messages = page.before > 0
             ? dbClient->execSqlSync(sql, userIdOpt.value(),
-                  static_cast<std::int64_t>(page.limit), page.before)
+                  static_cast<std::int64_t>(page.limit),
+                  static_cast<int>(page.before))
             : dbClient->execSqlSync(sql, userIdOpt.value(),
                   static_cast<std::int64_t>(page.limit));
 
