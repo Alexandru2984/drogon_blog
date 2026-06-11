@@ -1,0 +1,11 @@
+# Trivy vulnerability ignore list. Format: one CVE id per line, optional
+# `exp:YYYY-MM-DD` to auto-expire the entry so it can never silently mask a
+# vulnerability forever.
+
+# CVE-2026-45447 — libssl3 (OpenSSL) in the ubuntu:22.04 runtime base.
+# HIGH, fixed upstream in 3.0.2-0ubuntu1.25; the base image still ships .23,
+# so this is base-image lag, not our code. The flaw is in PKCS#7 / S/MIME
+# signature handling, which the app never exercises (WebAuthn uses raw
+# ECDSA/EdDSA verification, not CMS). The weekly Dependabot docker bump will
+# pull the patched base; the expiry forces a re-review if it hasn't by then.
+CVE-2026-45447 exp:2026-09-01

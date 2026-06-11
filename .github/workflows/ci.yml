@@ -560,6 +560,8 @@ jobs:
           # unreachable — that's an infra issue, not our code.
           ignore-unfixed: true
           vuln-type:    'os,library'
+          # Base-image CVE allowlist (with expiries) — see .trivyignore.
+          trivyignores: .trivyignore
 
   sanitizers:
     name: Backend (ASan + UBSan)
