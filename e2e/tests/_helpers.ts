@@ -1,5 +1,5 @@
 import { Page, BrowserContext, expect, CDPSession } from '@playwright/test'
-import { authenticator } from 'otplib'
+import { generateSync } from 'otplib'
 import { Client as PgClient } from 'pg'
 import { createHash } from 'node:crypto'
 
@@ -95,7 +95,7 @@ export async function enrollTotp(page: Page): Promise<{
   expect(secret).toMatch(/^[A-Z2-7]+$/) // base32 alphabet
 
   // Compute the current code from the captured secret.
-  const code = authenticator.generate(secret)
+  const code = generateSync({ secret })
 
   await page.locator('#totp-confirm').fill(code)
   await page.getByRole('button', { name: /confirm/i }).click()
@@ -116,7 +116,7 @@ export async function enrollTotp(page: Page): Promise<{
 
 // Compute a TOTP code now, given the shared secret.
 export function totpCodeNow(secret: string): string {
-  return authenticator.generate(secret)
+  return generateSync({ secret })
 }
 
 // ---------------------------------------------------------------- WebAuthn
