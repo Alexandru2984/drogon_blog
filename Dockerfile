@@ -17,7 +17,7 @@ RUN npm run build
 # provides — the surface we depend on (registerSyncAdvice, runOnQuit,
 # HttpResponsePtr-returning sync advice) landed in 1.9.x and isn't in the
 # Ubuntu noble apt package (1.8.7).
-FROM ubuntu:22.04 AS drogon-builder
+FROM ubuntu:24.04 AS drogon-builder
 ARG DEBIAN_FRONTEND=noninteractive
 ARG DROGON_VERSION=v1.9.13
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,7 +42,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 3: build the C++ backend ----------
 # Same base as the drogon-builder so libstdc++ ABI matches at link time;
 # multi-arch via the Ubuntu base + Drogon-from-source above.
-FROM ubuntu:22.04 AS backend
+FROM ubuntu:24.04 AS backend
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config cmake \
@@ -71,21 +71,23 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)" --target blog
 
 # ---------- Stage 4: runtime ----------
-# Match the build base (Ubuntu 22.04) so libstdc++ matches; libdrogon is
+# Match the build base (Ubuntu 24.04) so libstdc++ matches; libdrogon is
 # statically linked, so we only need the third-party shared deps.
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:24.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
-        libsodium23 libcurl4 libssl3 \
+        libsodium23 libcurl4t64 libssl3t64 \
         libbrotli1 libjsoncpp25 libpq5 \
         libuuid1 zlib1g libc-ares2 \
-        libmariadb3 libsqlite3-0 libhiredis0.14 \
-        libvips42 \
-        libcmark-gfm0.29.0.gfm.3 libcmark-gfm-extensions0.29.0.gfm.3 \
+        libmariadb3 libsqlite3-0 libhiredis1.1.0 \
+        libvips42t64 \
+        libcmark-gfm0.29.0.gfm.6 libcmark-gfm-extensions0.29.0.gfm.6 \
         postgresql-client \
         tini \
     && rm -rf /var/lib/apt/lists/* \
+    # noble ships a default "ubuntu" user squatting on UID 1000
+    && userdel -r ubuntu \
     && useradd -m -u 1000 blog
 
 WORKDIR /app

@@ -23,15 +23,16 @@ updates:
   # Docker base images — picks up CVE-fix releases for ubuntu / postgres /
   # node / drogonframework/drogon.
   #
-  # ubuntu MAJOR bumps are deliberately blocked: the runtime stage must stay
-  # binary-compatible with the build base (drogonframework/drogon:latest =
-  # Ubuntu 22.04). cmark-gfm rev-bumps its SONAME each Ubuntu release
-  # (22.04 → libcmark-gfm0.29.0.gfm.3, 24.04 → .gfm.6, 26.04 → .gfm.13), so
-  # a runtime-only bump breaks dynamic linking. Drop the ignore and bump
-  # both stages together once upstream Drogon ships a newer Ubuntu base.
+  # ubuntu version bumps are deliberately blocked; only digest updates (CVE
+  # rebuilds of the same tag) flow through. Minor bumps land on non-LTS
+  # releases (24.04 → 24.10) whose apt archives vanish at EOL, and an
+  # LTS-to-LTS jump must move all three stages together by hand anyway:
+  # cmark-gfm rev-bumps its SONAME each Ubuntu release (22.04 →
+  # libcmark-gfm0.29.0.gfm.3, 24.04 → .gfm.6, 26.04 → .gfm.13) and noble's
+  # time64 transition renamed runtime packages (libssl3 → libssl3t64, …).
   - package-ecosystem: "docker"
     directory:         "/"
     schedule: { interval: "weekly" }
     ignore:
       - dependency-name: "ubuntu"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
