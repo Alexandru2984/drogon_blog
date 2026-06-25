@@ -30,7 +30,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build-time extras
         run: |
@@ -70,7 +70,7 @@ jobs:
         working-directory: frontend_app
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: '26'
@@ -105,7 +105,7 @@ jobs:
     container:
       image: drogonframework/drogon:latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install tooling
         run: |
@@ -167,7 +167,7 @@ jobs:
     name: OpenAPI lint (spectral)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: '26'
@@ -206,7 +206,7 @@ jobs:
       DB_PASSWORD: blog_ci_password
       DB_NAME:     blog_db
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Tooling
         run: apk add --no-cache bash coreutils findutils
@@ -279,7 +279,7 @@ jobs:
     name: Helm chart (lint + template + kubeconform)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
         with:
           version: v3.16.2
@@ -327,7 +327,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -408,7 +408,7 @@ jobs:
     # for the ubuntu-24.04 4-vCPU runner; bumping the runner class
     # warrants a paired bump in those thresholds. See bench/README.md.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Bring up the stack
         run: |
@@ -504,7 +504,7 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
       - name: Build image
@@ -533,7 +533,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: docker
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
       # Rebuild the amd64 image from the gha cache layer the matrix job
@@ -581,7 +581,7 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build-time extras
         run: |
@@ -620,7 +620,7 @@ jobs:
     name: Secret + dependency scan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # gitleaks walks the full history
 
