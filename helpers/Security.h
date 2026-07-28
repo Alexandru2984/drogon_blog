@@ -50,9 +50,22 @@ bool emailLooksValid(const std::string& e);
 std::string wrapTotpSecret(const std::string& plaintext);
 std::string unwrapTotpSecret(const std::string& stored);
 
-// Returns the configured CSRF cookie name. Centralized so frontend / backend
-// stay in sync.
+// Returns the CSRF cookie name in force for this deployment. Under TLS
+// (BLOG_SECURE_COOKIES=1) this is `__Host-csrf_token`; on plain HTTP the
+// browser would reject a `__Host-` cookie outright, so dev / CI get the
+// unprefixed `csrf_token`. Centralized so frontend / backend stay in sync.
 const std::string& csrfCookieName();
+
+// Same rule for the session cookie: `__Host-JSESSIONID` under TLS, plain
+// `JSESSIONID` otherwise. main() feeds this into Drogon's
+// `session_cookie_key` before loadConfigJson, and the pre-sending advice
+// uses it to find the cookie it needs to mark Secure.
+//
+// The `__Host-` prefix is what stops a sibling vhost on the same
+// registrable domain from writing our cookies (see Security.cc for the
+// full argument) — it is a browser-enforced ban on the Domain attribute,
+// not a naming convention.
+const std::string& sessionCookieName();
 
 // Ensures the current session has a CSRF token and that `resp` carries the
 // matching readable (non-HttpOnly), Lax cookie. Idempotent — re-emits the

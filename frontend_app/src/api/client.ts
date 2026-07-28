@@ -16,10 +16,19 @@ function readCookie(name: string): string | null {
   return m ? decodeURIComponent(m[1]) : null
 }
 
+// The backend names the CSRF cookie `__Host-csrf_token` when it is serving
+// over TLS and plain `csrf_token` otherwise (a `__Host-` cookie without the
+// Secure attribute is rejected by the browser, and dev / CI run on plain
+// HTTP). Prefer the hardened name and fall back, so one build works against
+// both. See helpers/Security.h::csrfCookieName().
+function readCsrfToken(): string | null {
+  return readCookie('__Host-csrf_token') ?? readCookie('csrf_token')
+}
+
 api.interceptors.request.use((config) => {
   const method = (config.method || 'get').toLowerCase()
   if (method !== 'get' && method !== 'head' && method !== 'options') {
-    const token = readCookie('csrf_token')
+    const token = readCsrfToken()
     if (token) {
       config.headers = config.headers ?? {}
       ;(config.headers as Record<string, string>)['X-CSRF-Token'] = token

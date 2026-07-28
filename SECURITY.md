@@ -54,6 +54,7 @@ unless noted otherwise.
 | 13| **Low**  | **Logout only `erased` two session keys.** The underlying session record lived on with any other keys the app might add. | `session->clear()` + `changeSessionIdToClient()`. |
 | 14| **Low**  | **No backend password length floor.** The frontend asked for ≥ 8 chars but the API would accept anything non-empty. | Backend rejects `< 8` or `> 256` chars on register / reset. |
 | 15| **Med**  | **XFF spoofing bypassed the per-IP rate limit.** The previous `clientIp()` took the *first* hop of `X-Forwarded-For`, but nginx's default `$proxy_add_x_forwarded_for` appends to whatever the client sent — so the first entry is user-controlled. Each spoofed header rotated the rate-limit bucket. | Prefer `X-Real-IP` (single-value, nginx-set, stripped of inbound copies), fall back to `CF-Connecting-IP`, and only when reaching XFF take the **last** hop instead of the first. Verified in `test/test_security.cc` and live against `/auth/login`. |
+| 16| **Med**  | **Cookie tossing from a sibling vhost.** `JSESSIONID` and `csrf_token` were host-scoped by default but nothing *forced* that: the blog is one of ~36 vhosts under `micutu.com`, and any of them could emit `Set-Cookie: csrf_token=x; Domain=.micutu.com`. A domain-scoped cookie shadows the host-scoped one, so a neighbouring host (or an XSS in one) controlled both halves of the double-submit pair — CSRF fully bypassed — and could likewise pin a session id. | Both cookies now carry the `__Host-` prefix whenever `BLOG_SECURE_COOKIES=1`. The prefix is browser-enforced: the cookie is rejected unless it has `Secure`, `Path=/`, and **no `Domain` attribute** — which makes it unwritable from any other host. Plain names are retained on non-TLS (dev / CI) where `__Host-` cookies are refused outright. Legacy unprefixed cookies are actively expired on the next response. See `helpers/Security.cc` and `test/test_security.cc::Security_CookieNamesUseHostPrefixUnderTls`. |
 
 ### Vectors verified clean
 
@@ -81,8 +82,10 @@ HTTPS-only (Cloudflare + Let's Encrypt)
         │     └── CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy,
         │       Cross-Origin-Opener-Policy, Cross-Origin-Resource-Policy
         │
-        ├── Session cookie       — HttpOnly, SameSite=Lax, Secure (in prod)
-        ├── CSRF cookie          — SameSite=Lax, Secure (in prod), readable by JS
+        ├── Session cookie       — `__Host-JSESSIONID` in prod; HttpOnly,
+        │                          SameSite=Lax, Secure, Path=/, no Domain
+        ├── CSRF cookie          — `__Host-csrf_token` in prod; SameSite=Lax,
+        │                          Secure, readable by JS (double-submit)
         │
         ├── Argon2id (libsodium) — m=64 MiB, t=2, p=1 (OPSLIMIT_INTERACTIVE)
         │

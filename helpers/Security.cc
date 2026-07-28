@@ -79,7 +79,31 @@ std::string lastHop(const std::string& xff)
     return last;
 }
 
-const std::string kCsrfCookieName = "csrf_token";
+// Cookie names.
+//
+// Under TLS we use the `__Host-` prefix, which browsers enforce as a
+// hard contract: the cookie MUST carry Secure, MUST have Path=/, and
+// MUST NOT carry a Domain attribute. The last clause is the one that
+// matters here — it makes the cookie un-writable from any other host,
+// including sibling vhosts under the registrable domain.
+//
+// Why that is not paranoia for this deployment: the blog is one of ~36
+// vhosts on micutu.com. A plain `csrf_token` cookie can be overwritten
+// by any of them via `Set-Cookie: csrf_token=x; Domain=.micutu.com`,
+// and a domain-scoped cookie shadows the host-scoped one on the way
+// out. An attacker who controls (or finds an XSS in) any sibling host
+// therefore controls BOTH halves of the double-submit pair and the
+// CSRF guard stops guarding anything. Same argument for the session
+// cookie: fixing it to a known value from a sibling is session
+// fixation with extra steps.
+//
+// Plain names are kept when BLOG_SECURE_COOKIES is off, because
+// `__Host-` without Secure is rejected outright by the browser and
+// every dev / CI run is plain HTTP.
+const std::string kCsrfCookiePlain  = "csrf_token";
+const std::string kCsrfCookieHostPfx = "__Host-csrf_token";
+const std::string kSessionCookiePlain   = "JSESSIONID";
+const std::string kSessionCookieHostPfx = "__Host-JSESSIONID";
 
 // Constant-time equality for the CSRF double-submit check. The token is not
 // a long-term secret (an off-origin attacker cannot read the cookie to begin
@@ -162,7 +186,15 @@ std::string randomToken(std::size_t bytes)
     return out;
 }
 
-const std::string& csrfCookieName() { return kCsrfCookieName; }
+const std::string& csrfCookieName()
+{
+    return secureCookies() ? kCsrfCookieHostPfx : kCsrfCookiePlain;
+}
+
+const std::string& sessionCookieName()
+{
+    return secureCookies() ? kSessionCookieHostPfx : kSessionCookiePlain;
+}
 
 void issueCsrfCookie(const drogon::HttpRequestPtr& req,
                      const drogon::HttpResponsePtr& resp)
@@ -183,6 +215,20 @@ void issueCsrfCookie(const drogon::HttpRequestPtr& req,
     c.setSameSite(drogon::Cookie::SameSite::kLax);
     c.setSecure(secureCookies());
     resp->addCookie(std::move(c));
+
+    // Rollout hygiene: a browser that held a session from before the
+    // `__Host-` switch still carries the legacy `csrf_token`. We never
+    // *accept* it (the guard below reads only csrfCookieName()), but
+    // leaving it in the jar means the SPA's cookie reader can pick the
+    // stale value and every mutating request 403s until the user
+    // manually clears cookies. Expire it explicitly instead.
+    if (secureCookies() && !req->getCookie(kCsrfCookiePlain).empty()) {
+        drogon::Cookie stale(kCsrfCookiePlain, "");
+        stale.setPath("/");
+        stale.setHttpOnly(false);
+        stale.setMaxAge(0);
+        resp->addCookie(std::move(stale));
+    }
 }
 
 RateLimitDecision rateLimitTake(const std::string& bucketName,
@@ -394,18 +440,37 @@ void registerAdvices()
 
     // Drogon attaches the session cookie *after* PostHandling, so we patch it
     // at the very last step before serialization. When BLOG_SECURE_COOKIES=1
-    // the JSESSIONID cookie is re-emitted with the Secure flag.
+    // the session cookie is re-emitted with the Secure flag — which is also
+    // what makes the `__Host-` prefix on its name legal.
     drogon::app().registerPreSendingAdvice(
-        [](const drogon::HttpRequestPtr&, const drogon::HttpResponsePtr& resp) {
+        [](const drogon::HttpRequestPtr& req, const drogon::HttpResponsePtr& resp) {
             if (!secureCookies()) return;
-            const auto& jar = resp->getCookies();
-            auto it = jar.find("JSESSIONID");
-            if (it == jar.end() || it->second.value().empty()) return;
-            if (it->second.isSecure()) return;          // already done
-            drogon::Cookie c = it->second;
-            c.setSecure(true);
-            resp->removeCookie("JSESSIONID");
-            resp->addCookie(std::move(c));
+            const auto& name = sessionCookieName();
+            const auto& jar  = resp->getCookies();
+            auto it = jar.find(name);
+            if (it != jar.end() && !it->second.value().empty() &&
+                !it->second.isSecure())
+            {
+                drogon::Cookie c = it->second;
+                c.setSecure(true);
+                resp->removeCookie(name);
+                resp->addCookie(std::move(c));
+            }
+
+            // Same rollout hygiene as the CSRF cookie: drop the legacy
+            // unprefixed session cookie so the browser stops sending two
+            // competing session ids. The old one is already dead
+            // server-side (Drogon keys the store on the new name), it
+            // just wastes a header and confuses debugging.
+            if (name != kSessionCookiePlain &&
+                !req->getCookie(kSessionCookiePlain).empty())
+            {
+                drogon::Cookie stale(kSessionCookiePlain, "");
+                stale.setPath("/");
+                stale.setHttpOnly(true);
+                stale.setMaxAge(0);
+                resp->addCookie(std::move(stale));
+            }
         });
 }
 

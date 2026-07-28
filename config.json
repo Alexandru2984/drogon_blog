@@ -44,7 +44,12 @@
         //valid value is either 'Null' (default), 'Lax', 'Strict' or 'None'
         "session_same_site" : "Lax",
         //session_cookie_key: The cookie key of the session, "JSESSIONID" by default
-        "session_cookie_key": "JSESSIONID",
+        // Resolved by main.cc before this file is parsed: "__Host-JSESSIONID"
+        // when BLOG_SECURE_COOKIES=1 (prod, behind TLS), plain "JSESSIONID"
+        // otherwise. The `__Host-` prefix bans the Domain attribute, so a
+        // sibling vhost on the same registrable domain cannot overwrite our
+        // session cookie. See helpers/Security.h::sessionCookieName().
+        "session_cookie_key": "${BLOG_SESSION_COOKIE}",
         //session_max_age: The max age of the session cookie, -1 by default
         // Hardening: bound the cookie's client-side lifetime to match the
         // 14-day server-side session_timeout above (was -1 = session cookie

@@ -33,7 +33,57 @@ HttpRequestPtr jsonPost(const std::string& path, const Json::Value& body)
     return req;
 }
 
+// RAII toggle for BLOG_SECURE_COOKIES. secureCookies() reads the env on
+// every call, so flipping it here is enough to exercise both naming
+// regimes without standing up a second app instance.
+class ScopedSecureCookies
+{
+  public:
+    explicit ScopedSecureCookies(bool on)
+    {
+        const char* prev = std::getenv("BLOG_SECURE_COOKIES");
+        had_  = prev != nullptr;
+        prev_ = had_ ? prev : "";
+        if (on) setenv("BLOG_SECURE_COOKIES", "1", 1);
+        else    unsetenv("BLOG_SECURE_COOKIES");
+    }
+    ~ScopedSecureCookies()
+    {
+        if (had_) setenv("BLOG_SECURE_COOKIES", prev_.c_str(), 1);
+        else      unsetenv("BLOG_SECURE_COOKIES");
+    }
+    ScopedSecureCookies(const ScopedSecureCookies&)            = delete;
+    ScopedSecureCookies& operator=(const ScopedSecureCookies&) = delete;
+
+  private:
+    bool        had_;
+    std::string prev_;
+};
+
 } // namespace
+
+// Cookie names must carry the `__Host-` prefix whenever we are serving
+// over TLS. That prefix is a browser-enforced ban on the Domain
+// attribute, which is what stops a sibling vhost on the same
+// registrable domain from overwriting our session / CSRF cookies
+// (cookie tossing → CSRF bypass and session fixation).
+//
+// It must NOT be used on plain HTTP: browsers reject a `__Host-` cookie
+// that lacks Secure, so a prefixed name there would silently drop the
+// cookie and break every dev / CI run.
+DROGON_TEST(Security_CookieNamesUseHostPrefixUnderTls)
+{
+    {
+        ScopedSecureCookies tls(true);
+        CHECK(security::csrfCookieName()    == "__Host-csrf_token");
+        CHECK(security::sessionCookieName() == "__Host-JSESSIONID");
+    }
+    {
+        ScopedSecureCookies plain(false);
+        CHECK(security::csrfCookieName()    == "csrf_token");
+        CHECK(security::sessionCookieName() == "JSESSIONID");
+    }
+}
 
 // Email-collision masking on register: a second registration with a
 // different username but the existing email gets a 201 (not 409).

@@ -101,6 +101,27 @@ int main()
     // ${BLOG_LISTEN_ADDR} in its listeners block.
     setenv("BLOG_LISTEN_ADDR", "0.0.0.0", 0);
 
+    // Session cookie name, resolved before config.json is parsed because
+    // config.json references it as ${BLOG_SESSION_COOKIE}.
+    //
+    // Under TLS the name carries the `__Host-` prefix, which browsers
+    // enforce as "Secure + Path=/ + no Domain attribute". The no-Domain
+    // clause is the point: it makes the cookie unwritable by any sibling
+    // vhost on the same registrable domain, closing off cookie-tossing /
+    // session-fixation from a neighbour host. On plain HTTP a `__Host-`
+    // cookie is rejected by the browser, so dev / CI keep the bare name.
+    // An operator can still pin it explicitly, but only with a non-empty
+    // value: loadEnvFile above uses setenv(overwrite=1), so a bare
+    // `BLOG_SESSION_COOKIE=` line in .env would otherwise survive as an
+    // empty string and hand Drogon an unnamed session cookie.
+    {
+        const char* pinned = std::getenv("BLOG_SESSION_COOKIE");
+        if (!pinned || !*pinned) {
+            setenv("BLOG_SESSION_COOKIE",
+                   security::sessionCookieName().c_str(), 1);
+        }
+    }
+
     std::ifstream cfg("./config.json");
     if (!cfg)
     {
