@@ -100,6 +100,7 @@ void install(const std::string& siteOrigin)
                 "       u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
+                " WHERE p.hidden_at IS NULL "
                 " ORDER BY p.id DESC LIMIT 30";
 
             db->execSqlAsync(kSql,
@@ -192,7 +193,7 @@ void install(const std::string& siteOrigin)
                 "SELECT p.title, p.content, u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
-                " WHERE p.id = $1";
+                " WHERE p.hidden_at IS NULL AND p.id = $1";
 
             db->execSqlAsync(kSql,
                 [origin, postId, cb](const orm::Result& r) {

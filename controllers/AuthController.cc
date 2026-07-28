@@ -8,6 +8,7 @@
 #include "../helpers/Workers.h"
 #include "../helpers/LoginThrottle.h"
 #include "../helpers/PasswordPolicy.h"
+#include "../helpers/Roles.h"
 #include "../helpers/Sessions.h"
 
 #include <drogon/orm/Mapper.h>
@@ -336,6 +337,17 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         // *password* guessing, and the 2FA factors carry their own
         // per-account buckets.
         login_throttle::recordSuccess(userId);
+
+        // A suspended account gets no session. Checked after the password
+        // verify, not before, so the response does not reveal that an
+        // account is suspended to someone who cannot authenticate as it.
+        if (auto banned = roles::blockIfBanned(userId)) {
+            audit_log::record(req, {"login.banned", userId,
+                                    std::nullopt, std::nullopt,
+                                    Json::objectValue});
+            callback(banned);
+            return;
+        }
 
         // Look up 2FA enrolment. The query is synchronous on purpose —
         // simpler than building an async chain when we already hold the

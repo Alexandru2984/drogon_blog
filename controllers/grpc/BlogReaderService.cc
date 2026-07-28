@@ -68,7 +68,10 @@ int clampLimit(int raw)
             "       u.id AS author_id, u.username AS author_username, "
             "       u.profile_image AS author_profile_image "
             "FROM posts p LEFT JOIN users u ON u.id = p.user_id "
-            "WHERE p.id = $1",
+            // The gRPC surface reads the same rows as REST, so it needs
+            // the same moderation predicate. Hiding a post on one API
+            // and serving it on the other is not hiding it.
+            "WHERE p.hidden_at IS NULL AND p.id = $1",
             req->id());
         if (r.empty()) {
             return {::grpc::StatusCode::NOT_FOUND, "post not found"};
@@ -102,7 +105,7 @@ int clampLimit(int raw)
                 "       u.id AS author_id, u.username AS author_username, "
                 "       u.profile_image AS author_profile_image "
                 "FROM posts p LEFT JOIN users u ON u.id = p.user_id "
-                "WHERE p.id < $1 "
+                "WHERE p.hidden_at IS NULL AND p.id < $1 "
                 "ORDER BY p.id DESC LIMIT $2",
                 req->cursor(), static_cast<std::int64_t>(limit))
             : db->execSqlSync(
@@ -111,6 +114,7 @@ int clampLimit(int raw)
                 "       u.id AS author_id, u.username AS author_username, "
                 "       u.profile_image AS author_profile_image "
                 "FROM posts p LEFT JOIN users u ON u.id = p.user_id "
+                "WHERE p.hidden_at IS NULL "
                 "ORDER BY p.id DESC LIMIT $1",
                 static_cast<std::int64_t>(limit));
 

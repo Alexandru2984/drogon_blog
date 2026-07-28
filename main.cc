@@ -13,6 +13,7 @@
 #include "helpers/Sentry.h"
 #include "helpers/GrpcServer.h"
 #include "helpers/PublicPages.h"
+#include "helpers/Roles.h"
 #include "helpers/Security.h"
 #include "helpers/Sessions.h"
 #include "helpers/Workers.h"
@@ -224,6 +225,12 @@ int main()
                 sessions::onRevokedNotification(
                     root.get("sid", "").asString());
             }
+            else if (kind == "user_ban_changed" && root["user_id"].isInt())
+            {
+                roles::onBanChangedNotification(
+                    root["user_id"].asInt(),
+                    root.get("banned", false).asBool());
+            }
             else if (kind == "flag_changed")
             {
                 // Migration 0007 routes feature_flags mutations
@@ -254,6 +261,11 @@ int main()
     // rate-limit checks still run on a request whose session was revoked —
     // a revoked session should not become a way to skip them.
     sessions::install();
+
+    // Roles + the write gate for suspended accounts. Fifteen mutating
+    // endpoints exist today and each new one would otherwise have to
+    // remember its own check, so this is enforced centrally.
+    roles::install();
 
     // Structured JSON access log + request-ID propagation + metrics ingestion.
     access_log::install();

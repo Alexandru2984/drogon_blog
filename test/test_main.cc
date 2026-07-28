@@ -5,7 +5,9 @@
 
 #include "../helpers/AccessLog.h"
 #include "../helpers/Ops.h"
+#include "../helpers/PublicPages.h"
 #include "../helpers/Security.h"
+#include "../helpers/Roles.h"
 #include "../helpers/Sessions.h"
 #include "../helpers/Workers.h"
 
@@ -127,6 +129,12 @@ int main(int argc, char** argv)
     access_log::install();
     ops::install();
 
+    // /feed.xml + /preview/posts/{id}. These are read surfaces over the
+    // same rows the REST API serves, so leaving them out of the harness
+    // meant nothing checked that they honour the same filters — the
+    // moderation tests need them present to be meaningful.
+    public_pages::install("http://127.0.0.1");
+
     // Handlers that block (Argon2id, libvips, the synchronous 2FA queries)
     // hand their work to these pools instead of running it on an IO loop.
     // Without them every such handler sheds its request with a 503, so the
@@ -137,6 +145,7 @@ int main(int argc, char** argv)
     // handler runs. main() installs this after security::registerAdvices();
     // without it here, revocation silently does nothing in tests.
     sessions::install();
+    roles::install();
 
     std::promise<void> ready;
     auto readyFut = ready.get_future();

@@ -35,7 +35,7 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
         "       u.profile_image AS author_profile_image "
         "FROM comments c "
         "LEFT JOIN users u ON u.id = c.user_id "
-        "WHERE c.post_id = $1 "
+        "WHERE c.hidden_at IS NULL AND c.post_id = $1 "
         "ORDER BY c.created_at ASC";
 
     auto dbClient = drogon::app().getDbClient();
@@ -164,7 +164,11 @@ void CommentController::createComment(const HttpRequestPtr &req,
         // Confirm the post exists up front so commenting on a missing/deleted
         // post returns a clean 404 instead of letting the FK constraint
         // surface as a 500.
-        if (dbClient->execSqlSync("SELECT 1 FROM posts WHERE id = $1", postId).empty()) {
+        // Hidden posts are 404 everywhere, including as a comment target —
+        // otherwise a moderated thread keeps accepting replies.
+        if (dbClient->execSqlSync(
+                "SELECT 1 FROM posts WHERE id = $1 AND hidden_at IS NULL",
+                postId).empty()) {
             Json::Value ret;
             ret["error"] = "Post not found";
             auto resp = HttpResponse::newHttpJsonResponse(ret);

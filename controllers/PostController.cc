@@ -74,7 +74,9 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "WHERE p.id < $1 "
+        // Moderator-hidden posts leave the feed. Every read path needs
+        // this predicate; one that misses it makes hiding cosmetic.
+        "WHERE p.hidden_at IS NULL AND p.id < $1 "
         "ORDER BY p.id DESC "
         "LIMIT $2";
     // cppcheck-suppress variableScope ; ditto
@@ -83,6 +85,7 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
+        "WHERE p.hidden_at IS NULL "
         "ORDER BY p.id DESC "
         "LIMIT $1";
 
@@ -237,7 +240,7 @@ void PostController::searchPosts(const HttpRequestPtr &req,
         "FROM posts p "
         "CROSS JOIN q "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "WHERE p.search @@ q.query "
+        "WHERE p.hidden_at IS NULL AND p.search @@ q.query "
         "ORDER BY rank DESC, p.created_at DESC "
         "LIMIT 50";
 
@@ -315,7 +318,9 @@ void PostController::getPost(const HttpRequestPtr &req,
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "WHERE p.id = $1";
+        // A hidden post is a 404, not a 403: confirming it exists would
+        // tell whoever got it moderated exactly that it worked.
+        "WHERE p.hidden_at IS NULL AND p.id = $1";
 
     dbClient->execSqlAsync(
         kSql,
@@ -751,6 +756,16 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
 
     try {
         Criteria crit(Cols::_user_id, CompareOperator::EQ, userId);
+        // A profile listing is a read path like any other, so it drops
+        // moderator-hidden posts too.
+        //
+        // The column is named as a string rather than through Cols::, which
+        // is generated from the schema by drogon_ctl and therefore does not
+        // know about columns added by a later migration. Regenerating the
+        // models to gain one constant would rewrite every model file for no
+        // other benefit; Criteria accepts a column name directly.
+        crit = crit && Criteria(std::string("hidden_at"),
+                                CompareOperator::IsNull);
         if (cursor > 0)
             crit = crit && Criteria(Cols::_id, CompareOperator::LT, cursor);
         auto posts = mapper.orderBy(Cols::_id, SortOrder::DESC)
