@@ -1,5 +1,6 @@
 #include "Metrics.h"
 #include "EmailHelper.h"
+#include "Workers.h"
 #include "../controllers/MessageWebSocket.h"
 
 #include <algorithm>
@@ -169,6 +170,32 @@ std::string renderPrometheus()
         << "# TYPE blog_http_requests_in_flight gauge\n"
         << "blog_http_requests_in_flight "
         << g_inFlight.load(std::memory_order_relaxed) << '\n';
+
+    // Blocking-work pools (Argon2id, libvips). These are the saturation
+    // signal for the two slowest paths in the app: `queued` climbing means
+    // work is arriving faster than the pool retires it, and `rejected`
+    // incrementing means requests are being shed with a 503. Alert on the
+    // latter — it is the difference between "slow" and "refusing traffic".
+    out << "# HELP blog_worker_pool_threads Worker threads in a blocking-work pool.\n"
+        << "# TYPE blog_worker_pool_threads gauge\n"
+        << "# HELP blog_worker_pool_active Jobs currently executing.\n"
+        << "# TYPE blog_worker_pool_active gauge\n"
+        << "# HELP blog_worker_pool_queued Jobs waiting for a worker.\n"
+        << "# TYPE blog_worker_pool_queued gauge\n"
+        << "# HELP blog_worker_pool_capacity Maximum backlog before submissions are refused.\n"
+        << "# TYPE blog_worker_pool_capacity gauge\n"
+        << "# HELP blog_worker_pool_rejected_total Jobs refused because the backlog was full.\n"
+        << "# TYPE blog_worker_pool_rejected_total counter\n";
+    for (const auto pool : {workers::Pool::Auth, workers::Pool::Media}) {
+        const auto s = workers::stats(pool);
+        const std::string label =
+            std::string("{pool=\"") + workers::poolName(pool) + "\"} ";
+        out << "blog_worker_pool_threads"        << label << s.threads   << '\n'
+            << "blog_worker_pool_active"         << label << s.active    << '\n'
+            << "blog_worker_pool_queued"         << label << s.queued    << '\n'
+            << "blog_worker_pool_capacity"       << label << s.capacity  << '\n'
+            << "blog_worker_pool_rejected_total" << label << s.rejected  << '\n';
+    }
 
     // Build info as a constant gauge of value 1 with version labels. Standard
     // Prometheus pattern for static service metadata (lets dashboards switch

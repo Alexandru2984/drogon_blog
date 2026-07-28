@@ -7,6 +7,7 @@
 #include "../helpers/Markdown.h"
 #include "../helpers/Security.h"
 #include "../helpers/ImageProcessor.h"
+#include "../helpers/Workers.h"
 
 #include <filesystem>
 #include <system_error>
@@ -533,31 +534,50 @@ void PostController::uploadPostImage(const HttpRequestPtr &req,
 
     file.saveAs(tmpPath);
 
-    // Validate (magic-byte sniff), downscale preserving aspect, strip EXIF.
-    const auto result = image::processPostImage(tmpPath, finalPath);
+    // Decode + downscale + re-encode runs on the media pool, not here.
+    // libvips holds the calling thread for the whole pipeline, and this
+    // handler is executing on one of Drogon's IO loops — every other
+    // connection assigned to that loop would wait out the resize. The tmp
+    // file is already on disk, so the job needs nothing but paths.
+    const bool queued = workers::offload(workers::Pool::Media, callback,
+        [req, callback, tmpPath, finalPath, publicPath, userIdOpt] {
+            // Validate (magic-byte sniff), downscale preserving aspect,
+            // strip EXIF.
+            const auto result = image::processPostImage(tmpPath, finalPath);
 
-    std::error_code rmEc;
-    std::filesystem::remove(tmpPath, rmEc);                // best effort
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);        // best effort
 
-    if (!result.ok) {
-        Json::Value ret;
-        ret["error"] = result.error;
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
-        callback(resp);
-        return;
+            if (!result.ok) {
+                Json::Value ret;
+                ret["error"] = result.error;
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
+                callback(resp);
+                return;
+            }
+
+            audit_log::record(req, {"post.image.upload", userIdOpt,
+                                    std::nullopt, std::nullopt,
+                                    Json::objectValue});
+
+            // The SPA embeds this as Markdown: ![alt](url). cmark renders it
+            // in SAFE mode (no raw HTML) and the CSP img-src 'self' confines
+            // display to this origin, so a re-encoded same-origin JPEG
+            // carries no active content.
+            Json::Value ret;
+            ret["url"] = publicPath;
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        });
+
+    // Saturated pool: offload() has already answered 503, but the job that
+    // would have cleaned up never ran, so the tmp file is ours to remove.
+    // Skipping this turns every shed upload into a permanent orphan under
+    // uploads/tmp.
+    if (!queued) {
+        std::error_code rmEc;
+        std::filesystem::remove(tmpPath, rmEc);
     }
-
-    audit_log::record(req, {"post.image.upload", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-
-    // The SPA embeds this as Markdown: ![alt](url). cmark renders it in SAFE
-    // mode (no raw HTML) and the CSP img-src 'self' confines display to this
-    // origin, so a re-encoded same-origin JPEG carries no active content.
-    Json::Value ret;
-    ret["url"] = publicPath;
-    auto resp = HttpResponse::newHttpJsonResponse(ret);
-    callback(resp);
 }
 
 void PostController::updatePost(const HttpRequestPtr &req,

@@ -9,6 +9,7 @@
 #include "../helpers/Security.h"
 #include "../helpers/Totp.h"
 #include "../helpers/WebAuthn.h"
+#include "../helpers/Workers.h"
 #include "../models/Users.h"
 
 #include <drogon/orm/Exception.h>
@@ -268,6 +269,13 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
     const std::string code = (*json)["code"].asString();
 
+    // issueFreshRecoveryCodes() below Argon2id-hashes ten codes in a row —
+    // about 1.7 s of solid CPU at the measured 167 ms each. On an IO loop
+    // that is 1.7 s during which every other connection Drogon assigned to
+    // the same loop gets nothing.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, code] {
+
     auto db = drogon::app().getDbClient();
     auto rows = db->execSqlSync(
         "SELECT secret_b32, enabled FROM user_totp_secrets WHERE user_id = $1",
@@ -308,6 +316,8 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     for (auto& c : codes) arr.append(c);
     ret["recovery_codes"] = arr;
     callback(HttpResponse::newHttpJsonResponse(ret));
+
+        });
 }
 
 // =========================================================================
@@ -322,6 +332,11 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+
+    // verifyCurrentPassword() is an Argon2id verify (~158 ms) plus a
+    // synchronous query; the deletes below add three more round-trips.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, json] {
 
     const std::string password = (*json)["password"].asString();
     if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
@@ -361,6 +376,8 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
     Json::Value ret;
     ret["enabled"] = false;
     callback(HttpResponse::newHttpJsonResponse(ret));
+
+        });
 }
 
 // =========================================================================
@@ -374,6 +391,12 @@ void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    // One Argon2id verify for the password re-auth plus ten more to hash
+    // the fresh batch: roughly 1.9 s of CPU that must not run on an IO
+    // loop.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, json] {
+
     const std::string password = (*json)["password"].asString();
     if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
         callback(jsonError(k403Forbidden, "Password check failed"));
@@ -387,6 +410,8 @@ void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
     for (auto& c : codes) arr.append(c);
     ret["recovery_codes"] = arr;
     callback(HttpResponse::newHttpJsonResponse(ret));
+
+        });
 }
 
 // =========================================================================
@@ -647,6 +672,13 @@ void AuthController::verifyLoginRecovery(const HttpRequestPtr& req,
         return;
     }
 
+    // Matching a recovery code is a linear scan of Argon2id verifies — up
+    // to ten at ~158 ms each, so ~1.6 s in the worst case (a wrong code,
+    // which is also the attacker's case). Comfortably the longest blocking
+    // operation in the app.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, pendingOpt, code] {
+
     auto db = drogon::app().getDbClient();
     auto rows = db->execSqlSync(
         "SELECT id, code_hash FROM user_recovery_codes "
@@ -690,6 +722,8 @@ void AuthController::verifyLoginRecovery(const HttpRequestPtr& req,
     audit_log::record(req, {"login.ok", pendingOpt,
                             std::nullopt, std::nullopt, Json::objectValue});
     completeTwoStepLogin(req, callback, *pendingOpt);
+
+        });
 }
 
 // =========================================================================

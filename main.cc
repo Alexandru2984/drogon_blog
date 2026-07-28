@@ -14,6 +14,7 @@
 #include "helpers/GrpcServer.h"
 #include "helpers/PublicPages.h"
 #include "helpers/Security.h"
+#include "helpers/Workers.h"
 #include "controllers/MessageWebSocket.h"
 
 #include <chrono>
@@ -175,6 +176,11 @@ int main()
         return 1;
     }
 
+    // Thread pools for Argon2id and libvips. Must exist before any handler
+    // can run, since handlers that block hand their work here instead of
+    // running it on the event loop.
+    workers::start();
+
     EmailHelper::start();
     presence::install();
     sentry::install();
@@ -219,6 +225,9 @@ int main()
         });
 
     drogon::app().getLoop()->runOnQuit([] {
+        // Workers first: an in-flight job may still be talking to the
+        // database or libvips, and both are torn down below.
+        workers::stop();
         pglisten::stop();
         EmailHelper::stop();
         presence::stop();

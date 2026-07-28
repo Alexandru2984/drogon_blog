@@ -6,6 +6,7 @@
 #include "../helpers/ImageProcessor.h"
 #include "../helpers/Presence.h"
 #include "../helpers/Security.h"
+#include "../helpers/Workers.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/MultiPart.h>
@@ -97,6 +98,12 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         callback(resp);
         return;
     }
+
+    // The email-change branch re-authenticates with Argon2id (~158 ms) and
+    // the surrounding ORM calls are synchronous, so the whole body runs on
+    // the auth pool rather than an IO loop.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, json, userIdOpt] {
 
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
@@ -199,6 +206,8 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         resp->setStatusCode(k500InternalServerError);
         callback(resp);
     }
+
+        });
 }
 
 void UserController::uploadProfileImage(const HttpRequestPtr &req,
@@ -287,53 +296,67 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
 
     file.saveAs(tmpPath);
 
-    // Validate + resize + EXIF-strip via libvips.
-    const auto result = image::processAvatar(tmpPath, finalPath);
+    // libvips holds its calling thread for the whole decode/resize/encode
+    // pipeline, and this handler runs inline on one of Drogon's IO loops —
+    // doing the work here stalls every other connection assigned to that
+    // loop for the duration. Hand it to the media pool instead. The ORM
+    // update that follows is synchronous too, so it belongs in the same job
+    // rather than being bounced back to the loop.
+    const bool queued = workers::offload(workers::Pool::Media, callback,
+        [callback, tmpPath, finalPath, publicPath, userIdOpt] {
+            // Validate + resize + EXIF-strip via libvips.
+            const auto result = image::processAvatar(tmpPath, finalPath);
 
-    std::error_code rmEc;
-    std::filesystem::remove(tmpPath, rmEc);                // best effort
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);        // best effort
 
-    if (!result.ok) {
-        Json::Value ret;
-        ret["error"] = result.error;
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
-        callback(resp);
-        return;
-    }
+            if (!result.ok) {
+                Json::Value ret;
+                ret["error"] = result.error;
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(static_cast<HttpStatusCode>(result.status));
+                callback(resp);
+                return;
+            }
 
-    // Persist the public path on the user row.
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
+            // Persist the public path on the user row.
+            auto dbClient = drogon::app().getDbClient();
+            Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
-    try {
-        auto user = mapper.findByPrimaryKey(userIdOpt.value());
-        user.setProfileImage(publicPath);
-        mapper.update(user);
+            try {
+                auto user = mapper.findByPrimaryKey(userIdOpt.value());
+                user.setProfileImage(publicPath);
+                mapper.update(user);
 
-        Json::Value ret;
-        ret["message"]       = "Profile image uploaded successfully";
-        ret["profile_image"] = publicPath;
+                Json::Value ret;
+                ret["message"]       = "Profile image uploaded successfully";
+                ret["profile_image"] = publicPath;
+                callback(HttpResponse::newHttpJsonResponse(ret));
+            } catch (const UnexpectedRows &) {
+                // The user row vanished between session creation and now —
+                // clean up the orphaned upload before responding.
+                std::filesystem::remove(finalPath, rmEc);
+                Json::Value ret;
+                ret["error"] = "User not found";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k404NotFound);
+                callback(resp);
+            } catch (const DrogonDbException &e) {
+                LOG_ERROR << "DB Error: " << e.base().what();
+                std::filesystem::remove(finalPath, rmEc);
+                Json::Value ret;
+                ret["error"] = "Failed to update profile image";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k500InternalServerError);
+                callback(resp);
+            }
+        });
 
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const UnexpectedRows &) {
-        // The user row vanished between session creation and now — clean up
-        // the orphaned upload before responding.
-        std::filesystem::remove(finalPath, rmEc);
-        Json::Value ret;
-        ret["error"] = "User not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        std::filesystem::remove(finalPath, rmEc);
-        Json::Value ret;
-        ret["error"] = "Failed to update profile image";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
+    // Saturated pool: offload() already answered 503, but the job that
+    // would have removed the tmp file never ran.
+    if (!queued) {
+        std::error_code rmEc;
+        std::filesystem::remove(tmpPath, rmEc);
     }
 }
 

@@ -5,6 +5,7 @@
 #include "../helpers/EmailHelper.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/Security.h"
+#include "../helpers/Workers.h"
 
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
@@ -116,6 +117,13 @@ void AuthController::registerUser(const HttpRequestPtr &req,
         return;
     }
 
+    // Registration hashes with Argon2id — twice on the masked-collision
+    // path, since the throwaway hash is what keeps the two outcomes
+    // indistinguishable — plus synchronous ORM lookups and an insert. All
+    // of it blocks, so none of it belongs on an IO loop.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, username, email, password] {
+
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
@@ -196,6 +204,8 @@ void AuthController::registerUser(const HttpRequestPtr &req,
         LOG_ERROR << "DB Error (register insert): " << e.base().what();
         callback(jsonError(k409Conflict, "Username already taken"));
     }
+
+        });
 }
 
 void AuthController::loginUser(const HttpRequestPtr &req,
@@ -232,6 +242,15 @@ void AuthController::loginUser(const HttpRequestPtr &req,
             }
         }
     }
+
+    // Everything below blocks: the ORM lookup is synchronous, the Argon2id
+    // verify costs ~158 ms on this host by design, and the 2FA enrolment
+    // check is two more synchronous round-trips. Run on this IO loop it
+    // would stall every other connection Drogon assigned to the same loop
+    // for the whole login. The rate-limit checks above stay on the loop so
+    // a shed request never occupies a worker slot.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, username, password] {
 
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
@@ -330,6 +349,8 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         LOG_ERROR << "DB Error (login): " << e.base().what();
         callback(jsonError(k500InternalServerError, "Login failed"));
     }
+
+        });
 }
 
 void AuthController::logoutUser(const HttpRequestPtr &req,
@@ -576,24 +597,33 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
                 return;
             }
             const int userId = r[0]["user_id"].as<int>();
-            const std::string hash = hashPassword(newPassword);
 
-            dbClient->execSqlAsync(
-                "UPDATE users SET password_hash = $1 WHERE id = $2",
-                [callback, req, userId](const Result&) {
-                    audit_log::record(req, {"password.reset", userId,
-                                            std::nullopt, std::nullopt,
-                                            Json::objectValue});
-                    Json::Value ret;
-                    ret["message"] = "Password reset successfully";
-                    callback(HttpResponse::newHttpJsonResponse(ret));
-                },
-                [callback](const DrogonDbException& e) {
-                    LOG_ERROR << "DB Error (reset update): " << e.base().what();
-                    callback(jsonError(k500InternalServerError,
-                                       "Failed to reset password"));
-                },
-                hash, userId);
+            // This callback runs on the database connection's own thread,
+            // not an IO loop, but hashing here still parks that connection
+            // for ~167 ms and every query queued behind it waits. Hand the
+            // Argon2id work to the auth pool and let the connection go.
+            workers::offload(workers::Pool::Auth, callback,
+                [dbClient, newPassword, callback, req, userId] {
+                    const std::string hash = hashPassword(newPassword);
+
+                    dbClient->execSqlAsync(
+                        "UPDATE users SET password_hash = $1 WHERE id = $2",
+                        [callback, req, userId](const Result&) {
+                            audit_log::record(req, {"password.reset", userId,
+                                                    std::nullopt, std::nullopt,
+                                                    Json::objectValue});
+                            Json::Value ret;
+                            ret["message"] = "Password reset successfully";
+                            callback(HttpResponse::newHttpJsonResponse(ret));
+                        },
+                        [callback](const DrogonDbException& e) {
+                            LOG_ERROR << "DB Error (reset update): "
+                                      << e.base().what();
+                            callback(jsonError(k500InternalServerError,
+                                               "Failed to reset password"));
+                        },
+                        hash, userId);
+                });
         },
         [callback](const DrogonDbException& e) {
             LOG_ERROR << "DB Error (reset consume): " << e.base().what();

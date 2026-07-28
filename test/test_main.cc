@@ -6,6 +6,7 @@
 #include "../helpers/AccessLog.h"
 #include "../helpers/Ops.h"
 #include "../helpers/Security.h"
+#include "../helpers/Workers.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -125,6 +126,12 @@ int main(int argc, char** argv)
     access_log::install();
     ops::install();
 
+    // Handlers that block (Argon2id, libvips, the synchronous 2FA queries)
+    // hand their work to these pools instead of running it on an IO loop.
+    // Without them every such handler sheds its request with a 503, so the
+    // harness must start them exactly as main() does.
+    workers::start();
+
     std::promise<void> ready;
     auto readyFut = ready.get_future();
 
@@ -138,5 +145,6 @@ int main(int argc, char** argv)
 
     app().getLoop()->queueInLoop([]() { app().quit(); });
     loop.join();
+    workers::stop();
     return status;
 }
