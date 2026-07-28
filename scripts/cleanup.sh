@@ -49,6 +49,23 @@ else
     echo "cleared expired email-verification tokens"
 fi
 
+# ---- 1b. Retired session rows ----
+# user_sessions keeps a row per login so the account page can show where the
+# user is signed in. Revoked rows have no further use once they are older
+# than the session lifetime: the sessions they describe could not be valid
+# even if they had not been revoked, and every process rebuilds its
+# in-memory revocation set from scratch on restart anyway.
+#
+# 30 days is comfortably past the 14-day session_timeout, which leaves the
+# recent history readable if someone is investigating an incident.
+if [ "$DRY_RUN" = "1" ]; then
+    n=$(psql_run -At -c "SELECT count(*) FROM user_sessions WHERE revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days';")
+    echo "[dry-run] would prune $n retired session row(s)"
+else
+    n=$(psql_run -At -c "WITH d AS (DELETE FROM user_sessions WHERE revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days' RETURNING 1) SELECT count(*) FROM d;")
+    echo "pruned $n retired session row(s)"
+fi
+
 # ---- 2. Orphaned uploads ----
 # Collect the set of still-referenced filenames once (cheap, the tables are
 # small) rather than querying per file. A disk file whose basename is not in

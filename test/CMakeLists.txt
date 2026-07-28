@@ -12,7 +12,8 @@ set(TEST_SOURCES
     test_markdown.cc
     test_2fa.cc
     test_caching.cc
-    test_workers.cc)
+    test_workers.cc
+    test_sessions.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 

@@ -14,6 +14,7 @@
 #include "helpers/GrpcServer.h"
 #include "helpers/PublicPages.h"
 #include "helpers/Security.h"
+#include "helpers/Sessions.h"
 #include "helpers/Workers.h"
 #include "controllers/MessageWebSocket.h"
 
@@ -214,6 +215,15 @@ int main()
                 MessageWebSocket::pushNewComment(
                     root["post_id"].asInt(), root);
             }
+            else if (kind == "session_revoked")
+            {
+                // Revocation has to reach every process, not only the one
+                // that handled the request: each keeps its own in-memory
+                // set of revoked sids so the per-request check is a hash
+                // lookup rather than a query.
+                sessions::onRevokedNotification(
+                    root.get("sid", "").asString());
+            }
             else if (kind == "flag_changed")
             {
                 // Migration 0007 routes feature_flags mutations
@@ -238,6 +248,12 @@ int main()
 
     // Rate limiting, CSRF (double-submit), and response security headers.
     security::registerAdvices();
+
+    // Session registry + the advice that drops a revoked session before any
+    // handler sees it. After security::registerAdvices() so the CSRF and
+    // rate-limit checks still run on a request whose session was revoked —
+    // a revoked session should not become a way to skip them.
+    sessions::install();
 
     // Structured JSON access log + request-ID propagation + metrics ingestion.
     access_log::install();

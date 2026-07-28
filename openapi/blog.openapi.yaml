@@ -271,6 +271,124 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
 
   # ---------------------------------------------------------------- 2FA enrollment
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change the signed-in account's password
+      description: |
+        Requires the current password. That re-authentication is the point of
+        the endpoint rather than a formality: without it a hijacked session
+        could change the password and lock the real owner out.
+
+        On success every **other** session for the account is revoked. This is
+        the behaviour a user changing their password is asking for — it is what
+        people do when they suspect someone else is in the account, and leaving
+        an attacker's session alive would make the action pointless. The
+        calling session is deliberately kept so the user is not signed out of
+        the device they are using.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password }
+                new_password:     { type: string, format: password, minLength: 8, maxLength: 256 }
+      responses:
+        '200':
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:          { type: string }
+                  revoked_sessions:
+                    type: integer
+                    description: How many other sessions were signed out.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The supplied current password was wrong.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/sessions:
+    get:
+      tags: [Auth]
+      summary: List the account's active sessions
+      description: |
+        One entry per device currently holding a session, newest activity
+        first. `sid` identifies a session but is not a credential — presenting
+        it authenticates nothing, so it is safe to hand to the client that
+        owns it.
+
+        Sessions live in the server's memory, so a restart ends all of them
+        and the list empties.
+      responses:
+        '200':
+          description: Active sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/SessionEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/sessions/revoke:
+    post:
+      tags: [Auth]
+      summary: Sign out one session
+      description: |
+        Scoped to the caller's own account: the update matches on
+        `(sid, user_id)`, so a sid belonging to someone else simply matches
+        nothing. `404` therefore covers both "no such session" and "not
+        yours", which is intentional — the two must not be distinguishable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sid]
+              properties:
+                sid: { type: string }
+      responses:
+        '200':
+          description: Session revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /auth/sessions/revoke-others:
+    post:
+      tags: [Auth]
+      summary: Sign out every session except this one
+      responses:
+        '200':
+          description: Other sessions revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:          { type: string }
+                  revoked_sessions: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /auth/2fa/status:
     get:
       tags: [2FA]
@@ -1218,6 +1336,21 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    SessionEntry:
+      type: object
+      properties:
+        sid:
+          type: string
+          description: |
+            Session identifier. Not a credential — it names a session but
+            cannot be used to authenticate as one.
+        created_at:   { type: string }
+        last_seen_at: { type: string }
+        ip:           { type: string }
+        user_agent:   { type: string }
+        current:
+          type: boolean
+          description: True for the session making this request.
     Error:
       type: object
       required: [error]

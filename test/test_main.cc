@@ -6,6 +6,7 @@
 #include "../helpers/AccessLog.h"
 #include "../helpers/Ops.h"
 #include "../helpers/Security.h"
+#include "../helpers/Sessions.h"
 #include "../helpers/Workers.h"
 
 #include <cstdlib>
@@ -131,6 +132,11 @@ int main(int argc, char** argv)
     // Without them every such handler sheds its request with a 503, so the
     // harness must start them exactly as main() does.
     workers::start();
+
+    // Session registry + the advice that drops a revoked session before any
+    // handler runs. main() installs this after security::registerAdvices();
+    // without it here, revocation silently does nothing in tests.
+    sessions::install();
 
     std::promise<void> ready;
     auto readyFut = ready.get_future();

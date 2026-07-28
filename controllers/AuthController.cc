@@ -6,6 +6,7 @@
 #include "../helpers/HttpCache.h"
 #include "../helpers/Security.h"
 #include "../helpers/Workers.h"
+#include "../helpers/Sessions.h"
 
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
@@ -332,6 +333,7 @@ void AuthController::loginUser(const HttpRequestPtr &req,
 
         session->insert("user_id",  userId);
         session->insert("username", user.getValueOfUsername());
+        sessions::begin(req, userId);
 
         audit_log::record(req, {"login.ok", userId,
                                 std::nullopt, std::nullopt, Json::objectValue});
@@ -359,6 +361,11 @@ void AuthController::logoutUser(const HttpRequestPtr &req,
     auto session = req->session();
     auto userIdOpt = session->getOptional<int>("user_id");
 
+    // Retire the registry row before clearing, while the sid is still
+    // readable. Without this the session list would keep showing a device
+    // the user has explicitly signed out of.
+    auto sid = sessions::currentSid(req);
+
     // Wipe everything from the session and rotate the ID so any captured
     // cookie is useless after this call.
     session->clear();
@@ -366,6 +373,15 @@ void AuthController::logoutUser(const HttpRequestPtr &req,
 
     audit_log::record(req, {"logout", userIdOpt,
                             std::nullopt, std::nullopt, Json::objectValue});
+
+    if (userIdOpt && sid) {
+        const int  uid = *userIdOpt;
+        const auto s   = *sid;
+        // Off-loop: revoke() is a synchronous UPDATE. The response does not
+        // depend on it — the session is already gone client-side.
+        workers::submit(workers::Pool::Auth,
+                        [uid, s] { sessions::revoke(uid, s, "logout"); });
+    }
 
     Json::Value ret;
     ret["message"] = "Logout successful";

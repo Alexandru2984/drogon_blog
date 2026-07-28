@@ -10,6 +10,7 @@
 #include "../helpers/Totp.h"
 #include "../helpers/WebAuthn.h"
 #include "../helpers/Workers.h"
+#include "../helpers/Sessions.h"
 #include "../models/Users.h"
 
 #include <drogon/orm/Exception.h>
@@ -147,6 +148,10 @@ void completeTwoStepLogin(const HttpRequestPtr& req,
     session->changeSessionIdToClient();
     session->insert("user_id",  userId);
     session->insert("username", rows[0]["username"].as<std::string>());
+    // Register the session so it shows up in the user's device list and can
+    // be revoked. Both login paths must do this; a 2FA-completed login that
+    // skipped it would be invisible to "sign out everywhere".
+    sessions::begin(req, userId);
 
     Json::Value ret;
     ret["message"]          = "Login successful";

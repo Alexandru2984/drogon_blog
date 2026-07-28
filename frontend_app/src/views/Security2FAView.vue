@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
 import { twoFactorApi, webauthnRegister, type Passkey, type Status2fa }
   from '@/api/twofactor'
+import { accountApi, type SessionEntry } from '@/api/account'
 import { useToastStore } from '@/stores/toast'
 
 const toasts = useToastStore()
@@ -22,11 +23,109 @@ const regenPw     = ref('')
 const loading     = ref(false)
 const error       = ref('')
 
+// ---- Password + active sessions ----
+const sessions      = ref<SessionEntry[]>([])
+const currentPw     = ref('')
+const newPw         = ref('')
+const confirmPw     = ref('')
+const pwBusy        = ref(false)
+const sessionsBusy  = ref(false)
+
 async function refresh() {
   status.value   = await twoFactorApi.status()
   passkeys.value = (await twoFactorApi.webauthnList()).credentials
+  await refreshSessions()
 }
 onMounted(refresh)
+
+async function refreshSessions() {
+  try {
+    sessions.value = await accountApi.listSessions()
+  } catch {
+    // Non-fatal: the rest of the page is still useful without the list.
+    sessions.value = []
+  }
+}
+
+async function submitPasswordChange() {
+  if (newPw.value !== confirmPw.value) {
+    toasts.push('New passwords do not match', 'error')
+    return
+  }
+  pwBusy.value = true
+  try {
+    const r = await accountApi.changePassword(currentPw.value, newPw.value)
+    currentPw.value = newPw.value = confirmPw.value = ''
+    // Say how many sessions were cut: a user changing their password
+    // because they suspect someone else is in the account wants to see
+    // that something actually happened.
+    toasts.push(
+      r.revoked_sessions > 0
+        ? `Password changed — ${r.revoked_sessions} other session(s) signed out`
+        : 'Password changed',
+      'ok',
+    )
+    await refreshSessions()
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not change password', 'error')
+  } finally {
+    pwBusy.value = false
+  }
+}
+
+async function revokeOne(sid: string) {
+  sessionsBusy.value = true
+  try {
+    await accountApi.revokeSession(sid)
+    toasts.push('Session signed out', 'ok')
+    await refreshSessions()
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not sign out that session', 'error')
+  } finally {
+    sessionsBusy.value = false
+  }
+}
+
+async function revokeOthers() {
+  sessionsBusy.value = true
+  try {
+    const r = await accountApi.revokeOtherSessions()
+    toasts.push(`${r.revoked_sessions} session(s) signed out`, 'ok')
+    await refreshSessions()
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not sign out other sessions', 'error')
+  } finally {
+    sessionsBusy.value = false
+  }
+}
+
+// Turn a raw User-Agent into something a person can recognise. Deliberately
+// crude: the goal is "is this me?", not analytics. Order matters — Edge and
+// Chrome both contain "Chrome", Safari contains neither.
+function describeAgent(ua: string): string {
+  if (!ua) return 'Unknown device'
+  const browser =
+    /Edg\//.test(ua)                        ? 'Edge'    :
+    /OPR\/|Opera/.test(ua)                  ? 'Opera'   :
+    /Firefox\//.test(ua)                    ? 'Firefox' :
+    /Chrome\//.test(ua)                     ? 'Chrome'  :
+    /Safari\//.test(ua)                     ? 'Safari'  :
+    /curl\//.test(ua)                       ? 'curl'    : 'Browser'
+  const os =
+    /Android/.test(ua)                      ? 'Android' :
+    /iPhone|iPad|iPod/.test(ua)             ? 'iOS'     :
+    /Mac OS X|Macintosh/.test(ua)           ? 'macOS'   :
+    /Windows/.test(ua)                      ? 'Windows' :
+    /Linux/.test(ua)                        ? 'Linux'   : ''
+  return os ? `${browser} on ${os}` : browser
+}
+
+function formatWhen(ts: string): string {
+  // Postgres hands back "2026-07-28 17:22:42.970854" with no zone marker;
+  // it is UTC, so say so before Date parses it as local time.
+  const d = new Date(ts.replace(' ', 'T') + 'Z')
+  return isNaN(d.getTime()) ? ts : d.toLocaleString()
+}
 
 async function startTotp() {
   error.value = ''
@@ -111,7 +210,74 @@ function copyCodes() {
 
 <template>
   <div style="max-width: 720px; margin: 2rem auto;">
-    <h2>Two-factor authentication</h2>
+    <h2>Account security</h2>
+
+    <!-- ------- Change password ------- -->
+    <div class="card" style="margin-top: 1rem;">
+      <h3>Change password</h3>
+      <p class="muted">
+        Changing your password signs out every other device. The one you are
+        using now stays signed in.
+      </p>
+      <form @submit.prevent="submitPasswordChange">
+        <label for="cur-pw">Current password</label>
+        <input id="cur-pw" v-model="currentPw" type="password"
+               autocomplete="current-password" required />
+
+        <label for="new-pw">New password</label>
+        <input id="new-pw" v-model="newPw" type="password" minlength="8"
+               autocomplete="new-password" required />
+
+        <label for="conf-pw">Confirm new password</label>
+        <input id="conf-pw" v-model="confirmPw" type="password" minlength="8"
+               autocomplete="new-password" required />
+
+        <button type="submit" :disabled="pwBusy" style="margin-top: 0.75rem;">
+          {{ pwBusy ? 'Changing…' : 'Change password' }}
+        </button>
+      </form>
+    </div>
+
+    <!-- ------- Active sessions ------- -->
+    <div class="card" style="margin-top: 1rem;">
+      <h3>Where you are signed in</h3>
+      <p class="muted">
+        Every device currently holding a session. Sign out anything you do not
+        recognise. Sessions also end whenever the server restarts.
+      </p>
+
+      <p v-if="!sessions.length" class="muted">No active sessions recorded.</p>
+
+      <ul v-else style="list-style: none; padding: 0; margin: 0;">
+        <li v-for="s in sessions" :key="s.sid"
+            style="display: flex; gap: 0.75rem; align-items: center;
+                   padding: 0.6rem 0; border-top: 1px solid var(--border);">
+          <div style="flex: 1; min-width: 0;">
+            <div>
+              <strong>{{ describeAgent(s.user_agent) }}</strong>
+              <span v-if="s.current" class="ok" style="margin-left: 0.4rem;">
+                — this device
+              </span>
+            </div>
+            <div class="muted" style="word-break: break-word;">
+              {{ s.ip || 'unknown address' }} · last active {{ formatWhen(s.last_seen_at) }}
+            </div>
+          </div>
+          <button v-if="!s.current" class="ghost" :disabled="sessionsBusy"
+                  @click="revokeOne(s.sid)">
+            Sign out
+          </button>
+        </li>
+      </ul>
+
+      <button v-if="sessions.length > 1" class="danger"
+              :disabled="sessionsBusy" style="margin-top: 0.75rem;"
+              @click="revokeOthers">
+        Sign out everywhere else
+      </button>
+    </div>
+
+    <h2 style="margin-top: 2rem;">Two-factor authentication</h2>
     <p class="muted">
       Strongly recommended. Without 2FA, anyone who learns your password owns your
       account. With it, they additionally need a code from your phone or a hardware key.

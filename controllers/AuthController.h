@@ -29,12 +29,28 @@ class AuthController : public drogon::HttpController<AuthController>
     ADD_METHOD_TO(AuthController::webauthnList,           "/auth/2fa/webauthn/list",                Get);
     ADD_METHOD_TO(AuthController::webauthnRemove,         "/auth/2fa/webauthn/remove/{1}",          Post);
 
+    // ---- Account security (authenticated user) ----
+    ADD_METHOD_TO(AuthController::changePassword,         "/auth/change-password",                  Post);
+    ADD_METHOD_TO(AuthController::listSessions,           "/auth/sessions",                         Get);
+    ADD_METHOD_TO(AuthController::revokeSession,          "/auth/sessions/revoke",                  Post);
+    ADD_METHOD_TO(AuthController::revokeOtherSessions,    "/auth/sessions/revoke-others",           Post);
+
     // ---- Two-step login completion (unauthenticated, session-bound) ----
     ADD_METHOD_TO(AuthController::verifyLoginTotp,        "/auth/login/verify-totp",                Post);
     ADD_METHOD_TO(AuthController::verifyLoginRecovery,    "/auth/login/verify-recovery",            Post);
     ADD_METHOD_TO(AuthController::webauthnLoginBegin,     "/auth/login/verify-webauthn/begin",      Post);
     ADD_METHOD_TO(AuthController::webauthnLoginFinish,    "/auth/login/verify-webauthn/finish",     Post);
     METHOD_LIST_END
+
+    // Account security. Implementations live in AuthControllerAccount.cc.
+    void changePassword(const HttpRequestPtr &req,
+                       std::function<void(const HttpResponsePtr &)> &&callback);
+    void listSessions(const HttpRequestPtr &req,
+                     std::function<void(const HttpResponsePtr &)> &&callback);
+    void revokeSession(const HttpRequestPtr &req,
+                      std::function<void(const HttpResponsePtr &)> &&callback);
+    void revokeOtherSessions(const HttpRequestPtr &req,
+                            std::function<void(const HttpResponsePtr &)> &&callback);
 
     void registerUser(const HttpRequestPtr &req,
                      std::function<void(const HttpResponsePtr &)> &&callback);
