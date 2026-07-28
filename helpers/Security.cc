@@ -127,31 +127,56 @@ std::unordered_map<std::string, Bucket> g_buckets;
 
 } // namespace
 
+// Name of the single header that may declare the client IP, overridable
+// via BLOG_CLIENT_IP_HEADER.
+//
+// This used to be a waterfall — CF-Connecting-IP, then X-Real-IP, then the
+// last hop of X-Forwarded-For — which quietly assumed the reverse proxy
+// stripped every one of those from inbound requests. It did not. nginx
+// passes request headers upstream verbatim unless told otherwise, so
+// anything that reached the origin directly could name its own client IP
+// and get it believed, because the only peer the app ever sees is nginx on
+// loopback. Reproduced against production: two requests carrying forged
+// TEST-NET addresses were logged as originating from them, which is a full
+// bypass of every per-IP token bucket plus a log-poisoning primitive.
+//
+// One configured header instead of a waterfall means a deployment states
+// which hop it trusts rather than the app guessing. The edge is now
+// responsible for making that header true — ops/nginx/blog-proxy.conf
+// strips the client's copy and re-sets it from nginx's own $remote_addr,
+// which blog-security.conf resolves through the real_ip module over
+// Cloudflare's ranges.
+const std::string& clientIpHeader()
+{
+    static const std::string v = [] {
+        const char* env = std::getenv("BLOG_CLIENT_IP_HEADER");
+        return (env && *env) ? std::string(env) : std::string("X-Real-IP");
+    }();
+    return v;
+}
+
 std::string clientIp(const drogon::HttpRequestPtr& req)
 {
-    std::string peer = req->getPeerAddr().toIp();
-    const bool trustedPeer = isTrustedProxy(peer);
+    return resolveClientIp(req->getPeerAddr().toIp(),
+                           req->getHeader(clientIpHeader()));
+}
 
-    // Production runs behind Cloudflare → nginx → Drogon. CF-Connecting-IP is
-    // unspoofable (Cloudflare sets it and overwrites whatever the client
-    // sent), so it wins outright when the immediate peer is a trusted proxy.
-    const auto& cf = req->getHeader("CF-Connecting-IP");
-    if (!cf.empty() && trustedPeer) return cf;
+std::string resolveClientIp(const std::string& peer,
+                            const std::string& claimed)
+{
+    // Header claims are only considered when the connection itself came
+    // from a declared reverse proxy. Anything else speaks for itself.
+    if (!isTrustedProxy(peer)) return peer;
+    if (claimed.empty())       return peer;
 
-    // X-Real-IP is what nginx sets via `proxy_set_header X-Real-IP $remote_addr`
-    // — a single value, the IP nginx itself observed. Trusted because nginx
-    // strips any inbound copy before re-emitting it. Recommended over XFF.
-    const auto& realIp = req->getHeader("X-Real-IP");
-    if (!realIp.empty() && trustedPeer) return realIp;
-
-    // Last resort: X-Forwarded-For. Take the LAST hop, not the first — nginx's
-    // default `$proxy_add_x_forwarded_for` appends to whatever the client
-    // already sent, so the first entry is attacker-controlled. The last
-    // entry is the IP the most recent trusted proxy actually saw.
-    const auto& xff = req->getHeader("X-Forwarded-For");
-    if (!xff.empty() && trustedPeer) return lastHop(xff);
-
-    return peer;
+    // X-Forwarded-For is the one configurable value that may legitimately
+    // be a chain (`client, proxy1, proxy2, …`). Take the LAST hop: with
+    // nginx's default `$proxy_add_x_forwarded_for` the earlier entries are
+    // whatever the client sent, while the last is the address the nearest
+    // trusted proxy actually observed. Single-value headers fall through
+    // this unchanged, since lastHop() of a comma-free string is itself.
+    const std::string hop = lastHop(claimed);
+    return hop.empty() ? peer : hop;
 }
 
 std::string randomToken(std::size_t bytes)

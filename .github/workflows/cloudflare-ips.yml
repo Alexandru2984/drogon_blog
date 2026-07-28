@@ -1,0 +1,54 @@
+name: Cloudflare IP ranges
+
+# Deliberately NOT wired into ci.yml.
+#
+# ops/nginx/cloudflare-realip.conf is the trust boundary for
+# `real_ip_header CF-Connecting-IP`: only peers in those ranges may declare
+# a visitor's IP. It goes stale on Cloudflare's schedule, not ours, so
+# checking it on every push would fail builds for changes that have nothing
+# to do with the PR. A weekly run reports drift without blocking anyone.
+#
+# Both drift directions matter. A range Cloudflare ADDS is untrusted until
+# we notice, so every visitor behind that edge is rate-limited against the
+# edge address and shares one bucket. A range Cloudflare RETIRES stays
+# trusted, so whoever acquires it next can assert arbitrary client IPs —
+# which is precisely the spoof the mechanism exists to stop.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check published ranges against the committed list
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compare with Cloudflare's published ranges
+        id: check
+        run: |
+          if scripts/update-cloudflare-ips.sh --check; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show the diff
+        if: steps.check.outputs.stale == 'true'
+        run: |
+          scripts/update-cloudflare-ips.sh
+          git --no-pager diff -- ops/nginx/cloudflare-realip.conf
+
+      - name: Fail so the run is visible
+        if: steps.check.outputs.stale == 'true'
+        run: |
+          echo "::error::Cloudflare ranges changed. Run scripts/update-cloudflare-ips.sh," \
+               "commit ops/nginx/cloudflare-realip.conf, and redeploy it to" \
+               "/etc/nginx/conf.d/cloudflare-realip.conf."
+          exit 1

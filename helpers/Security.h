@@ -7,11 +7,32 @@
 
 namespace security {
 
-// Returns the originating client IP. When the immediate peer is one of the
-// trusted reverse proxies (loopback / private networks), the first hop from
-// X-Forwarded-For is preferred. CF-Connecting-IP wins outright if present,
-// since the production deployment sits behind Cloudflare.
+// Returns the originating client IP, used to key per-IP rate limits and to
+// stamp the access / audit logs.
+//
+// Two conditions must both hold before a header is believed: the immediate
+// peer must match BLOG_TRUSTED_PROXIES (loopback by default), and the claim
+// must arrive in the single header named by BLOG_CLIENT_IP_HEADER
+// ("X-Real-IP" by default). Otherwise the peer address is used.
+//
+// The edge is what makes that header trustworthy: nginx forwards request
+// headers upstream verbatim unless configured not to, so
+// ops/nginx/blog-proxy.conf strips the client's copy of every client-IP
+// header and re-sets X-Real-IP from nginx's own $remote_addr, which
+// ops/nginx/blog-security.conf resolves through the real_ip module over
+// Cloudflare's published ranges. Deploying the app behind a proxy that does
+// not strip inbound copies re-opens per-IP rate-limit bypass.
 std::string clientIp(const drogon::HttpRequestPtr& req);
+
+// The decision clientIp() makes, minus the request plumbing, so the trust
+// rules can be asserted directly. `peer` is the socket address; `claimed`
+// is the raw value of the configured client-IP header ("" when absent).
+std::string resolveClientIp(const std::string& peer,
+                            const std::string& claimed);
+
+// Name of the header allowed to declare the client IP
+// (BLOG_CLIENT_IP_HEADER, default "X-Real-IP"). Parsed once.
+const std::string& clientIpHeader();
 
 // Cryptographically-random URL-safe token (uses libsodium's RNG).
 std::string randomToken(std::size_t bytes = 32);

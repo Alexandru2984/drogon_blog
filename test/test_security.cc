@@ -85,6 +85,48 @@ DROGON_TEST(Security_CookieNamesUseHostPrefixUnderTls)
     }
 }
 
+// Client-IP resolution is a trust boundary: it keys every per-IP rate
+// limit and stamps the access + audit logs. Before this was tightened,
+// clientIp() walked a waterfall of CF-Connecting-IP → X-Real-IP → XFF and
+// believed whichever turned up first, on the assumption that the reverse
+// proxy stripped inbound copies. nginx does not strip anything unless told
+// to, so a request that reached the origin directly could name its own
+// client IP — a fresh value per request meant a fresh token bucket, i.e.
+// no per-IP limit at all, plus attacker-chosen entries in both logs.
+//
+// The rules asserted here: only a trusted peer may speak for someone else,
+// only the one configured header is read, and a chain is reduced to its
+// last hop (the entry the nearest trusted proxy actually observed —
+// everything before it came from the client).
+DROGON_TEST(Security_ClientIpOnlyTrustsProxiesAndOneHeader)
+{
+    // Untrusted peer: whatever it claims about itself is ignored.
+    CHECK(security::resolveClientIp("203.0.113.9", "198.51.100.4")
+          == "203.0.113.9");
+    CHECK(security::resolveClientIp("203.0.113.9", "") == "203.0.113.9");
+
+    // Trusted peer (loopback is the built-in default) may forward a claim.
+    CHECK(security::resolveClientIp("127.0.0.1", "198.51.100.4")
+          == "198.51.100.4");
+    CHECK(security::resolveClientIp("::1", "198.51.100.4") == "198.51.100.4");
+
+    // No claim, or a blank/whitespace one, falls back to the peer rather
+    // than bucketing every such request under the empty-string key.
+    CHECK(security::resolveClientIp("127.0.0.1", "")    == "127.0.0.1");
+    CHECK(security::resolveClientIp("127.0.0.1", "   ") == "127.0.0.1");
+
+    // A chain collapses to its LAST hop, never the client-controlled head.
+    CHECK(security::resolveClientIp("127.0.0.1",
+              "198.51.100.4, 203.0.113.9") == "203.0.113.9");
+    CHECK(security::resolveClientIp("127.0.0.1",
+              "evil, 198.51.100.4,  203.0.113.9  ") == "203.0.113.9");
+
+    // Only one header is consulted, and it is X-Real-IP unless the
+    // deployment says otherwise. A stray CF-Connecting-IP is not a
+    // second chance to be believed.
+    CHECK(security::clientIpHeader() == "X-Real-IP");
+}
+
 // Email-collision masking on register: a second registration with a
 // different username but the existing email gets a 201 (not 409).
 DROGON_TEST(Security_DuplicateEmailIsMasked)
