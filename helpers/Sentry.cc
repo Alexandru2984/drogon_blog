@@ -94,7 +94,14 @@ std::string isoUtcNow()
                   now.time_since_epoch()) % 1000;
     std::tm tm{};
     gmtime_r(&t, &tm);
-    char buf[40];
+    // 64, not 40. The format is 24 characters for any real timestamp, but
+    // the compiler reasons about the declared widths rather than the
+    // values: %04d on an int can print 11 characters, and it warned that
+    // the output could reach 78 bytes. snprintf would truncate rather than
+    // overflow, so this was never a memory-safety bug — but a truncated
+    // timestamp silently corrupts the event Sentry receives, and the
+    // warning is worth removing rather than living with.
+    char buf[64];
     std::snprintf(buf, sizeof(buf),
         "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ",
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,

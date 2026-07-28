@@ -169,6 +169,100 @@ void install(const std::string& siteOrigin)
         },
         {Get});
 
+    // -------- GET /sitemap.xml --------
+    // The SPA routes on the hash fragment, which crawlers do not follow —
+    // everything after `#` is stripped before a request is ever made. So
+    // the only crawlable address for a post is /preview/posts/{id}, and
+    // without a sitemap there is nothing linking to those at all: the
+    // entire archive is invisible to search engines no matter how long it
+    // has been up.
+    app().registerHandler("/sitemap.xml",
+        [origin](const HttpRequestPtr&,
+                 std::function<void(const HttpResponsePtr&)>&& cb) {
+            auto db = app().getDbClient();
+            static const char* kSql =
+                "SELECT id, updated_at FROM posts "
+                " WHERE hidden_at IS NULL "
+                " ORDER BY id DESC LIMIT 5000";
+
+            db->execSqlAsync(kSql,
+                [origin, cb](const orm::Result& r) {
+                    std::ostringstream out;
+                    out << R"(<?xml version="1.0" encoding="UTF-8"?>)" "\n"
+                        << R"(<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">)"
+                        << "\n";
+
+                    out << "  <url><loc>" << xmlEscape(origin)
+                        << "/</loc><changefreq>daily</changefreq>"
+                        << "<priority>1.0</priority></url>\n";
+
+                    for (const auto& row : r) {
+                        out << "  <url>"
+                            << "<loc>" << xmlEscape(origin) << "/preview/posts/"
+                            <<     row["id"].as<int64_t>() << "</loc>"
+                            << "<lastmod>"
+                            <<     xmlEscape(toIso8601(
+                                       row["updated_at"].as<std::string>()))
+                            << "</lastmod>"
+                            << "<changefreq>weekly</changefreq>"
+                            << "</url>\n";
+                    }
+                    out << "</urlset>\n";
+
+                    auto resp = HttpResponse::newHttpResponse();
+                    resp->setStatusCode(k200OK);
+                    resp->setBody(out.str());
+                    resp->setContentTypeString("application/xml; charset=utf-8");
+                    // Crawlers refetch this often and it changes at most
+                    // as fast as posts are written.
+                    resp->addHeader("Cache-Control", "public, max-age=3600");
+                    cb(resp);
+                },
+                [cb](const orm::DrogonDbException& e) {
+                    LOG_ERROR << "sitemap DB error: " << e.base().what();
+                    auto resp = HttpResponse::newHttpResponse();
+                    resp->setStatusCode(k500InternalServerError);
+                    resp->setBody("sitemap generation failed");
+                    cb(resp);
+                });
+        },
+        {Get});
+
+    // -------- GET /.well-known/security.txt (RFC 9116) --------
+    // Gives someone who finds a vulnerability a documented way to report
+    // it. Without one, a finder's options are a public tweet, a
+    // contact form that may not be read, or nothing — and "nothing" is
+    // what usually happens.
+    app().registerHandler("/.well-known/security.txt",
+        [origin](const HttpRequestPtr&,
+                 std::function<void(const HttpResponsePtr&)>&& cb) {
+            const char* contact = std::getenv("BLOG_SECURITY_CONTACT");
+            const std::string mail =
+                (contact && *contact) ? contact : "security@micutu.com";
+
+            // Expires is mandatory in RFC 9116 and must be in the future,
+            // so it is computed rather than hardcoded — a stale file is
+            // treated as invalid by the tools that read it, and a
+            // hardcoded date silently becomes stale.
+            const auto expiry = trantor::Date::now().after(365 * 24 * 3600);
+
+            std::ostringstream out;
+            out << "Contact: mailto:" << mail << "\n"
+                << "Expires: " << expiry.toCustomFormattedString(
+                                      "%Y-%m-%dT%H:%M:%S", false) << "Z\n"
+                << "Preferred-Languages: en, ro\n"
+                << "Canonical: " << origin << "/.well-known/security.txt\n"
+                << "Policy: https://github.com/micutu/drogon_blog/blob/main/SECURITY.md\n";
+
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k200OK);
+            resp->setBody(out.str());
+            resp->setContentTypeString("text/plain; charset=utf-8");
+            resp->addHeader("Cache-Control", "public, max-age=86400");
+            cb(resp);
+        },
+        {Get});
+
     // -------- GET /preview/posts/{id} --------
     // Share-friendly URL: contains the OG/Twitter meta tags crawlers need,
     // then redirects real users to the SPA hash URL via meta-refresh. We
