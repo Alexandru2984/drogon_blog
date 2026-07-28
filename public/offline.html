@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Offline — Micu's Blog</title>
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)" />
+    <!--
+      Self-contained on purpose. This page is shown precisely when the
+      network is unavailable, so it cannot pull in the stylesheet or a font;
+      anything it needs has to be inline. It also has to work in both
+      themes without JavaScript, hence prefers-color-scheme rather than the
+      data-theme attribute the app uses.
+    -->
+    <style>
+      :root { color-scheme: light dark; --bg:#f7f8fa; --fg:#14161c; --dim:#5b6472; --accent:#5b3df5; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg:#0d0f14; --fg:#e7eaf0; --dim:#9aa4b6; --accent:#8b7cff; }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100dvh;
+        display: grid; place-items: center;
+        padding: 2rem 1.25rem;
+        background: var(--bg); color: var(--fg);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.65; text-align: center;
+      }
+      .mark { font-size: 3rem; line-height: 1; margin-bottom: 1rem; }
+      h1 { font-size: clamp(1.4rem, 1.2rem + 1vw, 2rem); margin: 0 0 .5rem; letter-spacing: -0.02em; }
+      p { color: var(--dim); margin: 0 0 1.5rem; max-width: 32rem; }
+      button {
+        font: inherit; font-weight: 550; cursor: pointer;
+        background: var(--accent); color: #fff; border: 0;
+        padding: .7em 1.4em; border-radius: 10px; min-height: 2.75rem;
+      }
+      button:hover { filter: brightness(1.08); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">✦</div>
+      <h1>You're offline</h1>
+      <p>
+        This page needs a connection. Anything you already opened in this
+        session is still available — go back, or retry once you're online.
+      </p>
+      <button onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

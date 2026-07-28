@@ -1,0 +1,37 @@
+{
+  "name": "Micu's Blog",
+  "short_name": "Micu",
+  "description": "Posts, comments and messages — a C++ Drogon backend with a Vue 3 front end.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0d0f14",
+  "theme_color": "#5b3df5",
+  "lang": "en",
+  "categories": ["news", "social"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "New post", "url": "/#/posts/new" },
+    { "name": "Messages", "url": "/#/messages" }
+  ]
+}

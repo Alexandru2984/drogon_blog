@@ -1,57 +1,307 @@
+/* ===========================================================================
+   Design tokens
+   ===========================================================================
+
+   The previous stylesheet hardcoded one dark palette and contained exactly
+   one media query in the whole application. This replaces it with tokens,
+   two themes and real breakpoints.
+
+   Colour is defined once per theme and referenced everywhere. Light is the
+   default block and dark is applied through `prefers-color-scheme`, with
+   `[data-theme]` on the root able to override either — the theme toggle
+   stamps that attribute, so an explicit choice beats the OS preference in
+   both directions rather than only one.
+   =========================================================================== */
+
 :root {
-  --bg: #0f1115;
-  --bg-elev: #181b22;
-  --bg-elev2: #1f232c;
-  --border: #2a2f3a;
-  --text: #e6e8ee;
-  --text-dim: #9aa3b2;
-  --accent: #7c5cff;
-  --accent-hover: #6a4aff;
-  --danger: #e5484d;
-  --ok: #30a46c;
-  --radius: 10px;
+  color-scheme: light dark;
+
+  /* Surfaces, from furthest back to closest to the reader. */
+  --bg:          #f7f8fa;
+  --bg-elev:     #ffffff;
+  --bg-elev2:    #f0f2f6;
+  --bg-inset:    #e9ecf2;
+
+  --border:      #dfe3ea;
+  --border-soft: #eaedf3;
+
+  --text:        #14161c;
+  --text-dim:    #5b6472;
+  --text-faint:  #838d9c;
+
+  --accent:       #5b3df5;
+  --accent-hover: #4a2ee0;
+  --accent-soft:  #ece8ff;
+  --accent-text:  #ffffff;
+
+  --danger:      #d1293d;
+  --danger-soft: #fdeaec;
+  --ok:          #17794b;
+  --ok-soft:     #e4f5ec;
+  --warn:        #a25b00;
+  --warn-soft:   #fdf0dd;
+
+  /* Fluid type. The clamp() middle term scales with the viewport so the
+     scale holds together at 320px and at 2560px without a breakpoint per
+     step. rem-based so browser font-size settings still apply. */
+  --step--1: clamp(0.78rem, 0.75rem + 0.15vw, 0.85rem);
+  --step-0:  clamp(0.94rem, 0.90rem + 0.20vw, 1.02rem);
+  --step-1:  clamp(1.10rem, 1.03rem + 0.34vw, 1.28rem);
+  --step-2:  clamp(1.32rem, 1.19rem + 0.62vw, 1.66rem);
+  --step-3:  clamp(1.58rem, 1.36rem + 1.05vw, 2.15rem);
+  --step-4:  clamp(1.90rem, 1.53rem + 1.78vw, 2.80rem);
+
+  /* Spacing, on a consistent ratio so vertical rhythm survives nesting. */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --sp-7: 3rem;
+
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgb(16 20 30 / 0.06);
+  --shadow:    0 2px 8px rgb(16 20 30 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(16 20 30 / 0.16);
+
+  --content-width: 44rem;   /* ~66 characters at body size: a readable measure */
+  --wide-width:    72rem;
+
+  --nav-h: 3.5rem;
+  --tabbar-h: 3.5rem;
+
+  /* Single knob for motion, so prefers-reduced-motion has one place to
+     switch off rather than a rule per animated property. */
+  --dur: 140ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
 }
 
-* { box-sizing: border-box; }
+/* Dark theme. Not simply inverted: surfaces stay slightly blue, borders
+   lift rather than darken, and the accent is lightened so it keeps
+   contrast against a dark background instead of sinking into it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:          #0d0f14;
+    --bg-elev:     #151821;
+    --bg-elev2:    #1d212c;
+    --bg-inset:    #232836;
 
-html, body {
+    --border:      #2a3040;
+    --border-soft: #212633;
+
+    --text:        #e7eaf0;
+    --text-dim:    #9aa4b6;
+    --text-faint:  #6f7a8c;
+
+    --accent:       #8b7cff;
+    --accent-hover: #9d90ff;
+    --accent-soft:  #221d3d;
+    --accent-text:  #0d0f14;
+
+    --danger:      #ff6b7a;
+    --danger-soft: #2c1519;
+    --ok:          #4ecf92;
+    --ok-soft:     #12271d;
+    --warn:        #e0a34a;
+    --warn-soft:   #2a1f0e;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow:    0 2px 10px rgb(0 0 0 / 0.45);
+    --shadow-lg: 0 14px 36px rgb(0 0 0 / 0.6);
+  }
+}
+
+/* Explicit choice wins over the OS preference, in both directions. */
+:root[data-theme="dark"] {
+  --bg:          #0d0f14;
+  --bg-elev:     #151821;
+  --bg-elev2:    #1d212c;
+  --bg-inset:    #232836;
+  --border:      #2a3040;
+  --border-soft: #212633;
+  --text:        #e7eaf0;
+  --text-dim:    #9aa4b6;
+  --text-faint:  #6f7a8c;
+  --accent:       #8b7cff;
+  --accent-hover: #9d90ff;
+  --accent-soft:  #221d3d;
+  --accent-text:  #0d0f14;
+  --danger:      #ff6b7a;
+  --danger-soft: #2c1519;
+  --ok:          #4ecf92;
+  --ok-soft:     #12271d;
+  --warn:        #e0a34a;
+  --warn-soft:   #2a1f0e;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow:    0 2px 10px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 14px 36px rgb(0 0 0 / 0.6);
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+/* ===========================================================================
+   Base
+   =========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
   margin: 0;
-  padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  font-size: 15px;
-  line-height: 1.6;
-  min-height: 100vh;
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  line-height: 1.65;
+  min-height: 100dvh;
+  /* Antialiasing matters more once the background is light. */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Long unbroken strings (URLs, tokens) must not push the page sideways.
+     The body itself is never allowed to scroll horizontally; wide children
+     scroll inside their own container instead. */
+  overflow-x: hidden;
 }
 
-a { color: var(--accent); text-decoration: none; }
+h1, h2, h3, h4 {
+  line-height: 1.2;
+  margin: 0 0 var(--sp-3);
+  font-weight: 650;
+  letter-spacing: -0.011em;
+  text-wrap: balance;         /* avoids a single orphaned word on a heading */
+}
+h1 { font-size: var(--step-4); }
+h2 { font-size: var(--step-3); }
+h3 { font-size: var(--step-2); }
+h4 { font-size: var(--step-1); }
+
+p { margin: 0 0 var(--sp-4); text-wrap: pretty; }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  text-underline-offset: 0.18em;
+}
 a:hover { text-decoration: underline; }
 
-h1, h2, h3 { line-height: 1.25; margin: 0 0 0.5em; }
-h1 { font-size: 1.75rem; }
-h2 { font-size: 1.35rem; }
-h3 { font-size: 1.1rem; }
+img, svg, video { max-width: 100%; height: auto; }
 
-p { margin: 0 0 0.75em; }
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--sp-6) 0;
+}
+
+/* One visible focus ring for everything, and only for keyboard users.
+   :focus-visible rather than :focus so a mouse click does not leave a ring
+   behind — the previous stylesheet had no focus styling at all, which made
+   the site unusable without a pointer. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+::selection { background: var(--accent-soft); color: var(--text); }
+
+/* Respect the OS setting. Everything animated goes through --dur, so this
+   is the only place motion has to be switched off. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur: 0.01ms; }
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===========================================================================
+   Layout
+   =========================================================================== */
+
+.container {
+  width: 100%;
+  max-width: var(--content-width);
+  margin-inline: auto;
+  /* max() keeps the gutter from collapsing on small screens while still
+     honouring a notch or rounded corner on phones. */
+  padding-inline: max(var(--sp-4), env(safe-area-inset-left));
+  padding-block: var(--sp-5) var(--sp-7);
+}
+.container.wide { max-width: var(--wide-width); }
+
+.stack > * + * { margin-top: var(--sp-4); }
+.row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  flex-wrap: wrap;      /* the default everywhere: a row must never overflow */
+}
+.row.tight { gap: var(--sp-2); }
+.spacer { flex: 1 1 auto; }
+
+/* .toolbar is the previous name for .row and is still used across the
+   views. Kept as an alias rather than renamed at every call site in the
+   same change that replaced the stylesheet — a rename and a redesign
+   landing together makes both harder to review, and either one breaking
+   the layout would be hard to attribute. */
+.toolbar {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ===========================================================================
+   Controls
+   =========================================================================== */
 
 button, .btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4em;
+  justify-content: center;
+  gap: var(--sp-2);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
   border: 1px solid transparent;
-  padding: 0.55em 1em;
+  padding: 0.6em 1.1em;
   border-radius: var(--radius);
-  font-size: 0.95em;
+  font: inherit;
+  font-size: var(--step-0);
+  font-weight: 550;
+  line-height: 1.2;
   cursor: pointer;
-  transition: background 120ms ease, transform 80ms ease;
-  font-family: inherit;
+  text-decoration: none;
+  transition: background var(--dur) var(--ease),
+              transform var(--dur) var(--ease),
+              border-color var(--dur) var(--ease);
+  /* 44px is the smallest reliably tappable target. Applied to every
+     button rather than only the mobile ones, because the same markup is
+     what a phone gets. */
+  min-height: 2.75rem;
 }
-button:hover, .btn:hover { background: var(--accent-hover); }
+button:hover, .btn:hover { background: var(--accent-hover); text-decoration: none; }
 button:active, .btn:active { transform: translateY(1px); }
-button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:disabled, .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
 
 button.ghost, .btn.ghost {
   background: transparent;
@@ -60,8 +310,22 @@ button.ghost, .btn.ghost {
 }
 button.ghost:hover, .btn.ghost:hover { background: var(--bg-elev2); }
 
-button.danger { background: var(--danger); }
-button.danger:hover { background: #c53338; }
+button.quiet, .btn.quiet {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: transparent;
+  padding-inline: var(--sp-3);
+}
+button.quiet:hover, .btn.quiet:hover { background: var(--bg-elev2); color: var(--text); }
+
+button.danger, .btn.danger { background: var(--danger); color: #fff; }
+button.danger:hover { filter: brightness(0.92); background: var(--danger); }
+
+button.sm, .btn.sm {
+  min-height: 2.25rem;
+  padding: 0.35em 0.8em;
+  font-size: var(--step--1);
+}
 
 input, textarea, select {
   width: 100%;
@@ -69,151 +333,450 @@ input, textarea, select {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.6em 0.8em;
-  font-size: 0.95em;
-  font-family: inherit;
+  padding: 0.65em 0.85em;
+  font: inherit;
+  /* 16px minimum on the actual input, because iOS Safari zooms the whole
+     page when a focused field renders below that. The fluid --step-0 can
+     drop under 16px on small screens, so it is not usable here. */
+  font-size: max(1rem, var(--step-0));
+  min-height: 2.75rem;
+  transition: border-color var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease);
 }
-input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-textarea { resize: vertical; min-height: 120px; }
-
-label { display: block; font-size: 0.85em; color: var(--text-dim); margin: 0.75em 0 0.3em; }
-
-.container {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem 3rem;
+input:hover, textarea:hover, select:hover { border-color: var(--text-faint); }
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
+input::placeholder, textarea::placeholder { color: var(--text-faint); }
+textarea { resize: vertical; min-height: 9rem; line-height: 1.6; }
+
+label {
+  display: block;
+  font-size: var(--step--1);
+  font-weight: 550;
+  color: var(--text-dim);
+  margin: var(--sp-4) 0 var(--sp-1);
+}
+
+/* ===========================================================================
+   Surfaces
+   =========================================================================== */
 
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  margin-bottom: 1rem;
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-4);
+  box-shadow: var(--shadow-sm);
 }
+.card.flush { padding: 0; overflow: hidden; }
 
-.muted { color: var(--text-dim); font-size: 0.85em; }
+.muted  { color: var(--text-dim); font-size: var(--step--1); }
+.faint  { color: var(--text-faint); }
+.error  { color: var(--danger); }
+.ok     { color: var(--ok); }
 
-.error { color: var(--danger); }
-.ok { color: var(--ok); }
-
-.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-
-.spacer { flex: 1; }
-
-.navbar {
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-.navbar-inner {
-  max-width: 960px;
-  margin: 0 auto;
-  display: flex;
+.badge {
+  display: inline-flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
+  gap: var(--sp-1);
+  padding: 0.15em 0.6em;
+  border-radius: var(--radius-pill);
+  font-size: var(--step--1);
+  font-weight: 550;
+  background: var(--bg-inset);
+  color: var(--text-dim);
 }
-.navbar a { color: var(--text); }
-.navbar .logo { font-weight: 600; font-size: 1.05rem; }
-.navbar .nav-search { flex: 1; max-width: 340px; margin-left: 1rem; }
-.navbar .nav-search input {
-  padding: 0.4em 0.7em;
-  font-size: 0.9em;
-  background: var(--bg-elev2);
-}
-.navbar .nav-links { display: flex; gap: 0.75rem; margin-left: auto; align-items: center; }
-.navbar .nav-links a { color: var(--text-dim); }
-.navbar .nav-links a.router-link-active { color: var(--text); }
-.navbar .username { color: var(--accent); font-weight: 500; }
-.navbar .nav-messages { position: relative; padding-right: 0.25rem; }
-.navbar .nav-badge {
-  background: var(--accent);
-  color: #fff;
-  border-radius: 999px;
-  font-size: 0.7em;
-  padding: 0 0.45em;
-  margin-left: 0.25em;
-  min-width: 1.4em;
-  display: inline-block;
-  text-align: center;
-}
+.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); }
+.badge.ok     { background: var(--ok-soft);     color: var(--ok); }
+.badge.warn   { background: var(--warn-soft);   color: var(--warn); }
 
 .avatar {
-  width: 36px;
-  height: 36px;
+  width: 2.25rem;
+  height: 2.25rem;
   border-radius: 50%;
-  background: var(--bg-elev2);
-  display: inline-block;
-  vertical-align: middle;
-  background-size: cover;
-  background-position: center;
+  background: var(--bg-inset) center / cover no-repeat;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-soft);
 }
-.avatar.lg { width: 72px; height: 72px; }
+.avatar.lg { width: 4.5rem; height: 4.5rem; }
+.avatar.sm { width: 1.75rem; height: 1.75rem; }
+
+/* Skeletons. Shown instead of a bare "Loading…" so the page does not jump
+   when content lands — the block is already the right shape. */
+.skeleton {
+  background: linear-gradient(90deg,
+              var(--bg-elev2) 25%, var(--bg-inset) 37%, var(--bg-elev2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+  color: transparent !important;
+  user-select: none;
+}
+.skeleton.line { height: 0.85em; margin-block: 0.35em; }
+.skeleton.line.short { width: 40%; }
+.skeleton.line.medium { width: 70%; }
+@keyframes shimmer {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--sp-7) var(--sp-4);
+  color: var(--text-dim);
+}
+.empty-state .emoji { font-size: var(--step-4); display: block; margin-bottom: var(--sp-3); }
+
+/* ===========================================================================
+   App shell
+   =========================================================================== */
+
+/* Keyboard users land here first; it stays off-screen until focused. */
+.skip-link {
+  position: absolute;
+  left: var(--sp-3);
+  top: calc(-1 * var(--sp-7));
+  z-index: 100;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius);
+  transition: top var(--dur) var(--ease);
+}
+.skip-link:focus { top: var(--sp-3); }
+
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding-top: env(safe-area-inset-top);
+}
+/* color-mix is recent enough to warrant a fallback; without it the bar
+   would render fully transparent on older engines. */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .navbar { background: var(--bg-elev); }
+}
+
+.navbar-inner {
+  max-width: var(--wide-width);
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 max(var(--sp-4), env(safe-area-inset-left));
+  height: var(--nav-h);
+}
+
+.logo {
+  font-weight: 700;
+  font-size: var(--step-1);
+  color: var(--text) !important;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.logo:hover { text-decoration: none; }
+
+.nav-search { flex: 1 1 auto; min-width: 0; max-width: 22rem; }
+.nav-search input {
+  background: var(--bg-elev2);
+  min-height: 2.25rem;
+  padding-block: 0.35em;
+}
+
+.nav-links { display: flex; gap: var(--sp-1); align-items: center; margin-left: auto; }
+.nav-links a {
+  color: var(--text-dim);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  white-space: nowrap;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.nav-links a:hover { background: var(--bg-elev2); color: var(--text); text-decoration: none; }
+.nav-links a.router-link-active { color: var(--text); background: var(--bg-elev2); }
+.nav-links .username { color: var(--accent) !important; font-weight: 600; }
+
+.nav-badge {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: var(--radius-pill);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0 0.4em;
+  min-width: 1.35em;
+  height: 1.35em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.3em;
+}
+
+/* Hamburger + drawer. Hidden on wide screens; the desktop nav is hidden on
+   narrow ones. Only one of the two is ever in the accessibility tree,
+   because `display: none` removes it — duplicated links would otherwise be
+   announced twice. */
+.nav-toggle { display: none; }
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+  z-index: 40;
+  animation: fade var(--dur) var(--ease);
+}
+.drawer {
+  position: fixed;
+  inset-block: 0;
+  right: 0;
+  width: min(20rem, 82vw);
+  background: var(--bg-elev);
+  border-left: 1px solid var(--border);
+  z-index: 41;
+  padding: var(--sp-4);
+  padding-top: max(var(--sp-4), env(safe-area-inset-top));
+  padding-bottom: max(var(--sp-4), env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  box-shadow: var(--shadow-lg);
+  animation: slide-in var(--dur) var(--ease);
+  overflow-y: auto;
+}
+/* Direct children only. The unscoped selector also caught the theme
+   toggle and locale switcher sitting inside a .row at the bottom of the
+   drawer, stretching each to full width and forcing them onto separate
+   lines — they are meant to sit side by side. */
+.drawer > a, .drawer > button {
+  justify-content: flex-start;
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius);
+  font-size: var(--step-1);
+}
+.drawer > a:hover, .drawer > button:hover { background: var(--bg-elev2); text-decoration: none; }
+.drawer .row { padding: var(--sp-2) var(--sp-3); }
+.drawer hr { margin: var(--sp-2) 0; }
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-in { from { transform: translateX(100%); } to { transform: none; } }
 
 footer {
   text-align: center;
-  color: var(--text-dim);
-  font-size: 0.85em;
-  padding: 2rem 1rem;
+  color: var(--text-faint);
+  font-size: var(--step--1);
+  padding: var(--sp-6) var(--sp-4);
+  padding-bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border-soft);
 }
 
-.toast {
+/* ===========================================================================
+   Toasts
+   =========================================================================== */
+
+.toast-region {
   position: fixed;
-  bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--bg-elev2);
-  border: 1px solid var(--border);
-  padding: 0.6em 1em;
-  border-radius: var(--radius);
-  font-size: 0.9em;
-  z-index: 1000;
-  animation: fadeup 200ms ease;
+  bottom: calc(var(--sp-5) + env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(28rem, calc(100vw - 2 * var(--sp-4)));
+  pointer-events: none;
 }
-.toast.error { border-color: var(--danger); color: var(--danger); }
-.toast.ok { border-color: var(--ok); color: var(--ok); }
-@keyframes fadeup { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-
-.post-content { white-space: pre-wrap; word-break: break-word; }
-
-.post-body { word-break: break-word; line-height: 1.65; }
-.post-body h1, .post-body h2, .post-body h3 { margin-top: 1.5em; }
-.post-body h1 { font-size: 1.5rem; }
-.post-body h2 { font-size: 1.25rem; }
-.post-body h3 { font-size: 1.1rem; }
-.post-body p   { margin: 0 0 1em; }
-.post-body ul, .post-body ol { padding-left: 1.5em; margin: 0 0 1em; }
-.post-body li  { margin-bottom: 0.25em; }
-.post-body code {
-  background: var(--bg-elev2);
+.toast {
+  background: var(--bg-elev);
   border: 1px solid var(--border);
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-  font-family: "SFMono-Regular", Consolas, Menlo, monospace;
-  font-size: 0.9em;
+  box-shadow: var(--shadow-lg);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius);
+  font-size: var(--step-0);
+  animation: fadeup var(--dur) var(--ease);
+  pointer-events: auto;
+}
+.toast.error { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+.toast.ok    { border-color: var(--ok);     color: var(--ok);     background: var(--ok-soft); }
+@keyframes fadeup {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ===========================================================================
+   Post content
+   =========================================================================== */
+
+.post-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.post-body {
+  overflow-wrap: break-word;
+  line-height: 1.75;
+  font-size: var(--step-1);
+}
+.post-body > :first-child { margin-top: 0; }
+.post-body h1, .post-body h2, .post-body h3 { margin-top: 1.6em; }
+.post-body h1 { font-size: var(--step-3); }
+.post-body h2 { font-size: var(--step-2); }
+.post-body h3 { font-size: var(--step-1); }
+.post-body p  { margin: 0 0 1em; }
+.post-body ul, .post-body ol { padding-left: 1.4em; margin: 0 0 1em; }
+.post-body li { margin-bottom: 0.35em; }
+
+.post-body code {
+  background: var(--bg-inset);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
 }
 .post-body pre {
   background: var(--bg-elev2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.85em 1em;
+  padding: var(--sp-4);
+  /* Code scrolls inside its own box. Without this a long line makes the
+     entire page scroll sideways, which on a phone is unusable. */
   overflow-x: auto;
+  font-size: var(--step--1);
+  line-height: 1.55;
 }
-.post-body pre code { background: transparent; border: 0; padding: 0; }
+.post-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  white-space: pre;
+  overflow-wrap: normal;
+}
 .post-body blockquote {
   border-left: 3px solid var(--accent);
   margin: 0 0 1em;
-  padding: 0 1em;
+  padding: 0.1em 0 0.1em 1em;
   color: var(--text-dim);
 }
-.post-body a { color: var(--accent); }
-.post-body table { border-collapse: collapse; margin: 0 0 1em; }
+.post-body img { border-radius: var(--radius); display: block; }
+
+/* Tables get their own scroll container for the same reason as <pre>. */
+.post-body table {
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  width: 100%;
+  font-size: var(--step--1);
+}
 .post-body th, .post-body td {
   border: 1px solid var(--border);
-  padding: 0.35em 0.7em;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
 }
-.post-body th { background: var(--bg-elev2); }
-.post-body img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.post-body th { background: var(--bg-elev2); font-weight: 600; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.post-body mark, mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  padding: 0.05em 0.2em;
+  border-radius: 3px;
+}
+
+/* ===========================================================================
+   Breakpoints
+   =========================================================================== */
+
+/* Phones and small tablets: the desktop nav is replaced by the hamburger,
+   and a bottom tab bar carries the primary destinations within thumb
+   reach. */
+@media (max-width: 48rem) {
+  .nav-links { display: none; }
+  .nav-search { display: none; }
+  .nav-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    min-height: 2.5rem;
+    padding-inline: var(--sp-3);
+  }
+
+  .container { padding-block: var(--sp-4) var(--sp-6); }
+  .card { padding: var(--sp-4); border-radius: var(--radius); }
+
+  /* Room for the tab bar so the last card is never trapped under it. */
+  body.has-tabbar main {
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--sp-4));
+  }
+  body.has-tabbar .toast-region {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--sp-3));
+  }
+}
+
+.tabbar { display: none; }
+
+@media (max-width: 48rem) {
+  .tabbar {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 35;
+    display: flex;
+    background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+    backdrop-filter: saturate(1.6) blur(10px);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  }
+  @supports not (background: color-mix(in srgb, red 50%, blue)) {
+    .tabbar { background: var(--bg-elev); }
+  }
+  .tabbar a {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    font-weight: 550;
+    text-decoration: none;
+    position: relative;
+    min-width: 0;
+  }
+  .tabbar a .ico { font-size: 1.15rem; line-height: 1; }
+  .tabbar a.router-link-active { color: var(--accent); }
+  .tabbar a:hover { text-decoration: none; }
+  .tabbar .nav-badge {
+    position: absolute;
+    top: 0.35rem;
+    left: 55%;
+    margin: 0;
+  }
+}
+
+/* Very small phones: reclaim the horizontal gutter. */
+@media (max-width: 22.5rem) {
+  .container { padding-inline: var(--sp-3); }
+  .card { padding: var(--sp-3); }
+}
+
+/* Wide screens get a slightly more generous measure for reading. */
+@media (min-width: 90rem) {
+  :root { --content-width: 46rem; }
+}
+
+@media print {
+  .navbar, .tabbar, .toast-region, footer, .skip-link { display: none !important; }
+  body { background: #fff; color: #000; }
+  .card { border: 1px solid #ccc; box-shadow: none; }
+}

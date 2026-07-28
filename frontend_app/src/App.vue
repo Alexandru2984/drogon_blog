@@ -1,22 +1,26 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter, RouterView } from 'vue-router'
+import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useAuthStore }     from '@/stores/auth'
 import { useToastStore }    from '@/stores/toast'
 import { useMessagesStore } from '@/stores/messages'
 import ToastList            from '@/components/ToastList.vue'
-import LocaleSwitcher        from '@/components/LocaleSwitcher.vue'
+import LocaleSwitcher       from '@/components/LocaleSwitcher.vue'
+import ThemeToggle          from '@/components/ThemeToggle.vue'
 
 const auth     = useAuthStore()
 const { user, isAuthed } = storeToRefs(auth)
 const toasts   = useToastStore()
 const messages = useMessagesStore()
 const router   = useRouter()
+const route    = useRoute()
 
 const searchInput = ref('')
+const drawerOpen  = ref(false)
 
 async function doLogout() {
+  drawerOpen.value = false
   messages.disconnectSocket()
   messages.clear()
   await auth.logout()
@@ -27,17 +31,45 @@ async function doLogout() {
 function submitSearch() {
   const q = searchInput.value.trim()
   if (!q) return
+  drawerOpen.value = false
   router.push({ name: 'search', query: { q } })
 }
 
-// Open the WebSocket as soon as we know the user is authenticated (whether
-// from /auth/me at boot or after a fresh login) and tear it down on logout.
+// The bottom tab bar only exists for signed-in users, and its height has to
+// be reserved in the page padding. Driving that from a body class keeps the
+// arithmetic in the stylesheet instead of scattering it across components.
+watch(isAuthed, (now) => {
+  document.body.classList.toggle('has-tabbar', now)
+}, { immediate: true })
+
+// A drawer left open across a navigation covers the page the user just
+// asked for.
+watch(() => route.fullPath, () => { drawerOpen.value = false })
+
+// Escape closes the drawer. Without it a keyboard user who opens the menu
+// has no way out except tabbing to the close button.
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && drawerOpen.value) drawerOpen.value = false
+}
+
+// Scroll locking while the drawer is open, so the page behind it does not
+// move under the user's finger on a phone.
+watch(drawerOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : ''
+})
+
 onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
   if (isAuthed.value) {
     messages.connectSocket()
     messages.refreshInbox()
   }
 })
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  document.body.style.overflow = ''
+})
+
 watch(isAuthed, (now, prev) => {
   if (now && !prev) {
     messages.connectSocket()
@@ -47,13 +79,18 @@ watch(isAuthed, (now, prev) => {
     messages.clear()
   }
 })
+
+const unread = computed(() => messages.totalUnread)
 </script>
 
 <template>
-  <nav class="navbar">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <nav class="navbar" aria-label="Primary">
     <div class="navbar-inner">
       <router-link to="/" class="logo">✦ Micu's Blog</router-link>
-      <form class="nav-search" @submit.prevent="submitSearch">
+
+      <form class="nav-search" role="search" @submit.prevent="submitSearch">
         <input
           v-model="searchInput"
           type="search"
@@ -61,30 +98,82 @@ watch(isAuthed, (now, prev) => {
           :aria-label="$t('nav.search_aria')"
         />
       </form>
+
       <div class="nav-links">
         <router-link to="/">{{ $t('nav.feed') }}</router-link>
         <template v-if="isAuthed">
           <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
-          <router-link to="/messages" class="nav-messages">
+          <router-link to="/messages">
             {{ $t('nav.messages') }}
-            <span v-if="messages.totalUnread" class="nav-badge">{{ messages.totalUnread }}</span>
+            <span v-if="unread" class="nav-badge">{{ unread }}</span>
           </router-link>
           <router-link :to="{ name: 'profile', params: { id: user!.id } }" class="username">
             {{ user!.username }}
           </router-link>
-          <router-link to="/account/security" class="ghost-link" :title="$t('nav.two_fa')">{{ $t('nav.two_fa') }}</router-link>
-          <button class="ghost" @click="doLogout">{{ $t('nav.logout') }}</button>
+          <router-link to="/account/security">{{ $t('nav.two_fa') }}</router-link>
+          <button class="quiet sm" @click="doLogout">{{ $t('nav.logout') }}</button>
         </template>
         <template v-else>
           <router-link to="/login">{{ $t('nav.login') }}</router-link>
           <router-link to="/register">{{ $t('nav.register') }}</router-link>
         </template>
+        <ThemeToggle />
         <LocaleSwitcher />
       </div>
+
+      <button
+        class="nav-toggle"
+        :aria-expanded="drawerOpen"
+        aria-controls="mobile-drawer"
+        aria-label="Menu"
+        @click="drawerOpen = !drawerOpen"
+      >
+        <span aria-hidden="true">☰</span>
+      </button>
     </div>
   </nav>
 
-  <main class="container">
+  <!-- Mobile drawer. Rendered only while open so its links are not in the
+       accessibility tree twice alongside the desktop nav. -->
+  <template v-if="drawerOpen">
+    <div class="drawer-backdrop" @click="drawerOpen = false"></div>
+    <div id="mobile-drawer" class="drawer" role="dialog" aria-modal="true" aria-label="Menu">
+      <form role="search" @submit.prevent="submitSearch">
+        <input
+          v-model="searchInput"
+          type="search"
+          :placeholder="$t('nav.search_placeholder')"
+          :aria-label="$t('nav.search_aria')"
+        />
+      </form>
+      <hr />
+      <router-link to="/">{{ $t('nav.feed') }}</router-link>
+      <template v-if="isAuthed">
+        <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
+        <router-link to="/messages">
+          {{ $t('nav.messages') }}
+          <span v-if="unread" class="nav-badge">{{ unread }}</span>
+        </router-link>
+        <router-link :to="{ name: 'profile', params: { id: user!.id } }">
+          {{ user!.username }}
+        </router-link>
+        <router-link to="/account/security">{{ $t('nav.two_fa') }}</router-link>
+        <hr />
+        <button @click="doLogout">{{ $t('nav.logout') }}</button>
+      </template>
+      <template v-else>
+        <router-link to="/login">{{ $t('nav.login') }}</router-link>
+        <router-link to="/register">{{ $t('nav.register') }}</router-link>
+      </template>
+      <hr />
+      <div class="row">
+        <ThemeToggle />
+        <LocaleSwitcher />
+      </div>
+    </div>
+  </template>
+
+  <main id="main" class="container">
     <RouterView />
   </main>
 
@@ -92,6 +181,25 @@ watch(isAuthed, (now, prev) => {
     &copy; 2026 Micu's Blog — Built with
     <a href="https://drogon.org" target="_blank" rel="noopener">Drogon</a>
   </footer>
+
+  <!-- Primary destinations within thumb reach on a phone. Signed-in only:
+       for a logged-out visitor the feed is the whole app, and a one-item
+       bar would just eat screen height. -->
+  <nav v-if="isAuthed" class="tabbar" aria-label="Primary (mobile)">
+    <router-link to="/">
+      <span class="ico" aria-hidden="true">🏠</span>{{ $t('nav.feed') }}
+    </router-link>
+    <router-link to="/posts/new">
+      <span class="ico" aria-hidden="true">✍️</span>{{ $t('nav.new_post') }}
+    </router-link>
+    <router-link to="/messages">
+      <span class="ico" aria-hidden="true">💬</span>{{ $t('nav.messages') }}
+      <span v-if="unread" class="nav-badge">{{ unread }}</span>
+    </router-link>
+    <router-link :to="{ name: 'profile', params: { id: user!.id } }">
+      <span class="ico" aria-hidden="true">👤</span>{{ user!.username }}
+    </router-link>
+  </nav>
 
   <ToastList :items="toasts.items" />
 </template>

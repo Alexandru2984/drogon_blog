@@ -100,13 +100,22 @@
             "jpg",
             "jpeg",
             "gif",
-            "webp"
+            "webp",
+            // The PWA manifest. Safe to add despite the restriction above:
+            // that list is about extensions which can carry *active*
+            // content, because public/uploads is served from this same
+            // document_root. A webmanifest is inert JSON — it cannot
+            // execute — and the upload pipeline only ever writes
+            // re-encoded .jpg, so this extension is unreachable from user
+            // input in the first place.
+            "webmanifest"
         ],
         // mime: A dictionary that extends the internal MIME type support. Maps extensions into new MIME types
         // note: This option only adds MIME to the sever. `file_types` above have to be set for the server to serve them.
         "mime": {
-            // "text/markdown": "md",
-            // "text/gemini": ["gmi", "gemini"]
+            // Drogon has no built-in MIME for .webmanifest, and browsers
+            // ignore a manifest served as the wrong type.
+            "application/manifest+json": "webmanifest"
         },
         //locations: An array of locations of static files for GET requests.
         "locations": [

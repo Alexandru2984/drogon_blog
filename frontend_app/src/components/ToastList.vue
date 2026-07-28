@@ -14,5 +14,12 @@ defineProps<{ items: ToastItem[] }>()
 </script>
 
 <template>
-  <div v-for="t in items" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
+  <!-- aria-live so the announcement reaches a screen reader: a toast is
+       often the only feedback that an action worked, and without a live
+       region it is invisible to anyone not watching that corner of the
+       screen. `polite` rather than `assertive` — these are confirmations,
+       not emergencies, and should not interrupt what is being read. -->
+  <div class="toast-region" role="status" aria-live="polite" aria-atomic="false">
+    <div v-for="t in items" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
+  </div>
 </template>

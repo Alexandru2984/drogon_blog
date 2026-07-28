@@ -5,7 +5,12 @@ import App from './App.vue'
 import { router } from './router'
 import { i18n } from './i18n'
 import { useAuthStore } from './stores/auth'
+import { applyStoredThemeEarly } from './composables/useTheme'
 import './style.css'
+
+// Before anything renders: a stored dark preference applied after mount
+// would show a light flash on every page load.
+applyStoredThemeEarly()
 
 const app = createApp(App)
 
@@ -38,3 +43,16 @@ app.use(i18n)
 // Resolve current session before first render so auth-aware UI doesn't flicker.
 const auth = useAuthStore()
 auth.fetchMe().finally(() => app.mount('#app'))
+
+// Service worker: app shell offline only, never API responses — this app
+// serves per-user data behind a session cookie, and a shared cache bucket
+// would risk showing one account's data to the next person using the
+// browser. Registered after mount so it never competes with the first
+// render for bandwidth. Failure is non-fatal: the site works without it.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      /* unsupported, blocked by policy, or served over plain HTTP */
+    })
+  })
+}

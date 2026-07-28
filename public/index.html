@@ -2,16 +2,43 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) report a
+         non-zero value. Without it the browser pads the notch and
+         home-indicator areas itself and the layout can never reach the
+         edges, which is why the insets in style.css would otherwise be
+         dead code. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
     <title>Micu's Blog</title>
+    <meta name="description" content="Posts, comments and messages — a C++ Drogon backend with a Vue 3 front end." />
+
+    <!-- Two theme-colors, so the browser chrome matches the page in either
+         theme rather than always painting the dark one. -->
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>%E2%9C%A6</text></svg>" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <!-- Default share card. Individual posts are shared through
+         /preview/posts/{id}, which the backend renders with per-post tags;
+         these cover every other route, which would otherwise share as a
+         bare URL with no title. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Micu's Blog" />
+    <meta property="og:title" content="Micu's Blog" />
+    <meta property="og:description" content="Posts, comments and messages — a C++ Drogon backend with a Vue 3 front end." />
+    <meta name="twitter:card" content="summary" />
+
     <script defer src="https://analytics.micutu.com/script.js" data-website-id="bfd613eb-a99a-4916-a541-3daf5e9a1657"></script>
-    <script type="module" crossorigin src="/assets/index-BATNqkyF.js"></script>
+    <script type="module" crossorigin src="/assets/index-DK52h9yA.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-QTnfLwEv.js">
-    <link rel="modulepreload" crossorigin href="/assets/vendor-bLXw5gt5.js">
-    <link rel="modulepreload" crossorigin href="/assets/client-BTeT65FQ.js">
-    <link rel="modulepreload" crossorigin href="/assets/auth-Cr_5h3ZC.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-bSi4mOOh.css">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-CJ0K89Q3.js">
+    <link rel="modulepreload" crossorigin href="/assets/client-D5XQC0Iv.js">
+    <link rel="modulepreload" crossorigin href="/assets/auth-BdABn146.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-CXW42pqg.css">
   </head>
   <body>
     <div id="app"></div>

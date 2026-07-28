@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { postsApi, type Post } from '@/api/posts'
 import PostCard from '@/components/PostCard.vue'
+import PostCardSkeleton from '@/components/PostCardSkeleton.vue'
 
 const PAGE_SIZE = 20
 
@@ -54,16 +55,34 @@ onBeforeUnmount(() => { observer?.disconnect() })
 
 <template>
   <h1>{{ $t('feed.heading') }}</h1>
-  <p v-if="error" class="error">{{ error }}</p>
-  <p v-else-if="!posts.length && !loading" class="muted">
-    {{ $t('feed.empty') }}
-  </p>
+
+  <div v-if="error" class="card" role="alert">
+    <p class="error" style="margin: 0;">{{ error }}</p>
+  </div>
+
+  <!-- First load: skeletons rather than a text line, so the page does not
+       jump when the real cards replace them. -->
+  <PostCardSkeleton v-if="loading && !posts.length" :count="3" />
+
+  <div v-else-if="!posts.length" class="empty-state">
+    <span class="emoji" aria-hidden="true">📝</span>
+    <p>{{ $t('feed.empty') }}</p>
+  </div>
 
   <PostCard v-for="p in posts" :key="p.id" :post="p" clamp />
 
-  <div ref="sentinel"></div>
-  <p v-if="loading" class="muted" style="text-align: center;">{{ $t('common.loading') }}</p>
-  <p v-else-if="!hasMore && posts.length" class="muted" style="text-align: center;">
+  <!-- Sentinel for the infinite scroll observer. -->
+  <div ref="sentinel" aria-hidden="true"></div>
+
+  <!-- Subsequent pages: one skeleton is enough to signal "more coming"
+       without implying how many. aria-live so the state is announced
+       rather than only drawn. -->
+  <div aria-live="polite" :aria-busy="loading">
+    <PostCardSkeleton v-if="loading && posts.length" :count="1" />
+  </div>
+
+  <p v-if="!loading && !hasMore && posts.length" class="muted"
+     style="text-align: center; padding-block: var(--sp-4);">
     — {{ $t('feed.heading') }} —
   </p>
 </template>
