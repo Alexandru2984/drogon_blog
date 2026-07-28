@@ -18,6 +18,7 @@
 
 #include "../helpers/AuditLog.h"
 #include "../helpers/Security.h"
+#include "../helpers/PasswordPolicy.h"
 #include "../helpers/Sessions.h"
 #include "../helpers/Workers.h"
 
@@ -106,7 +107,7 @@ void AuthController::changePassword(
             auto db = drogon::app().getDbClient();
             try {
                 const auto rows = db->execSqlSync(
-                    "SELECT password_hash FROM users WHERE id = $1",
+                    "SELECT password_hash, username, email FROM users WHERE id = $1",
                     *userIdOpt);
                 if (rows.empty()) {
                     callback(jsonError(k404NotFound, "User not found"));
@@ -121,6 +122,20 @@ void AuthController::changePassword(
                                             Json::objectValue});
                     callback(jsonError(k403Forbidden,
                                        "Current password is incorrect"));
+                    return;
+                }
+
+                // Policy is checked after the re-auth succeeds, so an
+                // attacker holding a session cannot use the endpoint to
+                // probe which passwords are blocklisted or breached
+                // without knowing the current one.
+                if (auto why = password_policy::validate(
+                        newPassword,
+                        rows[0]["username"].as<std::string>(),
+                        rows[0]["email"].as<std::string>());
+                    !why.empty())
+                {
+                    callback(jsonError(k400BadRequest, why));
                     return;
                 }
 

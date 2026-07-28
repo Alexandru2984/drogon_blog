@@ -217,6 +217,33 @@ void EmailHelper::sendRegistrationAttemptEmail(const std::string& email,
     enqueue({email, "Someone tried to register with your email", body.str()});
 }
 
+void EmailHelper::sendLoginThrottleEmail(const std::string& email,
+                                         const std::string& username,
+                                         int                minutes)
+{
+    std::ostringstream body;
+    body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
+         << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
+         << "<h2 style='color:#333;'>Repeated failed sign-ins on your account</h2>"
+         << "<p>Hi " << username << ",</p>"
+         << "<p>There have been several failed sign-in attempts on your "
+         << env("SMTP_FROM_NAME") << " account, so we have paused sign-ins "
+         << "for about " << minutes << " minutes.</p>"
+         << "<p><strong>If this was you</strong> — you mistyped your password a "
+         << "few times. Wait for the pause to lift, or reset your password from "
+         << "the sign-in page.</p>"
+         << "<p><strong>If this was not you</strong> — someone is guessing at "
+         << "your password. They have not got in: this message means the "
+         << "attempts failed. Your password is still worth changing if you use "
+         << "it anywhere else, and turning on two-factor authentication in your "
+         << "account settings would make a correct guess useless on its own.</p>"
+         << "<p style='color:#999;font-size:12px;margin-top:30px;'>"
+         << "You will not get another of these until after your next successful "
+         << "sign-in.</p>"
+         << "</div></body></html>";
+    enqueue({email, "Repeated failed sign-ins on your account", body.str()});
+}
+
 void EmailHelper::sendPasswordResetEmail(const std::string& email,
                                          const std::string& username,
                                          const std::string& token)

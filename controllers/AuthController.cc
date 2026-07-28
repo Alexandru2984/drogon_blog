@@ -6,6 +6,8 @@
 #include "../helpers/HttpCache.h"
 #include "../helpers/Security.h"
 #include "../helpers/Workers.h"
+#include "../helpers/LoginThrottle.h"
+#include "../helpers/PasswordPolicy.h"
 #include "../helpers/Sessions.h"
 
 #include <drogon/orm/Mapper.h>
@@ -112,6 +114,10 @@ void AuthController::registerUser(const HttpRequestPtr &req,
         callback(jsonError(k400BadRequest, "Invalid email address"));
         return;
     }
+    // Cheap length check stays on the loop so an obviously-bad password is
+    // rejected without ever occupying a worker slot. The full policy —
+    // blocklist, context, breach lookup — runs inside the worker, because
+    // the breach lookup makes an outbound request.
     if (passwordTooWeak(password)) {
         callback(jsonError(k400BadRequest,
                            "Password must be at least 8 characters"));
@@ -124,6 +130,13 @@ void AuthController::registerUser(const HttpRequestPtr &req,
     // of it blocks, so none of it belongs on an IO loop.
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, username, email, password] {
+
+    if (auto why = password_policy::validate(password, username, email);
+        !why.empty())
+    {
+        callback(jsonError(k400BadRequest, why));
+        return;
+    }
 
     auto dbClient = drogon::app().getDbClient();
     Mapper<drogon_model::blog_db::Users> mapper(dbClient);
@@ -261,14 +274,48 @@ void AuthController::loginUser(const HttpRequestPtr &req,
             Criteria(drogon_model::blog_db::Users::Cols::_username,
                      CompareOperator::EQ, username));
 
+        // Persistent per-account throttle. The in-memory bucket above
+        // covers the same ground but is wiped by every deploy, so an
+        // attacker who waited for a restart got a fresh budget.
+        //
+        // The check runs before the Argon2id verify and still costs the
+        // same wall-clock time either way, because the 429 is returned
+        // only after the hash comparison below — see the throttled branch.
+        // Doing it in that order keeps a throttled account
+        // indistinguishable from a wrong password, so this does not become
+        // an account-existence oracle.
+        const bool exists = !users.empty();
+        const auto throttle = exists
+            ? login_throttle::check(static_cast<int>(users[0].getValueOfId()))
+            : login_throttle::Decision{};
+
         // Constant-time path: verify against either the real hash or a dummy
         // hash so the response latency does not leak account existence.
-        const bool exists  = !users.empty();
         const std::string& hash = exists ? users[0].getValueOfPasswordHash()
                                          : dummyHash();
-        const bool valid = verifyPassword(hash, password) && exists;
+        bool valid = verifyPassword(hash, password) && exists;
+
+        // A correct password on a throttled account is still refused —
+        // otherwise the throttle would not limit guesses at all — but the
+        // counter is not advanced for it, so an attacker cannot keep a
+        // victim locked out any longer than the cap by continuing to guess.
+        if (valid && throttle.throttled) {
+            auto resp = jsonError(k429TooManyRequests,
+                                  "Too many attempts on this account");
+            resp->addHeader("Retry-After",
+                            std::to_string(throttle.retryAfterSeconds));
+            callback(resp);
+            return;
+        }
+        if (throttle.throttled) valid = false;
 
         if (!valid) {
+            if (exists) {
+                login_throttle::recordFailure(
+                    static_cast<int>(users[0].getValueOfId()),
+                    users[0].getValueOfEmail(),
+                    users[0].getValueOfUsername());
+            }
             // Audit failed attempt. metadata.username is intentionally the
             // *attempted* username, which may be made up — we want to spot
             // patterns of probing, not just hits on real accounts.
@@ -283,6 +330,12 @@ void AuthController::loginUser(const HttpRequestPtr &req,
 
         const auto& user = users[0];
         const int  userId = static_cast<int>(user.getValueOfId());
+
+        // Correct password: the episode is over. Clearing here rather than
+        // after the 2FA step is deliberate — the throttle exists to limit
+        // *password* guessing, and the 2FA factors carry their own
+        // per-account buckets.
+        login_throttle::recordSuccess(userId);
 
         // Look up 2FA enrolment. The query is synchronous on purpose —
         // simpler than building an async chain when we already hold the
@@ -593,7 +646,7 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
         callback(jsonError(k400BadRequest, "Token and password are required"));
         return;
     }
-    if (passwordTooWeak(newPassword)) {
+    if (newPassword.size() < 8 || newPassword.size() > 256) {
         callback(jsonError(k400BadRequest,
                            "Password must be at least 8 characters"));
         return;
@@ -620,6 +673,16 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
             // Argon2id work to the auth pool and let the connection go.
             workers::offload(workers::Pool::Auth, callback,
                 [dbClient, newPassword, callback, req, userId] {
+                    // The reset flow knows the user only through a token,
+                    // so the context checks have no username or email to
+                    // compare against; the blocklist and breach checks
+                    // still apply.
+                    if (auto why = password_policy::validate(
+                            newPassword, "", ""); !why.empty())
+                    {
+                        callback(jsonError(k400BadRequest, why));
+                        return;
+                    }
                     const std::string hash = hashPassword(newPassword);
 
                     dbClient->execSqlAsync(

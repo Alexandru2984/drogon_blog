@@ -29,6 +29,16 @@ public:
     static void sendRegistrationAttemptEmail(const std::string& email,
                                              const std::string& existingUsername);
 
+    // Sent when repeated failed logins have engaged the per-account
+    // throttle. Two reasons this exists: the owner should know their
+    // account is being guessed at, and throttling by account is itself a
+    // way to deny someone service — an attack that locks a user out ought
+    // to be visible to them rather than presenting as an unexplained
+    // "too many attempts".
+    static void sendLoginThrottleEmail(const std::string& email,
+                                       const std::string& username,
+                                       int                minutes);
+
     // Pending jobs in the worker queue. Exposed for metrics.
     static std::size_t queueDepth();
 };
