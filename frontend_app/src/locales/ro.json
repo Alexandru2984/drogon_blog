@@ -1,52 +1,54 @@
 {
   "nav": {
-    "feed":       "Flux",
-    "new_post":   "Articol nou",
-    "messages":   "Mesaje",
-    "two_fa":     "2FA",
-    "logout":     "Deconectare",
-    "login":      "Autentificare",
-    "register":   "Înregistrare",
+    "feed": "Flux",
+    "new_post": "Articol nou",
+    "tags": "Etichete",
+    "drafts": "Ciorne",
+    "messages": "Mesaje",
+    "two_fa": "2FA",
+    "logout": "Deconectare",
+    "login": "Autentificare",
+    "register": "Înregistrare",
     "search_placeholder": "Caută articole…",
-    "search_aria":        "Caută articole"
+    "search_aria": "Caută articole"
   },
   "locale": {
-    "label":      "Limbă",
-    "en":         "Engleză",
-    "ro":         "Română"
+    "label": "Limbă",
+    "en": "Engleză",
+    "ro": "Română"
   },
   "common": {
-    "submit":     "Trimite",
-    "save":       "Salvează",
-    "cancel":     "Anulează",
-    "delete":     "Șterge",
-    "confirm":    "Confirmă",
-    "loading":    "Se încarcă…",
+    "submit": "Trimite",
+    "save": "Salvează",
+    "cancel": "Anulează",
+    "delete": "Șterge",
+    "confirm": "Confirmă",
+    "loading": "Se încarcă…",
     "error_generic": "Ceva nu a mers. Te rog încearcă din nou.",
-    "log_in":     "Autentifică-te"
+    "log_in": "Autentifică-te"
   },
   "feed": {
-    "heading":    "Flux",
-    "empty":      "Nu există articole încă. Fii primul care publică.",
-    "load_more":  "Încarcă mai multe"
+    "heading": "Flux",
+    "empty": "Nu există articole încă. Fii primul care publică.",
+    "load_more": "Încarcă mai multe"
   },
   "auth": {
-    "login_heading":      "Autentificare",
-    "register_heading":   "Creează cont",
-    "forgot_heading":     "Ți-ai uitat parola?",
-    "username":           "Nume utilizator",
-    "email":              "Email",
-    "password":           "Parolă",
-    "password_new":       "Parolă nouă",
-    "password_confirm":   "Confirmă parola",
-    "sign_in":            "Autentifică-te",
-    "sign_up":            "Înregistrează-te",
-    "send_reset":         "Trimite link resetare",
-    "invalid_credentials":"Date de autentificare invalide",
+    "login_heading": "Autentificare",
+    "register_heading": "Creează cont",
+    "forgot_heading": "Ți-ai uitat parola?",
+    "username": "Nume utilizator",
+    "email": "Email",
+    "password": "Parolă",
+    "password_new": "Parolă nouă",
+    "password_confirm": "Confirmă parola",
+    "sign_in": "Autentifică-te",
+    "sign_up": "Înregistrează-te",
+    "send_reset": "Trimite link resetare",
+    "invalid_credentials": "Date de autentificare invalide",
     "passwords_mismatch": "Parolele nu coincid",
-    "log_in_link":        "Ai deja cont? Autentifică-te.",
-    "register_link":      "Nu ai cont? Înregistrează-te.",
-    "forgot_link":        "Ți-ai uitat parola?",
-    "verify_email_hint":  "Verifică-ți căsuța pentru a-ți confirma emailul."
+    "log_in_link": "Ai deja cont? Autentifică-te.",
+    "register_link": "Nu ai cont? Înregistrează-te.",
+    "forgot_link": "Ți-ai uitat parola?",
+    "verify_email_hint": "Verifică-ți căsuța pentru a-ți confirma emailul."
   }
 }

@@ -10,6 +10,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/verify-email',      name: 'verify',        component: () => import('@/views/VerifyEmailView.vue') },
   { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true } },
   { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue') },
+  { path: '/tags',              name: 'tags',          component: () => import('@/views/TagsView.vue') },
+  { path: '/tags/:slug',        name: 'tag',           component: () => import('@/views/TagView.vue'), props: true },
+  // Drafts are the author's own; the auth guard is what keeps the route
+  // from rendering an empty list to a signed-out visitor.
+  { path: '/drafts',            name: 'drafts',        component: () => import('@/views/DraftsView.vue'), meta: { auth: true } },
   { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true } },
   { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },

@@ -7,6 +7,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
 import { useToastStore } from '@/stores/toast'
 import { sanitizePostHtml } from '@/lib/sanitize'
+import TagList from '@/components/TagList.vue'
+import PostMeta from '@/components/PostMeta.vue'
 
 const props = defineProps<{ id: number }>()
 
@@ -18,6 +20,7 @@ const comments = ref<Comment[]>([])
 const commentsLoading = ref(true)
 const newComment = ref('')
 const posting = ref(false)
+const publishing = ref(false)
 const loading = ref(true)
 const error = ref('')
 
@@ -130,6 +133,22 @@ async function submitComment() {
   }
 }
 
+async function publishDraft() {
+  if (!post.value || publishing.value) return
+  publishing.value = true
+  try {
+    await postsApi.update(props.id, { draft: false })
+    // Re-read rather than patching locally: publishing stamps published_at
+    // server-side and that is the value the view should show.
+    await load()
+    toasts.push('Published', 'ok')
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not publish', 'error')
+  } finally {
+    publishing.value = false
+  }
+}
+
 async function deletePost() {
   if (!confirm('Delete this post?')) return
   try {
@@ -192,6 +211,17 @@ async function deletePost() {
 
       <h1 class="post-title">{{ post.title }}</h1>
 
+      <PostMeta
+        :reading-minutes="post.reading_minutes"
+        :view-count="post.view_count"
+        :is-draft="post.is_draft"
+        class="post-meta-line"
+      />
+
+      <div v-if="post.tags && post.tags.length" class="post-tags">
+        <TagList :tags="post.tags" />
+      </div>
+
       <!-- content_html is server-rendered by cmark-gfm in SAFE mode; raw
            HTML in the source is escaped before it ever reaches the client.
            sanitizePostHtml is a client-side second wall (defense-in-depth)
@@ -202,6 +232,11 @@ async function deletePost() {
       <p v-else class="post-content">{{ post.content }}</p>
 
       <div class="row tight post-actions">
+        <!-- Publishing from the post itself, because that is where the
+             author lands after saving a draft and re-reading it. -->
+        <button v-if="isOwner && post.is_draft" :disabled="publishing" @click="publishDraft">
+          {{ publishing ? 'Publishing…' : 'Publish' }}
+        </button>
         <button
           v-if="auth.isAuthed"
           class="ghost"
@@ -276,9 +311,11 @@ async function deletePost() {
    screen; one step down keeps the hierarchy and gives back half a screen. */
 .post-title {
   font-size: var(--step-3);
-  margin: 0 0 var(--sp-4);
+  margin: 0 0 var(--sp-3);
   overflow-wrap: anywhere;
 }
+.post-meta-line { margin-bottom: var(--sp-3); }
+.post-tags { margin-bottom: var(--sp-5); }
 
 .post-actions { margin-top: var(--sp-5); }
 .post-actions .liked { color: var(--danger); border-color: var(--danger); }

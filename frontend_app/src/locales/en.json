@@ -1,52 +1,54 @@
 {
   "nav": {
-    "feed":       "Feed",
-    "new_post":   "New post",
-    "messages":   "Messages",
-    "two_fa":     "2FA",
-    "logout":     "Logout",
-    "login":      "Login",
-    "register":   "Register",
+    "feed": "Feed",
+    "new_post": "New post",
+    "tags": "Tags",
+    "drafts": "Drafts",
+    "messages": "Messages",
+    "two_fa": "2FA",
+    "logout": "Logout",
+    "login": "Login",
+    "register": "Register",
     "search_placeholder": "Search posts…",
-    "search_aria":        "Search posts"
+    "search_aria": "Search posts"
   },
   "locale": {
-    "label":      "Language",
-    "en":         "English",
-    "ro":         "Romanian"
+    "label": "Language",
+    "en": "English",
+    "ro": "Romanian"
   },
   "common": {
-    "submit":     "Submit",
-    "save":       "Save",
-    "cancel":     "Cancel",
-    "delete":     "Delete",
-    "confirm":    "Confirm",
-    "loading":    "Loading…",
+    "submit": "Submit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "loading": "Loading…",
     "error_generic": "Something went wrong. Please try again.",
-    "log_in":     "Log in"
+    "log_in": "Log in"
   },
   "feed": {
-    "heading":    "Feed",
-    "empty":      "No posts yet. Be the first to publish.",
-    "load_more":  "Load more"
+    "heading": "Feed",
+    "empty": "No posts yet. Be the first to publish.",
+    "load_more": "Load more"
   },
   "auth": {
-    "login_heading":      "Sign in",
-    "register_heading":   "Create account",
-    "forgot_heading":     "Forgot your password?",
-    "username":           "Username",
-    "email":              "Email",
-    "password":           "Password",
-    "password_new":       "New password",
-    "password_confirm":   "Confirm password",
-    "sign_in":            "Sign in",
-    "sign_up":            "Sign up",
-    "send_reset":         "Send reset link",
-    "invalid_credentials":"Invalid credentials",
+    "login_heading": "Sign in",
+    "register_heading": "Create account",
+    "forgot_heading": "Forgot your password?",
+    "username": "Username",
+    "email": "Email",
+    "password": "Password",
+    "password_new": "New password",
+    "password_confirm": "Confirm password",
+    "sign_in": "Sign in",
+    "sign_up": "Sign up",
+    "send_reset": "Send reset link",
+    "invalid_credentials": "Invalid credentials",
     "passwords_mismatch": "Passwords do not match",
-    "log_in_link":        "Already have an account? Log in.",
-    "register_link":      "Don't have an account? Register.",
-    "forgot_link":        "Forgot your password?",
-    "verify_email_hint":  "Check your inbox to verify your email."
+    "log_in_link": "Already have an account? Log in.",
+    "register_link": "Don't have an account? Register.",
+    "forgot_link": "Forgot your password?",
+    "verify_email_hint": "Check your inbox to verify your email."
   }
 }

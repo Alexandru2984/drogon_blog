@@ -155,8 +155,10 @@ const unread = computed(() => messages.totalUnread)
 
       <div class="nav-links">
         <router-link to="/">{{ $t('nav.feed') }}</router-link>
+        <router-link :to="{ name: 'tags' }">{{ $t('nav.tags') }}</router-link>
         <template v-if="isAuthed">
           <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
+          <router-link :to="{ name: 'drafts' }">{{ $t('nav.drafts') }}</router-link>
           <router-link to="/messages">
             {{ $t('nav.messages') }}
             <span v-if="unread" class="nav-badge">{{ unread }}</span>
@@ -202,8 +204,10 @@ const unread = computed(() => messages.totalUnread)
       </form>
       <hr />
       <router-link to="/">{{ $t('nav.feed') }}</router-link>
+      <router-link :to="{ name: 'tags' }">{{ $t('nav.tags') }}</router-link>
       <template v-if="isAuthed">
         <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
+        <router-link :to="{ name: 'drafts' }">{{ $t('nav.drafts') }}</router-link>
         <router-link to="/messages">
           {{ $t('nav.messages') }}
           <span v-if="unread" class="nav-badge">{{ unread }}</span>

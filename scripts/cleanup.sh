@@ -1,7 +1,7 @@
 #!/bin/sh
 # Drogon Blog — periodic maintenance.
 #
-# Two jobs that otherwise accumulate unbounded:
+# Several tables and one directory that otherwise accumulate unbounded:
 #   1. password_reset_tokens whose expires_at has passed. The request/reset
 #      flow deletes a token on use, but tokens that are never redeemed linger
 #      as whole rows forever. One-time email-verification tokens live as
@@ -64,6 +64,36 @@ if [ "$DRY_RUN" = "1" ]; then
 else
     n=$(psql_run -At -c "WITH d AS (DELETE FROM user_sessions WHERE revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '30 days' RETURNING 1) SELECT count(*) FROM d;")
     echo "pruned $n retired session row(s)"
+fi
+
+# ---- 1c. Day-old view dedup rows ----
+# post_views exists only to stop one reader's refresh from counting twice
+# within a day. The running total lives on posts.view_count, so a row whose
+# day has passed carries no information — it is dead weight on a table that
+# grows with every reader of every post.
+#
+# 7 days rather than 1 so a timezone-straddling deployment or a clock skew
+# cannot delete a row that is still deduplicating.
+if [ "$DRY_RUN" = "1" ]; then
+    n=$(psql_run -At -c "SELECT count(*) FROM post_views WHERE viewed_on < CURRENT_DATE - 7;")
+    echo "[dry-run] would prune $n stale view row(s)"
+else
+    n=$(psql_run -At -c "WITH d AS (DELETE FROM post_views WHERE viewed_on < CURRENT_DATE - 7 RETURNING 1) SELECT count(*) FROM d;")
+    echo "pruned $n stale view row(s)"
+fi
+
+# ---- 1d. Tags no post carries ----
+# post_tags cascades when a post is deleted, but the tag row itself stays.
+# /tags already hides them (it joins through to a visible post), so this is
+# not a correctness problem — it is an unbounded table of names nobody can
+# reach, and it keeps a deleted post's tag squatting on its slug so a later
+# author cannot claim the display spelling.
+if [ "$DRY_RUN" = "1" ]; then
+    n=$(psql_run -At -c "SELECT count(*) FROM tags t WHERE NOT EXISTS (SELECT 1 FROM post_tags pt WHERE pt.tag_id = t.id);")
+    echo "[dry-run] would prune $n unused tag(s)"
+else
+    n=$(psql_run -At -c "WITH d AS (DELETE FROM tags t WHERE NOT EXISTS (SELECT 1 FROM post_tags pt WHERE pt.tag_id = t.id) RETURNING 1) SELECT count(*) FROM d;")
+    echo "pruned $n unused tag(s)"
 fi
 
 # ---- 2. Orphaned uploads ----

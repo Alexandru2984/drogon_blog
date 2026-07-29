@@ -5,6 +5,7 @@
 #include "../helpers/AuditLog.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/Markdown.h"
+#include "../helpers/PostMeta.h"
 #include "../helpers/Security.h"
 #include "../helpers/ImageProcessor.h"
 #include "../helpers/Workers.h"
@@ -71,21 +72,27 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
     // branches resolve to the same string literal.
     static const char* kSqlWithCursor =
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       p.published_at, p.reading_minutes, p.excerpt, p.view_count, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
         // Moderator-hidden posts leave the feed. Every read path needs
         // this predicate; one that misses it makes hiding cosmetic.
-        "WHERE p.hidden_at IS NULL AND p.id < $1 "
+        //
+        // published_at IS NOT NULL is the draft filter, and it belongs
+        // here for the same reason: a draft that leaks into the public
+        // feed is the failure mode drafts exist to prevent.
+        "WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL AND p.id < $1 "
         "ORDER BY p.id DESC "
         "LIMIT $2";
     // cppcheck-suppress variableScope ; ditto
     static const char* kSqlFirstPage =
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       p.published_at, p.reading_minutes, p.excerpt, p.view_count, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "WHERE p.hidden_at IS NULL "
+        "WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL "
         "ORDER BY p.id DESC "
         "LIMIT $1";
 
@@ -125,6 +132,14 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         Json::Value ret;
         ret["posts"] = Json::Value(Json::arrayValue);
 
+        // One query for every tag on the page rather than one per post:
+        // a 50-post page would otherwise be 51 round trips.
+        std::vector<int> pageIds;
+        pageIds.reserve(r.size());
+        for (const auto& row : r) pageIds.push_back(row["id"].as<int>());
+        const Json::Value tagsById =
+            post_meta::tagsForPosts(drogon::app().getDbClient(), pageIds);
+
         for (const auto& row : r) {
             Json::Value post;
             const auto id      = row["id"].as<int64_t>();
@@ -135,6 +150,16 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
                 post["content_html"] = row["content_html"].as<std::string>();
             post["created_at"] = row["created_at"].as<std::string>();
             post["updated_at"] = row["updated_at"].as<std::string>();
+            if (!row["published_at"].isNull())
+                post["published_at"] = row["published_at"].as<std::string>();
+            post["reading_minutes"] = row["reading_minutes"].as<int>();
+            post["view_count"]      = row["view_count"].as<int64_t>();
+            if (!row["excerpt"].isNull())
+                post["excerpt"] = row["excerpt"].as<std::string>();
+
+            const std::string key = std::to_string(id);
+            post["tags"] = tagsById.isMember(key) ? tagsById[key]
+                                                  : Json::Value(Json::arrayValue);
 
             if (!row["author_id"].isNull()) {
                 post["author"]["id"]       = row["author_id"].as<int64_t>();
@@ -193,6 +218,226 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
     } else {
         dbClient->execSqlAsync(kSqlFirstPage,  onOk, onErr, limit64);
     }
+}
+
+// Every tag that is actually attached to something published, with how
+// many posts carry it. Tags with no visible posts are omitted rather than
+// listed with a zero: a tag whose only post was deleted or hidden is not a
+// thing a reader can browse to, and offering it is a dead end.
+void PostController::listTags(const HttpRequestPtr &req,
+                              std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    auto dbClient = drogon::app().getDbClient();
+
+    static const char* kSql =
+        "SELECT t.slug, t.label, count(*) AS n "
+        "FROM tags t "
+        "JOIN post_tags pt ON pt.tag_id = t.id "
+        "JOIN posts p ON p.id = pt.post_id "
+        "WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "GROUP BY t.slug, t.label "
+        "ORDER BY n DESC, t.label ASC "
+        "LIMIT 200";
+
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, req](const Result& r) {
+            Json::Value ret;
+            ret["tags"] = Json::Value(Json::arrayValue);
+            std::string fingerprint;
+            for (const auto& row : r) {
+                Json::Value tag;
+                tag["slug"]  = row["slug"].as<std::string>();
+                tag["label"] = row["label"].as<std::string>();
+                tag["count"] = row["n"].as<int64_t>();
+                ret["tags"].append(tag);
+                fingerprint += row["slug"].as<std::string>();
+                fingerprint += ':';
+                fingerprint += std::to_string(row["n"].as<int64_t>());
+                fingerprint += ';';
+            }
+            // The whole list is the payload, so hash it: any tag appearing,
+            // disappearing or changing count yields a different tag.
+            const std::string etag = http_cache::makeWeakEtag({
+                "tags", security::sha256Hex(fingerprint).substr(0, 24),
+            });
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag));
+                return;
+            }
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag);
+            callback(resp);
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (listTags): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch tags";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        });
+}
+
+void PostController::getPostsByTag(const HttpRequestPtr &req,
+                                   std::function<void(const HttpResponsePtr &)> &&callback,
+                                   const std::string &slug)
+{
+    // Normalise the path segment the same way a tag is normalised on write,
+    // so /tags/C++/posts and /tags/c/posts reach the same place a reader
+    // typing either would expect. An empty result after folding means the
+    // segment contained nothing tag-shaped.
+    const std::string wanted = post_meta::slugify(slug);
+    if (wanted.empty()) {
+        Json::Value ret;
+        ret["error"] = "Unknown tag";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k404NotFound);
+        callback(resp);
+        return;
+    }
+
+    auto dbClient = drogon::app().getDbClient();
+    const int limit = clampLimit(req->getParameter("limit"));
+
+    static const char* kSql =
+        "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       p.published_at, p.reading_minutes, p.excerpt, p.view_count, "
+        "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
+        "FROM posts p "
+        "JOIN post_tags pt ON pt.post_id = p.id "
+        "JOIN tags t ON t.id = pt.tag_id "
+        "LEFT JOIN users u ON u.id = p.user_id "
+        "WHERE t.slug = $1 AND p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "ORDER BY p.id DESC "
+        "LIMIT $2";
+
+    const int64_t limit64 = limit;
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, req, wanted](const Result& r) {
+            auto db = drogon::app().getDbClient();
+            std::vector<int> ids;
+            ids.reserve(r.size());
+            for (const auto& row : r) ids.push_back(row["id"].as<int>());
+            const Json::Value tagsById = post_meta::tagsForPosts(db, ids);
+
+            Json::Value ret;
+            ret["tag"]   = wanted;
+            ret["count"] = static_cast<int>(r.size());
+            ret["posts"] = Json::Value(Json::arrayValue);
+
+            for (const auto& row : r) {
+                Json::Value post;
+                const auto id      = row["id"].as<int64_t>();
+                post["id"]         = id;
+                post["title"]      = row["title"].as<std::string>();
+                post["content"]    = row["content"].as<std::string>();
+                if (!row["content_html"].isNull())
+                    post["content_html"] = row["content_html"].as<std::string>();
+                post["created_at"]      = row["created_at"].as<std::string>();
+                post["updated_at"]      = row["updated_at"].as<std::string>();
+                post["reading_minutes"] = row["reading_minutes"].as<int>();
+                post["view_count"]      = row["view_count"].as<int64_t>();
+                if (!row["excerpt"].isNull())
+                    post["excerpt"] = row["excerpt"].as<std::string>();
+
+                const std::string key = std::to_string(id);
+                post["tags"] = tagsById.isMember(key) ? tagsById[key]
+                                                     : Json::Value(Json::arrayValue);
+
+                if (!row["author_id"].isNull()) {
+                    post["author"]["id"]       = row["author_id"].as<int64_t>();
+                    post["author"]["username"] = row["author_username"].as<std::string>();
+                    if (!row["author_profile_image"].isNull()) {
+                        auto img = row["author_profile_image"].as<std::string>();
+                        if (!img.empty()) post["author"]["profile_image"] = img;
+                    }
+                }
+                ret["posts"].append(post);
+            }
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (getPostsByTag): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch posts";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        wanted, limit64);
+}
+
+void PostController::getMyDrafts(const HttpRequestPtr &req,
+                                 std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    auto session = req->session();
+    auto userIdOpt = session ? session->getOptional<int>("user_id")
+                             : std::optional<int>{};
+    if (!userIdOpt.has_value()) {
+        Json::Value ret;
+        ret["error"] = "Not authenticated";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k401Unauthorized);
+        callback(resp);
+        return;
+    }
+
+    auto dbClient = drogon::app().getDbClient();
+
+    // Ordered by updated_at, not id: the draft you were last working on is
+    // the one you came back for.
+    static const char* kSql =
+        "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
+        "       p.reading_minutes, p.excerpt "
+        "FROM posts p "
+        "WHERE p.user_id = $1 AND p.published_at IS NULL AND p.hidden_at IS NULL "
+        "ORDER BY p.updated_at DESC "
+        "LIMIT 100";
+
+    dbClient->execSqlAsync(
+        kSql,
+        [callback](const Result& r) {
+            auto db = drogon::app().getDbClient();
+            std::vector<int> ids;
+            ids.reserve(r.size());
+            for (const auto& row : r) ids.push_back(row["id"].as<int>());
+            const Json::Value tagsById = post_meta::tagsForPosts(db, ids);
+
+            Json::Value ret;
+            ret["posts"] = Json::Value(Json::arrayValue);
+            for (const auto& row : r) {
+                Json::Value post;
+                const auto id           = row["id"].as<int64_t>();
+                post["id"]              = id;
+                post["title"]           = row["title"].as<std::string>();
+                post["content"]         = row["content"].as<std::string>();
+                post["created_at"]      = row["created_at"].as<std::string>();
+                post["updated_at"]      = row["updated_at"].as<std::string>();
+                post["reading_minutes"] = row["reading_minutes"].as<int>();
+                post["is_draft"]        = true;
+                if (!row["excerpt"].isNull())
+                    post["excerpt"] = row["excerpt"].as<std::string>();
+                const std::string key = std::to_string(id);
+                post["tags"] = tagsById.isMember(key) ? tagsById[key]
+                                                     : Json::Value(Json::arrayValue);
+                ret["posts"].append(post);
+            }
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            // Never cached anywhere but this browser: a draft is private.
+            resp->addHeader("Cache-Control", "private, no-store");
+            callback(resp);
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (getMyDrafts): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch drafts";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        userIdOpt.value());
 }
 
 void PostController::searchPosts(const HttpRequestPtr &req,
@@ -313,18 +558,29 @@ void PostController::getPost(const HttpRequestPtr &req,
 {
     auto dbClient = drogon::app().getDbClient();
 
+    // A draft is visible to its author and to nobody else. Passing the
+    // viewer into the query rather than fetching and then filtering keeps
+    // "does this post exist" and "may you see it" the same question, so
+    // there is no branch where the row is loaded and the check is forgotten.
+    auto session = req->session();
+    const int viewerId = session ? session->getOptional<int>("user_id").value_or(0) : 0;
+
     static const char* kSql =
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       p.published_at, p.reading_minutes, p.excerpt, p.view_count, p.user_id, "
         "       u.id AS author_id, u.username AS author_username, u.profile_image AS author_profile_image "
         "FROM posts p "
         "LEFT JOIN users u ON u.id = p.user_id "
         // A hidden post is a 404, not a 403: confirming it exists would
-        // tell whoever got it moderated exactly that it worked.
-        "WHERE p.hidden_at IS NULL AND p.id = $1";
+        // tell whoever got it moderated exactly that it worked. An
+        // unpublished one is a 404 to everyone but its author, for the
+        // same reason — a draft's existence is not public information.
+        "WHERE p.hidden_at IS NULL AND p.id = $1 "
+        "  AND (p.published_at IS NOT NULL OR p.user_id = $2::int)";
 
     dbClient->execSqlAsync(
         kSql,
-        [callback, req, postId](const Result& r) {
+        [callback, req, postId, viewerId](const Result& r) {
             if (r.empty()) {
                 Json::Value ret;
                 ret["error"] = "Post not found";
@@ -339,9 +595,27 @@ void PostController::getPost(const HttpRequestPtr &req,
             // updated_at (UPDATE trigger fires on every row write) gives
             // the resource a new tag; comments/likes don't.
             const std::string updatedAt = row["updated_at"].as<std::string>();
+
+            // Count the read before building the response, so the number we
+            // report is the one that includes this visit — a reader who
+            // refreshes and sees the count unchanged assumes it is broken.
+            // Author's own views do not count: an author reloading a draft
+            // would otherwise inflate their own numbers.
+            auto db = drogon::app().getDbClient();
+            const bool isAuthor = viewerId > 0 &&
+                                  row["user_id"].as<int>() == viewerId;
+            long long views = row["view_count"].as<long long>();
+            if (!isAuthor) {
+                views = post_meta::recordView(
+                    db, postId, post_meta::viewerKey(req, viewerId), views);
+            }
+
+            // The view count is in the ETag, so a reader whose visit bumped
+            // it gets a fresh body rather than a 304 showing the old number.
             const std::string etag = http_cache::makeWeakEtag({
                 "post", std::to_string(postId),
                 std::to_string(http_cache::parseTimestampMicros(updatedAt)),
+                std::to_string(views),
             });
             if (http_cache::ifNoneMatchHit(req, etag)) {
                 callback(http_cache::makeNotModified(etag));
@@ -356,6 +630,15 @@ void PostController::getPost(const HttpRequestPtr &req,
                 ret["content_html"] = row["content_html"].as<std::string>();
             ret["created_at"] = row["created_at"].as<std::string>();
             ret["updated_at"] = updatedAt;
+            ret["published_at"] = row["published_at"].isNull()
+                ? Json::nullValue
+                : Json::Value(row["published_at"].as<std::string>());
+            ret["is_draft"]        = row["published_at"].isNull();
+            ret["reading_minutes"] = row["reading_minutes"].as<int>();
+            ret["view_count"]      = static_cast<Json::Int64>(views);
+            if (!row["excerpt"].isNull())
+                ret["excerpt"] = row["excerpt"].as<std::string>();
+            ret["tags"] = post_meta::tagsForPost(db, postId);
 
             if (!row["author_id"].isNull()) {
                 ret["author"]["id"]       = row["author_id"].as<int64_t>();
@@ -377,7 +660,7 @@ void PostController::getPost(const HttpRequestPtr &req,
             resp->setStatusCode(k404NotFound);
             callback(resp);
         },
-        postId);
+        postId, viewerId);
 }
 
 void PostController::createPost(const HttpRequestPtr &req,
@@ -433,28 +716,50 @@ void PostController::createPost(const HttpRequestPtr &req,
     }
 
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
     // Render markdown once at write-time and store both the raw source (so
     // we can re-render if rendering policy changes) and the resulting safe
     // HTML (so reads stay cheap).
     const std::string contentHtml = markdown::renderToSafeHtml(content);
 
-    drogon_model::blog_db::Posts newPost;
-    newPost.setUserId(userIdOpt.value());
-    newPost.setTitle(title);
-    newPost.setContent(content);
-    newPost.setContentHtml(contentHtml);
+    // Derived once here rather than per read, for the same reason: both are
+    // pure functions of the content.
+    const int         readingMinutes = post_meta::estimateReadingMinutes(content);
+    const std::string excerpt        = post_meta::makeExcerpt(content);
+    const auto        tags           = post_meta::parseTags((*json)["tags"]);
+
+    // Absent means publish — the overwhelming majority of writes, and the
+    // behaviour every existing client already depends on. Only an explicit
+    // `"draft": true` withholds it.
+    const bool asDraft = (*json)["draft"].isBool() && (*json)["draft"].asBool();
 
     try {
-        mapper.insert(newPost);
+        // Raw SQL rather than the ORM mapper: the generated model predates
+        // this migration and has no accessor for published_at, and
+        // regenerating every model file to add one column is a much larger
+        // diff than the feature warrants.
+        auto ins = dbClient->execSqlSync(
+            "INSERT INTO posts (user_id, title, content, content_html, "
+            "                   reading_minutes, excerpt, published_at) "
+            "VALUES ($1, $2, $3, $4, $5::int, $6, "
+            "        CASE WHEN $7::bool THEN NULL ELSE now() END) "
+            "RETURNING id, created_at, published_at",
+            userIdOpt.value(), title, content, contentHtml,
+            readingMinutes, excerpt, asDraft);
+
+        const int newId = ins[0]["id"].as<int>();
+        post_meta::syncPostTags(dbClient, newId, tags);
 
         Json::Value ret;
-        ret["message"] = "Post created successfully";
-        ret["post"]["id"]           = newPost.getValueOfId();
-        ret["post"]["title"]        = newPost.getValueOfTitle();
-        ret["post"]["content"]      = newPost.getValueOfContent();
-        ret["post"]["content_html"] = newPost.getValueOfContentHtml();
+        ret["message"] = asDraft ? "Draft saved" : "Post created successfully";
+        ret["post"]["id"]              = newId;
+        ret["post"]["title"]           = title;
+        ret["post"]["content"]         = content;
+        ret["post"]["content_html"]    = contentHtml;
+        ret["post"]["reading_minutes"] = readingMinutes;
+        ret["post"]["excerpt"]         = excerpt;
+        ret["post"]["is_draft"]        = asDraft;
+        ret["post"]["tags"]            = post_meta::tagsForPost(dbClient, newId);
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k201Created);
@@ -626,6 +931,13 @@ void PostController::updatePost(const HttpRequestPtr &req,
             return;
         }
 
+        // Whether anything the generated model knows about changed. The
+        // ORM builds "UPDATE posts SET <dirty columns> WHERE id = ?" and
+        // emits a syntactically invalid empty SET when nothing is dirty —
+        // so a PUT that only flips the draft flag or replaces the tags,
+        // both of which live outside the model, must not reach update().
+        bool modelChanged = false;
+
         if (json->isMember("title")) {
             const std::string newTitle = (*json)["title"].asString();
             if (newTitle.size() > kMaxTitleBytes) {
@@ -637,6 +949,7 @@ void PostController::updatePost(const HttpRequestPtr &req,
                 return;
             }
             post.setTitle(newTitle);
+            modelChanged = true;
         }
         if (json->isMember("content")) {
             const std::string newContent = (*json)["content"].asString();
@@ -650,15 +963,58 @@ void PostController::updatePost(const HttpRequestPtr &req,
             }
             post.setContent(newContent);
             post.setContentHtml(markdown::renderToSafeHtml(newContent));
+            modelChanged = true;
         }
 
-        mapper.update(post);
+        if (modelChanged) mapper.update(post);
+
+        // The columns added in 0013 are not on the generated model, so they
+        // are written separately. Reading time and excerpt are recomputed
+        // only when the content actually changed — a title-only edit should
+        // not rewrite them.
+        if (json->isMember("content")) {
+            const std::string c = post.getValueOfContent();
+            dbClient->execSqlSync(
+                "UPDATE posts SET reading_minutes = $2::int, excerpt = $3 WHERE id = $1",
+                postId, post_meta::estimateReadingMinutes(c),
+                post_meta::makeExcerpt(c));
+        }
+
+        // Publishing a draft stamps published_at once and never again:
+        // re-publishing an already-live post must not reset its date and
+        // shuffle it back to the top of the feed. Unpublishing (back to
+        // draft) is allowed and clears it.
+        bool isDraft = post_meta::isDraft(dbClient, postId);
+        if (json->isMember("draft")) {
+            const bool wantDraft = (*json)["draft"].asBool();
+            if (wantDraft && !isDraft) {
+                dbClient->execSqlSync(
+                    "UPDATE posts SET published_at = NULL WHERE id = $1", postId);
+                isDraft = true;
+            } else if (!wantDraft && isDraft) {
+                dbClient->execSqlSync(
+                    "UPDATE posts SET published_at = COALESCE(published_at, now()) "
+                    "WHERE id = $1", postId);
+                isDraft = false;
+            }
+        }
+
+        // Absent `tags` means "leave them alone"; an empty array means
+        // "remove them all". Treating absent as empty would silently strip
+        // the tags off any post edited by a client that does not know about
+        // them yet.
+        if (json->isMember("tags")) {
+            post_meta::syncPostTags(dbClient, postId,
+                                    post_meta::parseTags((*json)["tags"]));
+        }
 
         Json::Value ret;
         ret["message"] = "Post updated successfully";
-        ret["post"]["id"] = post.getValueOfId();
-        ret["post"]["title"] = post.getValueOfTitle();
-        ret["post"]["content"] = post.getValueOfContent();
+        ret["post"]["id"]       = post.getValueOfId();
+        ret["post"]["title"]    = post.getValueOfTitle();
+        ret["post"]["content"]  = post.getValueOfContent();
+        ret["post"]["is_draft"] = isDraft;
+        ret["post"]["tags"]     = post_meta::tagsForPost(dbClient, postId);
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         callback(resp);

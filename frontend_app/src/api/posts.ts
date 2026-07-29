@@ -6,6 +6,11 @@ export interface PostAuthor {
   profile_image?: string
 }
 
+export interface Tag {
+  slug:  string    // normalised identifier, what the URL carries
+  label: string    // what the first author to use it typed, for display
+}
+
 export interface Post {
   id: number
   title: string
@@ -13,7 +18,20 @@ export interface Post {
   content_html?: string       // sanitized HTML rendered server-side (cmark-gfm SAFE)
   created_at: string
   updated_at: string
+  // Null while a post is a draft. `is_draft` is only sent on the single-post
+  // and drafts endpoints; the feed never contains drafts, so its absence
+  // there is not a missing field.
+  published_at?: string | null
+  is_draft?: boolean
+  reading_minutes?: number
+  view_count?: number
+  excerpt?: string
+  tags?: Tag[]
   author?: PostAuthor
+}
+
+export interface TagSummary extends Tag {
+  count: number
 }
 
 export interface FeedPage {
@@ -50,10 +68,22 @@ export const postsApi = {
   byUser(userId: number) {
     return api.get<{ posts: Post[] }>(`/posts/user/${userId}`).then(r => r.data.posts)
   },
+  listTags() {
+    return api.get<{ tags: TagSummary[] }>('/tags').then(r => r.data.tags)
+  },
+  byTag(slug: string, limit = 50) {
+    return api
+      .get<{ tag: string; count: number; posts: Post[] }>(
+        `/tags/${encodeURIComponent(slug)}/posts`, { params: { limit } })
+      .then(r => r.data)
+  },
+  myDrafts() {
+    return api.get<{ posts: Post[] }>('/posts/drafts').then(r => r.data.posts)
+  },
   get(id: number) {
     return api.get<Post>(`/posts/${id}`).then(r => r.data)
   },
-  create(payload: { title: string; content: string }) {
+  create(payload: { title: string; content: string; tags?: string[]; draft?: boolean }) {
     return api.post('/posts', payload).then(r => r.data)
   },
   // Upload an inline image; returns a same-origin URL to embed as Markdown
@@ -68,7 +98,11 @@ export const postsApi = {
       })
       .then(r => r.data.url)
   },
-  update(id: number, payload: { title?: string; content?: string }) {
+  // Omitting `tags` leaves them untouched; passing an empty array clears
+  // them. Omitting `draft` leaves the published state alone.
+  update(id: number, payload: {
+    title?: string; content?: string; tags?: string[]; draft?: boolean
+  }) {
     return api.put(`/posts/${id}`, payload).then(r => r.data)
   },
   remove(id: number) {

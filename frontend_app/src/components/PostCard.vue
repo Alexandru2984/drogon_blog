@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import type { Post } from '@/api/posts'
 import { computed } from 'vue'
+import TagList from '@/components/TagList.vue'
+import PostMeta from '@/components/PostMeta.vue'
 
 const props = defineProps<{ post: Post; clamp?: boolean }>()
 
+// Prefer the server-built excerpt: it has the markdown syntax stripped, so
+// a card no longer shows literal "## " or "```" where a heading or a code
+// fence happened to fall inside the first 280 characters. Falls back to the
+// raw content for rows written before the excerpt column existed.
 const excerpt = computed(() => {
+  if (props.post.excerpt) return props.post.excerpt
   if (!props.clamp) return props.post.content
   const max = 280
   return props.post.content.length > max
@@ -53,7 +60,11 @@ const isoDate = computed(() => {
       </router-link>
     </h2>
 
+    <PostMeta :reading-minutes="post.reading_minutes" :view-count="post.view_count" />
+
     <p class="post-content post-card-excerpt">{{ excerpt }}</p>
+
+    <TagList :tags="post.tags" small />
 
     <router-link :to="{ name: 'post', params: { id: post.id } }" class="link-action post-card-more">
       Read <span aria-hidden="true">→</span>
