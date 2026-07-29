@@ -1,4 +1,5 @@
 #include "CommentController.h"
+#include "../helpers/Notifications.h"
 #include "../models/Comments.h"
 #include "../models/Users.h"
 #include "../helpers/HttpCache.h"
@@ -30,13 +31,17 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
     // deleted concurrently (CommentController previously caught that
     // case with a try/catch around findByPrimaryKey).
     static const char* kSql =
-        "SELECT c.id, c.content, c.created_at, c.updated_at, "
+        "SELECT c.id, c.content, c.created_at, c.updated_at, c.parent_id, "
         "       u.id AS author_id, u.username AS author_username, "
         "       u.profile_image AS author_profile_image "
         "FROM comments c "
         "LEFT JOIN users u ON u.id = c.user_id "
         "WHERE c.hidden_at IS NULL AND c.post_id = $1 "
-        "ORDER BY c.created_at ASC";
+        // Ordered by id, not created_at: two comments posted in the same
+        // millisecond would otherwise come back in an arbitrary order, and
+        // the client nests by parent_id assuming a parent is seen before
+        // its replies. id is monotonic, so that holds.
+        "ORDER BY c.id ASC";
 
     auto dbClient = drogon::app().getDbClient();
     dbClient->execSqlAsync(
@@ -73,6 +78,12 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                 commentJson["id"] = row["id"].as<int>();
                 commentJson["content"] = row["content"].as<std::string>();
                 commentJson["created_at"] = row["created_at"].as<std::string>();
+                // Null for a top-level comment. The client builds the tree;
+                // sending a nested structure would make the ETag depend on
+                // the shape rather than the contents.
+                commentJson["parent_id"] = row["parent_id"].isNull()
+                    ? Json::nullValue
+                    : Json::Value(row["parent_id"].as<int>());
 
                 if (!row["author_id"].isNull()) {
                     commentJson["author"]["id"] = row["author_id"].as<int>();
@@ -152,13 +163,10 @@ void CommentController::createComment(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
+    // Optional: a reply rather than a top-level comment.
+    const int parentId = (*json)["parent_id"].isInt() ? (*json)["parent_id"].asInt() : 0;
 
-    drogon_model::blog_db::Comments newComment;
-    newComment.setPostId(postId);
-    newComment.setUserId(userIdOpt.value());
-    newComment.setContent(content);
+    auto dbClient = drogon::app().getDbClient();
 
     try {
         // Confirm the post exists up front so commenting on a missing/deleted
@@ -166,9 +174,9 @@ void CommentController::createComment(const HttpRequestPtr &req,
         // surface as a 500.
         // Hidden posts are 404 everywhere, including as a comment target —
         // otherwise a moderated thread keeps accepting replies.
-        if (dbClient->execSqlSync(
-                "SELECT 1 FROM posts WHERE id = $1 AND hidden_at IS NULL",
-                postId).empty()) {
+        auto postRow = dbClient->execSqlSync(
+            "SELECT user_id FROM posts WHERE id = $1 AND hidden_at IS NULL", postId);
+        if (postRow.empty()) {
             Json::Value ret;
             ret["error"] = "Post not found";
             auto resp = HttpResponse::newHttpJsonResponse(ret);
@@ -176,13 +184,66 @@ void CommentController::createComment(const HttpRequestPtr &req,
             callback(resp);
             return;
         }
-        mapper.insert(newComment);
+        const int postAuthorId = postRow[0]["user_id"].as<int>();
+
+        // A reply has to point at a visible comment on *this* post.
+        // Without the post_id check a reply could be attached to a comment
+        // on a different post, producing a thread that renders nowhere and
+        // a notification pointing at the wrong page.
+        int parentAuthorId = 0;
+        if (parentId > 0) {
+            auto parent = dbClient->execSqlSync(
+                "SELECT user_id FROM comments "
+                " WHERE id = $1 AND post_id = $2 AND hidden_at IS NULL",
+                parentId, postId);
+            if (parent.empty()) {
+                Json::Value ret;
+                ret["error"] = "Parent comment not found";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k404NotFound);
+                callback(resp);
+                return;
+            }
+            parentAuthorId = parent[0]["user_id"].as<int>();
+        }
+
+        // Raw SQL rather than the ORM mapper: parent_id was added in 0014
+        // and the generated model has no accessor for it.
+        auto ins = dbClient->execSqlSync(
+            "INSERT INTO comments (post_id, user_id, content, parent_id) "
+            "VALUES ($1, $2, $3, NULLIF($4::int, 0)) "
+            "RETURNING id, created_at",
+            postId, userIdOpt.value(), content, parentId);
+        const int newId = ins[0]["id"].as<int>();
+
+        // Notify, in order of who most wants to know.
+        //
+        // A reply notifies the comment's author; a top-level comment
+        // notifies the post's author. When someone replies to their own
+        // comment on someone else's post, both are relevant — and emit()
+        // drops the self-notification, so the author of the reply never
+        // hears about it either way.
+        if (parentId > 0) {
+            notifications::emit(dbClient, parentAuthorId, userIdOpt.value(),
+                                notifications::Kind::Reply, postId, newId);
+            // Also tell the post's author, unless they are the one being
+            // replied to (they would get two notifications for one event).
+            if (postAuthorId != parentAuthorId) {
+                notifications::emit(dbClient, postAuthorId, userIdOpt.value(),
+                                    notifications::Kind::Comment, postId, newId);
+            }
+        } else {
+            notifications::emit(dbClient, postAuthorId, userIdOpt.value(),
+                                notifications::Kind::Comment, postId, newId);
+        }
 
         Json::Value ret;
         ret["message"] = "Comment created successfully";
-        ret["comment"]["id"] = newComment.getValueOfId();
-        ret["comment"]["content"] = newComment.getValueOfContent();
-        ret["comment"]["created_at"] = newComment.getValueOfCreatedAt().toDbStringLocal();
+        ret["comment"]["id"]         = newId;
+        ret["comment"]["content"]    = content;
+        ret["comment"]["created_at"] = ins[0]["created_at"].as<std::string>();
+        ret["comment"]["parent_id"]  = parentId > 0 ? Json::Value(parentId)
+                                                    : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k201Created);

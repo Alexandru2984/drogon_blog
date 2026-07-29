@@ -7,6 +7,7 @@ import { useToastStore } from '@/stores/toast'
 import type { User } from '@/api/auth'
 import PostCard from '@/components/PostCard.vue'
 import PostCardSkeleton from '@/components/PostCardSkeleton.vue'
+import FollowButton from '@/components/FollowButton.vue'
 
 const props = defineProps<{ id: number }>()
 
@@ -139,6 +140,10 @@ async function onFileChange(ev: Event) {
       </div>
       <button v-if="isMe && !editing" class="ghost" @click="startEditing">Edit profile</button>
     </header>
+
+    <div class="card">
+      <FollowButton :user-id="id" />
+    </div>
 
     <section v-if="editing" class="card">
       <h2 class="section-heading">Edit profile</h2>

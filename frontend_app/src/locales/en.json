@@ -2,8 +2,11 @@
   "nav": {
     "feed": "Feed",
     "new_post": "New post",
+    "profile": "Profile",
     "tags": "Tags",
     "drafts": "Drafts",
+    "notifications": "Notifications",
+    "saved": "Saved",
     "messages": "Messages",
     "two_fa": "2FA",
     "logout": "Logout",

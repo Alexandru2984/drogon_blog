@@ -39,6 +39,11 @@ const desiredPostSubs = new Set<number>()
 const MAX_CONSECUTIVE_FAILURES = 6
 let consecutiveFailures = 0
 
+// Set by the notifications store. A plain callback rather than importing the
+// store here, because the two stores would otherwise import each other and
+// Pinia would resolve one of them before the other exists.
+let onNotification: (() => void) | null = null
+
 export const useMessagesStore = defineStore('messages', () => {
   const conversations = ref<Map<number, Conversation>>(new Map())
   const connected     = ref(false)
@@ -208,6 +213,12 @@ export const useMessagesStore = defineStore('messages', () => {
       try { env = JSON.parse(data) } catch { return }
       if (env?.type === 'message' && env.message) {
         ingest(env.message as MessageRow)
+      } else if (env?.type === 'notification') {
+        // Only a nudge travels over the socket; the store refetches. Pushing
+        // the row itself would put a second, divergent copy in the client
+        // and let the socket and the REST endpoint disagree about what is
+        // unread.
+        onNotification?.()
       } else if (env?.type === 'comment' && env.comment && typeof env.post_id === 'number') {
         const arr = liveCommentsByPost.value.get(env.post_id) ?? []
         arr.push(env.comment as Comment)
@@ -264,9 +275,17 @@ export const useMessagesStore = defineStore('messages', () => {
     socket.send(JSON.stringify({ type: 'unsubscribe_post', post_id: postId }))
   }
 
+  // Registered by the notifications store at app start. Kept as a setter so
+  // the dependency runs one way: notifications knows about messages, and
+  // messages knows only that something wants telling.
+  function setNotificationHandler(fn: () => void) {
+    onNotification = fn
+  }
+
   return {
     conversations,
     connected,
+    setNotificationHandler,
     liveUnavailable,
     totalUnread,
     liveCommentsByPost,

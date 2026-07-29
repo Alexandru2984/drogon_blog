@@ -9,6 +9,8 @@ import { useToastStore } from '@/stores/toast'
 import { sanitizePostHtml } from '@/lib/sanitize'
 import TagList from '@/components/TagList.vue'
 import PostMeta from '@/components/PostMeta.vue'
+import CommentThread from '@/components/CommentThread.vue'
+import { socialApi } from '@/api/social'
 
 const props = defineProps<{ id: number }>()
 
@@ -21,6 +23,9 @@ const commentsLoading = ref(true)
 const newComment = ref('')
 const posting = ref(false)
 const publishing = ref(false)
+const bookmarked = ref(false)
+const bookmarkBusy = ref(false)
+const replyingTo = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
 
@@ -47,6 +52,7 @@ async function load() {
     post.value = p
     likes.value = l.likes_count
     liked.value = !!l.liked
+    bookmarked.value = !!p.bookmarked
     comments.value = c
   } catch (e: any) {
     error.value = e?.response?.data?.error ?? 'Post not found'
@@ -128,6 +134,36 @@ async function submitComment() {
     comments.value = await commentsApi.forPost(props.id)
   } catch (e: any) {
     toasts.push(e?.response?.data?.error ?? 'Could not post comment', 'error')
+  } finally {
+    posting.value = false
+  }
+}
+
+async function toggleBookmark() {
+  if (!auth.isAuthed || bookmarkBusy.value) return
+  const was = bookmarked.value
+  bookmarkBusy.value = true
+  bookmarked.value = !was
+  try {
+    if (was) await socialApi.removeBookmark(props.id)
+    else     await socialApi.addBookmark(props.id)
+  } catch (e: any) {
+    bookmarked.value = was
+    toasts.push(e?.response?.data?.error ?? 'Could not update bookmark', 'error')
+  } finally {
+    bookmarkBusy.value = false
+  }
+}
+
+async function submitReply(payload: { parentId: number; content: string }) {
+  if (posting.value) return
+  posting.value = true
+  try {
+    await commentsApi.create(props.id, payload.content, payload.parentId)
+    replyingTo.value = null
+    comments.value = await commentsApi.forPost(props.id)
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not post reply', 'error')
   } finally {
     posting.value = false
   }
@@ -248,6 +284,17 @@ async function deletePost() {
           <span aria-hidden="true">{{ liked ? '♥' : '♡' }}</span>
           {{ liked ? 'Liked' : 'Like' }}
         </button>
+        <button
+          v-if="auth.isAuthed"
+          class="ghost"
+          :class="{ saved: bookmarked }"
+          :disabled="bookmarkBusy"
+          :aria-pressed="bookmarked"
+          @click="toggleBookmark"
+        >
+          <span aria-hidden="true">{{ bookmarked ? '🔖' : '📑' }}</span>
+          {{ bookmarked ? 'Saved' : 'Save' }}
+        </button>
         <span class="muted">{{ likes }} like{{ likes === 1 ? '' : 's' }}</span>
       </div>
     </article>
@@ -279,15 +326,14 @@ async function deletePost() {
         <p>No comments yet. Be the first to say something.</p>
       </div>
 
-      <article v-for="c in comments" :key="c.id" class="card comment">
-        <header class="row tight comment-head">
-          <strong v-if="c.author">{{ c.author.username }}</strong>
-          <time v-if="isoDate(c.created_at)" :datetime="isoDate(c.created_at)" class="muted">
-            {{ formatDate(c.created_at) }}
-          </time>
-        </header>
-        <p class="post-content" style="margin: 0;">{{ c.content }}</p>
-      </article>
+      <CommentThread
+        :comments="comments"
+        :can-reply="auth.isAuthed"
+        :replying-to="replyingTo"
+        :posting="posting"
+        @reply="(id) => (replyingTo = id)"
+        @submit="submitReply"
+      />
     </section>
   </template>
 </template>
@@ -319,10 +365,8 @@ async function deletePost() {
 
 .post-actions { margin-top: var(--sp-5); }
 .post-actions .liked { color: var(--danger); border-color: var(--danger); }
+.post-actions .saved { color: var(--accent); border-color: var(--accent); }
 
 .comments { margin-top: var(--sp-6); }
 .comments-heading { font-size: var(--step-1); margin: 0 0 var(--sp-4); }
-.comment { margin-top: var(--sp-3); }
-.comment-head { margin-bottom: var(--sp-2); }
-.comment-head time { font-size: 0.78rem; }
 </style>

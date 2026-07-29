@@ -2,8 +2,11 @@
   "nav": {
     "feed": "Flux",
     "new_post": "Articol nou",
+    "profile": "Profil",
     "tags": "Etichete",
     "drafts": "Ciorne",
+    "notifications": "Notificări",
+    "saved": "Salvate",
     "messages": "Mesaje",
     "two_fa": "2FA",
     "logout": "Deconectare",

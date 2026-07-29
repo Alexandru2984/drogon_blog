@@ -33,6 +33,13 @@ public:
     // client. Invoked by the PgListener bridge on trg_comments_notify.
     static void pushNewComment(int postId, const Json::Value& comment);
 
+    // Nudge one user's open connections that a notification landed. Only the
+    // kind travels — the client refetches the list. Pushing the whole row
+    // would put a second, divergent copy of the notification in the client
+    // and mean the WebSocket and the REST endpoint could disagree about
+    // what is unread.
+    static void pushNotification(int userId, const std::string& kind);
+
     // Number of currently-connected sockets (for /metrics). Cheap mutex-only.
     static std::size_t connectionCount();
 

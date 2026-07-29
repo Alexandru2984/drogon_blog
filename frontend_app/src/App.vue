@@ -5,14 +5,17 @@ import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useAuthStore }     from '@/stores/auth'
 import { useToastStore }    from '@/stores/toast'
 import { useMessagesStore } from '@/stores/messages'
+import { useNotificationsStore } from '@/stores/notifications'
 import ToastList            from '@/components/ToastList.vue'
 import LocaleSwitcher       from '@/components/LocaleSwitcher.vue'
 import ThemeToggle          from '@/components/ThemeToggle.vue'
+import AccountMenu          from '@/components/AccountMenu.vue'
 
 const auth     = useAuthStore()
 const { user, isAuthed } = storeToRefs(auth)
 const toasts   = useToastStore()
 const messages = useMessagesStore()
+const notifs   = useNotificationsStore()
 const router   = useRouter()
 const route    = useRoute()
 
@@ -114,9 +117,13 @@ watch(drawerOpen, async (open) => {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  // The socket delivers a nudge; the store does the refetch. Registered once
+  // here rather than in every view that cares about the badge.
+  messages.setNotificationHandler(() => notifs.refreshCount())
   if (isAuthed.value) {
     messages.connectSocket()
     messages.refreshInbox()
+    notifs.refreshCount()
   }
 })
 onBeforeUnmount(() => {
@@ -128,13 +135,16 @@ watch(isAuthed, (now, prev) => {
   if (now && !prev) {
     messages.connectSocket()
     messages.refreshInbox()
+    notifs.refreshCount()
   } else if (!now && prev) {
     messages.disconnectSocket()
     messages.clear()
+    notifs.clear()
   }
 })
 
 const unread = computed(() => messages.totalUnread)
+const unreadNotifs = computed(() => notifs.unread)
 </script>
 
 <template>
@@ -157,17 +167,27 @@ const unread = computed(() => messages.totalUnread)
         <router-link to="/">{{ $t('nav.feed') }}</router-link>
         <router-link :to="{ name: 'tags' }">{{ $t('nav.tags') }}</router-link>
         <template v-if="isAuthed">
+          <!-- Only the destinations a reader moves between often stay on the
+               bar. Everything account-scoped lives under the name it belongs
+               to — twelve top-level items did not fit at 1440 px. -->
           <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
-          <router-link :to="{ name: 'drafts' }">{{ $t('nav.drafts') }}</router-link>
+          <router-link :to="{ name: 'notifications' }">
+            {{ $t('nav.notifications') }}
+            <span v-if="unreadNotifs" class="nav-badge">{{ unreadNotifs }}</span>
+          </router-link>
           <router-link to="/messages">
             {{ $t('nav.messages') }}
             <span v-if="unread" class="nav-badge">{{ unread }}</span>
           </router-link>
-          <router-link :to="{ name: 'profile', params: { id: user!.id } }" class="username">
-            {{ user!.username }}
-          </router-link>
-          <router-link to="/account/security">{{ $t('nav.two_fa') }}</router-link>
-          <button class="quiet sm" @click="doLogout">{{ $t('nav.logout') }}</button>
+          <AccountMenu :username="user!.username" @logout="doLogout">
+            <router-link :to="{ name: 'profile', params: { id: user!.id } }" role="menuitem">
+              {{ $t('nav.profile') }}
+            </router-link>
+            <router-link :to="{ name: 'drafts' }" role="menuitem">{{ $t('nav.drafts') }}</router-link>
+            <router-link :to="{ name: 'bookmarks' }" role="menuitem">{{ $t('nav.saved') }}</router-link>
+            <router-link to="/account/security" role="menuitem">{{ $t('nav.two_fa') }}</router-link>
+            <template #logout-label>{{ $t('nav.logout') }}</template>
+          </AccountMenu>
         </template>
         <template v-else>
           <router-link to="/login">{{ $t('nav.login') }}</router-link>
@@ -208,6 +228,11 @@ const unread = computed(() => messages.totalUnread)
       <template v-if="isAuthed">
         <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
         <router-link :to="{ name: 'drafts' }">{{ $t('nav.drafts') }}</router-link>
+        <router-link :to="{ name: 'bookmarks' }">{{ $t('nav.saved') }}</router-link>
+        <router-link :to="{ name: 'notifications' }">
+          {{ $t('nav.notifications') }}
+          <span v-if="unreadNotifs" class="nav-badge">{{ unreadNotifs }}</span>
+        </router-link>
         <router-link to="/messages">
           {{ $t('nav.messages') }}
           <span v-if="unread" class="nav-badge">{{ unread }}</span>

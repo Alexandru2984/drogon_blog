@@ -216,6 +216,15 @@ int main()
                 MessageWebSocket::pushNewComment(
                     root["post_id"].asInt(), root);
             }
+            else if (kind == "notification" && root["user_id"].isInt())
+            {
+                // Only a nudge: the client refetches. See
+                // MessageWebSocket::pushNotification for why the row itself
+                // does not travel over the socket.
+                MessageWebSocket::pushNotification(
+                    root["user_id"].asInt(),
+                    root.get("notification_kind", "").asString());
+            }
             else if (kind == "session_revoked")
             {
                 // Revocation has to reach every process, not only the one

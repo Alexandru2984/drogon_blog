@@ -15,6 +15,8 @@ const routes: RouteRecordRaw[] = [
   // Drafts are the author's own; the auth guard is what keeps the route
   // from rendering an empty list to a signed-out visitor.
   { path: '/drafts',            name: 'drafts',        component: () => import('@/views/DraftsView.vue'), meta: { auth: true } },
+  { path: '/bookmarks',         name: 'bookmarks',     component: () => import('@/views/BookmarksView.vue'), meta: { auth: true } },
+  { path: '/notifications',     name: 'notifications', component: () => import('@/views/NotificationsView.vue'), meta: { auth: true } },
   { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true } },
   { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },

@@ -27,6 +27,8 @@ export interface Post {
   view_count?: number
   excerpt?: string
   tags?: Tag[]
+  // The viewer's own saved state, sent on the single-post endpoint only.
+  bookmarked?: boolean
   author?: PostAuthor
 }
 

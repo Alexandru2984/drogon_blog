@@ -266,6 +266,14 @@ void MessageWebSocket::pushNewComment(int postId, const Json::Value& comment)
     sendOnAll(connectionsForPost(postId), toJsonLine(envelope));
 }
 
+void MessageWebSocket::pushNotification(int userId, const std::string& kind)
+{
+    Json::Value envelope;
+    envelope["type"] = "notification";
+    envelope["kind"] = kind;
+    sendOnAll(connectionsForUser(userId), toJsonLine(envelope));
+}
+
 std::size_t MessageWebSocket::connectionCount()
 {
     std::lock_guard<std::mutex> lk(g_mu);

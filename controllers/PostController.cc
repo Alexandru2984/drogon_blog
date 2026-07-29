@@ -5,6 +5,7 @@
 #include "../helpers/AuditLog.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/Markdown.h"
+#include "../helpers/Notifications.h"
 #include "../helpers/PostMeta.h"
 #include "../helpers/Security.h"
 #include "../helpers/ImageProcessor.h"
@@ -640,6 +641,22 @@ void PostController::getPost(const HttpRequestPtr &req,
                 ret["excerpt"] = row["excerpt"].as<std::string>();
             ret["tags"] = post_meta::tagsForPost(db, postId);
 
+            // Whether *this* viewer saved it, so the bookmark control can
+            // render its own state rather than guessing. Always false for an
+            // anonymous reader, who has no bookmarks.
+            bool bookmarked = false;
+            if (viewerId > 0) {
+                try {
+                    auto b = db->execSqlSync(
+                        "SELECT 1 FROM bookmarks WHERE user_id = $1 AND post_id = $2",
+                        viewerId, postId);
+                    bookmarked = !b.empty();
+                } catch (const DrogonDbException& e) {
+                    LOG_ERROR << "DB Error (bookmark lookup): " << e.base().what();
+                }
+            }
+            ret["bookmarked"] = bookmarked;
+
             if (!row["author_id"].isNull()) {
                 ret["author"]["id"]       = row["author_id"].as<int64_t>();
                 ret["author"]["username"] = row["author_username"].as<std::string>();
@@ -749,6 +766,13 @@ void PostController::createPost(const HttpRequestPtr &req,
 
         const int newId = ins[0]["id"].as<int>();
         post_meta::syncPostTags(dbClient, newId, tags);
+
+        // Followers hear about published posts, not drafts. A draft that
+        // notified everyone the moment it was saved would be the single
+        // most annoying thing this feature could do.
+        if (!asDraft) {
+            notifications::emitNewPostToFollowers(dbClient, userIdOpt.value(), newId);
+        }
 
         Json::Value ret;
         ret["message"] = asDraft ? "Draft saved" : "Post created successfully";
@@ -996,6 +1020,12 @@ void PostController::updatePost(const HttpRequestPtr &req,
                     "UPDATE posts SET published_at = COALESCE(published_at, now()) "
                     "WHERE id = $1", postId);
                 isDraft = false;
+                // The draft-to-published transition is the moment followers
+                // should hear about it. Guarded by `isDraft` so re-sending
+                // draft:false on an already-public post does not notify
+                // everyone a second time.
+                notifications::emitNewPostToFollowers(
+                    dbClient, userIdOpt.value(), postId);
             }
         }
 
@@ -1219,6 +1249,16 @@ void PostController::likePost(const HttpRequestPtr &req,
             callback(resp);
             return;
         }
+        // Tell the author. Only on the transition — the ON CONFLICT branch
+        // above already returned, so reaching here means a like was really
+        // created and not re-sent.
+        auto owner = dbClient->execSqlSync(
+            "SELECT user_id FROM posts WHERE id = $1", postId);
+        if (!owner.empty()) {
+            notifications::emit(dbClient, owner[0]["user_id"].as<int>(),
+                                userIdOpt.value(), notifications::Kind::Like, postId);
+        }
+
         Json::Value ret;
         ret["message"] = "Post liked successfully";
         callback(HttpResponse::newHttpJsonResponse(ret));
