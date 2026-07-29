@@ -15,7 +15,8 @@ set(TEST_SOURCES
     test_workers.cc
     test_sessions.cc
     test_password_policy.cc
-    test_moderation.cc)
+    test_moderation.cc
+    test_likes.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 

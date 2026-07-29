@@ -24,15 +24,19 @@ async function submit() {
 </script>
 
 <template>
-  <div class="card" style="max-width: 420px; margin: 2rem auto;">
-    <h2>{{ $t('auth.forgot_heading') }}</h2>
+  <div class="card auth-card">
+    <h1 class="auth-title">{{ $t('auth.forgot_heading') }}</h1>
     <form @submit.prevent="submit">
-      <label>{{ $t('auth.email') }}</label>
-      <input v-model="email" type="email" required autofocus />
-      <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
+      <label for="forgot-email">{{ $t('auth.email') }}</label>
+      <input id="forgot-email" v-model="email" type="email" autocomplete="email" required autofocus />
+      <button :disabled="loading" style="margin-top: var(--sp-4); width: 100%;">
         {{ loading ? $t('common.loading') : $t('auth.send_reset') }}
       </button>
     </form>
-    <p v-if="message" :class="isError ? 'error' : 'ok'" style="margin-top: 1rem;">{{ message }}</p>
+    <p v-if="message" :class="isError ? 'error' : 'ok'" :role="isError ? 'alert' : 'status'"
+       style="margin-top: var(--sp-4);">{{ message }}</p>
+    <nav class="auth-links">
+      <router-link to="/login">{{ $t('auth.log_in_link') }}</router-link>
+    </nav>
   </div>
 </template>

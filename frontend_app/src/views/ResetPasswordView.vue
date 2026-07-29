@@ -33,17 +33,25 @@ async function submit() {
 </script>
 
 <template>
-  <div class="card" style="max-width: 420px; margin: 2rem auto;">
-    <h2>Reset password</h2>
+  <div class="card auth-card">
+    <h1 class="auth-title">Reset password</h1>
     <form @submit.prevent="submit">
-      <label>New password</label>
-      <input v-model="password" type="password" required minlength="8" autocomplete="new-password" />
-      <label>Confirm password</label>
-      <input v-model="confirm" type="password" required minlength="8" />
-      <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
-      <button :disabled="loading || !token" style="margin-top: 1rem; width: 100%;">
+      <label for="reset-pw">New password</label>
+      <input id="reset-pw" v-model="password" type="password" required minlength="8"
+             autocomplete="new-password" aria-describedby="reset-pw-hint" />
+      <p id="reset-pw-hint" class="muted" style="margin-top: var(--sp-2);">
+        At least 8 characters, and not one that has appeared in a known breach.
+      </p>
+      <label for="reset-pw-confirm">Confirm password</label>
+      <input id="reset-pw-confirm" v-model="confirm" type="password" required minlength="8"
+             autocomplete="new-password" />
+      <p v-if="error" class="error" role="alert" style="margin-top: var(--sp-3);">{{ error }}</p>
+      <button :disabled="loading || !token" style="margin-top: var(--sp-4); width: 100%;">
         {{ loading ? 'Saving…' : 'Update password' }}
       </button>
     </form>
+    <nav class="auth-links">
+      <router-link to="/login">Back to login</router-link>
+    </nav>
   </div>
 </template>

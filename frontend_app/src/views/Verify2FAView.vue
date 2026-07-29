@@ -73,38 +73,51 @@ async function submitPasskey() {
 </script>
 
 <template>
-  <div class="card" style="max-width: 460px; margin: 2rem auto;">
-    <h2>Two-factor verification</h2>
+  <div class="card auth-card wide">
+    <h1 class="auth-title">Two-factor verification</h1>
     <p class="muted">Pick a verification method enrolled on your account.</p>
 
-    <div class="tabs" style="display: flex; gap: 0.5rem; margin: 1rem 0;">
-      <button v-if="methods.includes('totp')"     :class="{ active: tab==='totp' }"     @click="tab='totp'">Authenticator app</button>
-      <button v-if="methods.includes('webauthn')" :class="{ active: tab==='webauthn' }" @click="tab='webauthn'">Passkey / security key</button>
-      <button v-if="methods.includes('recovery')" :class="{ active: tab==='recovery' }" @click="tab='recovery'">Recovery code</button>
+    <!-- role=tablist rather than three loose buttons: without it a screen
+         reader announces them as unrelated controls and never says which
+         one is selected. The .tabs styling wraps to one row each when the
+         labels cannot fit side by side. -->
+    <div class="tabs" role="tablist" aria-label="Verification method">
+      <button v-if="methods.includes('totp')" role="tab" type="button"
+              :aria-selected="tab==='totp'" :class="{ active: tab==='totp' }"
+              @click="tab='totp'">Authenticator app</button>
+      <button v-if="methods.includes('webauthn')" role="tab" type="button"
+              :aria-selected="tab==='webauthn'" :class="{ active: tab==='webauthn' }"
+              @click="tab='webauthn'">Passkey</button>
+      <button v-if="methods.includes('recovery')" role="tab" type="button"
+              :aria-selected="tab==='recovery'" :class="{ active: tab==='recovery' }"
+              @click="tab='recovery'">Recovery code</button>
     </div>
 
     <form v-if="tab==='totp'" @submit.prevent="submitTotp">
       <label for="totp-code">6-digit code</label>
-      <input id="totp-code" v-model="totpCode" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autofocus autocomplete="one-time-code" required />
-      <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
-      <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
+      <input id="totp-code" v-model="totpCode" inputmode="numeric" pattern="[0-9]{6}"
+             maxlength="6" autofocus autocomplete="one-time-code" required class="code-input" />
+      <p v-if="error" class="error" role="alert" style="margin-top: var(--sp-3);">{{ error }}</p>
+      <button :disabled="loading" style="margin-top: var(--sp-4); width: 100%;">
         {{ loading ? 'Verifying…' : 'Verify' }}
       </button>
     </form>
 
     <div v-if="tab==='webauthn'">
       <p class="muted">Use your security key or platform authenticator (Touch ID, Windows Hello, …).</p>
-      <p v-if="error" class="error">{{ error }}</p>
-      <button :disabled="loading" @click="submitPasskey" style="width: 100%;">
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <button :disabled="loading" @click="submitPasskey" style="margin-top: var(--sp-4); width: 100%;">
         {{ loading ? 'Waiting on authenticator…' : 'Authenticate with passkey' }}
       </button>
     </div>
 
     <form v-if="tab==='recovery'" @submit.prevent="submitRecovery">
       <label for="recov-code">Recovery code (XXXX-XXXX)</label>
-      <input id="recov-code" v-model="recoveryCode" placeholder="ABCD-EFGH" autofocus required />
-      <p v-if="error" class="error" style="margin-top: 0.75rem;">{{ error }}</p>
-      <button :disabled="loading" style="margin-top: 1rem; width: 100%;">
+      <input id="recov-code" v-model="recoveryCode" placeholder="ABCD-EFGH"
+             autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
+             autofocus required class="code-input" />
+      <p v-if="error" class="error" role="alert" style="margin-top: var(--sp-3);">{{ error }}</p>
+      <button :disabled="loading" style="margin-top: var(--sp-4); width: 100%;">
         {{ loading ? 'Verifying…' : 'Sign in' }}
       </button>
     </form>
@@ -112,10 +125,10 @@ async function submitPasskey() {
 </template>
 
 <style scoped>
-.tabs button {
-  flex: 1; padding: 0.45rem 0.6rem; background: transparent;
-  border: 1px solid var(--border, #ddd); border-radius: 6px;
-  font-size: 0.9rem; cursor: pointer;
+/* One-time codes are read off a screen and typed character by character;
+   proportional text makes transposition errors easy to miss. */
+.code-input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
 }
-.tabs button.active { background: var(--accent, #2563eb); color: white; border-color: transparent; }
 </style>

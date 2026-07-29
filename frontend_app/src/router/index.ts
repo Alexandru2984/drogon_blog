@@ -15,7 +15,9 @@ const routes: RouteRecordRaw[] = [
   { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },
   { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue') },
   { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true } },
-  { path: '/:catchAll(.*)',     redirect: '/' },
+  // A real 404 rather than a redirect to '/'. Silently landing a bad link on
+  // the feed makes a broken URL indistinguishable from a working one.
+  { path: '/:catchAll(.*)',     name: 'not-found',     component: () => import('@/views/NotFoundView.vue') },
 ]
 
 export const router = createRouter({

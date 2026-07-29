@@ -932,34 +932,63 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
                                   std::function<void(const HttpResponsePtr &)> &&callback,
                                   int postId)
 {
+    // Anonymous readers get the count only. For a signed-in reader we also
+    // report whether *they* have liked it, because without that the client
+    // cannot render a like control that knows its own state — the UI used to
+    // show a Like button beside an Unlike button and guess.
+    auto session = req->session();
+    const auto userIdOpt = session ? session->getOptional<int>("user_id")
+                                   : std::optional<int>{};
+
     auto dbClient = drogon::app().getDbClient();
 
     try {
         // count(*) instead of materialising every like row just to call
         // .size() — a viral post would otherwise pull thousands of rows
         // across the wire to produce a single integer.
+        //
+        // The membership test rides along in the same round trip. $2 is the
+        // viewer id, or 0 for an anonymous reader — no user has id 0, so the
+        // EXISTS is simply false. The explicit ::int cast pins the parameter
+        // type: Postgres otherwise infers it from context, and a mismatch
+        // against Drogon's int32 bind fails at the binary protocol level.
         auto r = dbClient->execSqlSync(
-            "SELECT count(*) AS n FROM likes WHERE post_id = $1", postId);
+            "SELECT count(*) AS n,"
+            "       bool_or(user_id = $2::int) AS liked"
+            "  FROM likes WHERE post_id = $1",
+            postId, userIdOpt.value_or(0));
         const long long count = r[0]["n"].as<long long>();
+        // bool_or over an empty set is NULL, not false.
+        const bool liked = !r[0]["liked"].isNull() && r[0]["liked"].as<bool>();
 
-        // ETag = (post_id, count). likes is just a join row that gets
-        // created/dropped by like/unlike — count is the entire payload,
-        // so any change yields a new ETag without further state.
+        // ETag = (post_id, count, viewer's own like). likes is just a join row
+        // that gets created/dropped by like/unlike — count is nearly the
+        // entire payload, so any change yields a new ETag without further
+        // state. The viewer's own flag has to be in the key as well, or two
+        // readers with the same count would share a cache entry that
+        // disagrees about which of them pressed the button.
         const std::string etag = http_cache::makeWeakEtag({
             "likes-count", std::to_string(postId),
             std::to_string(count),
+            liked ? "1" : "0",
         });
+        // The body now varies per viewer, so Vary: Cookie — which also makes
+        // applyCacheHeaders downgrade Cache-Control from public to private,
+        // keeping shared caches from holding it at all.
+        constexpr std::string_view kVary = "Cookie";
+
         if (http_cache::ifNoneMatchHit(req, etag)) {
-            callback(http_cache::makeNotModified(etag));
+            callback(http_cache::makeNotModified(etag, 0, kVary));
             return;
         }
 
         Json::Value ret;
         ret["post_id"] = postId;
         ret["likes_count"] = static_cast<Json::Int64>(count);
+        ret["liked"] = liked;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
-        http_cache::applyCacheHeaders(resp, etag);
+        http_cache::applyCacheHeaders(resp, etag, 0, kVary);
         callback(resp);
     } catch (const DrogonDbException &e) {
         LOG_ERROR << "DB Error: " << e.base().what();

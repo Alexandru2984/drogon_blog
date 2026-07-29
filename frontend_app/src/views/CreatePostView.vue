@@ -70,25 +70,40 @@ async function submit() {
 </script>
 
 <template>
-  <h1>New post</h1>
+  <h1 class="page-title">New post</h1>
   <form @submit.prevent="submit" class="card">
     <label for="post-title">Title</label>
     <input id="post-title" v-model="title" required maxlength="200" />
+
     <label for="post-content">Content</label>
-    <textarea id="post-content" ref="contentEl" v-model="content" required rows="12"></textarea>
-    <div class="toolbar" style="margin-top: 0.5rem;">
-      <button type="button" class="btn ghost"
+    <textarea id="post-content" ref="contentEl" v-model="content" required rows="12"
+              aria-describedby="post-content-hint"></textarea>
+    <p id="post-content-hint" class="muted" style="margin-top: var(--sp-2);">
+      Markdown is supported — headings, lists, links, tables and fenced code.
+    </p>
+
+    <div class="row tight" style="margin-top: var(--sp-3);">
+      <button type="button" class="ghost"
               :disabled="uploadingImage"
               @click="imageInput?.click()">
-        {{ uploadingImage ? 'Uploading…' : '🖼 Insert image' }}
+        <span aria-hidden="true">🖼</span>
+        {{ uploadingImage ? 'Uploading…' : 'Insert image' }}
       </button>
+      <!-- display:none, not .visually-hidden: the button above is the
+           labelled control and this input is only ever clicked
+           programmatically, so it should stay out of the accessibility
+           tree entirely rather than become a second, unlabelled one. -->
       <input ref="imageInput" type="file" accept="image/jpeg,image/png,image/webp"
              style="display: none" @change="onImagePicked" />
-      <span class="muted" style="font-size: 0.85em;">JPEG / PNG / WebP, up to 8 MB</span>
+      <span class="muted">JPEG / PNG / WebP, up to 8 MB</span>
     </div>
-    <p v-if="error" class="error">{{ error }}</p>
-    <div class="toolbar" style="margin-top: 1rem;">
-      <button :disabled="loading || !title || !content">
+
+    <p v-if="error" class="error" role="alert" style="margin-top: var(--sp-3);">{{ error }}</p>
+
+    <!-- The two actions wrap onto separate rows rather than shrinking; at
+         320 px "Publishing…" and "Cancel" side by side clipped both. -->
+    <div class="row tight" style="margin-top: var(--sp-5);">
+      <button :disabled="loading || !title.trim() || !content.trim()">
         {{ loading ? 'Publishing…' : 'Publish' }}
       </button>
       <router-link to="/" class="btn ghost">Cancel</router-link>

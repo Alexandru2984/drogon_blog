@@ -81,6 +81,9 @@ export const postsApi = {
     return api.delete(`/posts/${id}/like`).then(r => r.data)
   },
   likesCount(id: number) {
-    return api.get<{ post_id: number; likes_count: number }>(`/posts/${id}/likes`).then(r => r.data)
+    // `liked` is the viewer's own state; always false for anonymous readers.
+    return api
+      .get<{ post_id: number; likes_count: number; liked: boolean }>(`/posts/${id}/likes`)
+      .then(r => r.data)
   },
 }

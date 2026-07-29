@@ -26,11 +26,22 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="card" style="max-width: 480px; margin: 2rem auto; text-align: center;">
-    <h2>Email verification</h2>
-    <p :class="state === 'ok' ? 'ok' : state === 'error' ? 'error' : 'muted'">
+  <div class="card auth-card wide" style="text-align: center;">
+    <h1 class="auth-title">Email verification</h1>
+    <p class="verify-mark" aria-hidden="true">
+      {{ state === 'ok' ? '✅' : state === 'error' ? '⚠️' : '⏳' }}
+    </p>
+    <p :class="state === 'ok' ? 'ok' : state === 'error' ? 'error' : 'muted'"
+       :role="state === 'error' ? 'alert' : 'status'">
       {{ message }}
     </p>
-    <p v-if="state === 'ok'"><router-link to="/login">Continue to login →</router-link></p>
+    <nav class="auth-links">
+      <router-link v-if="state === 'ok'" to="/login" class="btn">Continue to login</router-link>
+      <router-link v-else-if="state === 'error'" to="/">Back to the feed</router-link>
+    </nav>
   </div>
 </template>
+
+<style scoped>
+.verify-mark { font-size: var(--step-4); line-height: 1; margin: var(--sp-4) 0 var(--sp-3); }
+</style>

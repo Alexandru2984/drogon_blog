@@ -20,6 +20,7 @@ async function run(query: string) {
   if (!query) {
     hits.value = []
     total.value = 0
+    lastQuery.value = ''
     return
   }
   loading.value = true
@@ -44,6 +45,10 @@ function submit() {
 function formatDate(s: string) {
   return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
 }
+function isoDate(s: string) {
+  const d = new Date(s.replace(' ', 'T') + 'Z')
+  return isNaN(d.getTime()) ? '' : d.toISOString()
+}
 
 onMounted(() => {
   input.value = q.value
@@ -56,63 +61,108 @@ watch(q, (v) => {
 </script>
 
 <template>
-  <h1>Search</h1>
+  <h1 class="page-title">Search</h1>
 
-  <form @submit.prevent="submit" class="card">
+  <form @submit.prevent="submit" class="card" role="search">
+    <label for="search-q" class="visually-hidden">Search posts</label>
+    <!-- No autofocus. On a phone it opens the keyboard the instant the route
+         renders, covering half the screen before the reader has decided they
+         want to type — and it steals focus from the skip link. -->
     <input
+      id="search-q"
       v-model="input"
       type="search"
       placeholder="Search title and content…"
-      autofocus
+      enterkeyhint="search"
     />
-    <div class="toolbar" style="margin-top: 0.75rem;">
+    <div class="row tight" style="margin-top: var(--sp-3);">
       <button>Search</button>
-      <span v-if="lastQuery && !loading" class="muted">
+      <span v-if="lastQuery && !loading" class="muted" role="status">
         {{ total }} result{{ total === 1 ? '' : 's' }} for “{{ lastQuery }}”
       </span>
     </div>
   </form>
 
-  <p v-if="loading" class="muted">Searching…</p>
-  <p v-else-if="error" class="error">{{ error }}</p>
-  <p v-else-if="q && !hits.length" class="muted">No matches.</p>
+  <template v-if="loading">
+    <p class="visually-hidden" role="status">Searching…</p>
+    <article v-for="n in 3" :key="n" class="card hit-skeleton" aria-hidden="true">
+      <div class="row tight">
+        <span class="avatar sm skeleton"></span>
+        <div style="flex: 1;"><div class="skeleton line short"></div></div>
+      </div>
+      <div class="skeleton line" style="height: 1.3em; width: 60%;"></div>
+      <div class="skeleton line medium"></div>
+    </article>
+  </template>
 
-  <article v-for="h in hits" :key="h.id" class="card">
-    <header class="toolbar" style="margin-bottom: 0.5rem;">
+  <div v-else-if="error" class="empty-state" role="alert">
+    <span class="emoji" aria-hidden="true">⚠️</span>
+    <p class="error">{{ error }}</p>
+  </div>
+
+  <div v-else-if="q && !hits.length" class="empty-state">
+    <span class="emoji" aria-hidden="true">🔍</span>
+    <p>Nothing matched “{{ q }}”. Try fewer or more general words.</p>
+  </div>
+
+  <div v-else-if="!q" class="empty-state">
+    <span class="emoji" aria-hidden="true">✨</span>
+    <p>Type something above to search every post.</p>
+  </div>
+
+  <article v-for="h in hits" :key="h.id" class="card hit">
+    <header class="row tight hit-head">
       <span
-        class="avatar"
+        class="avatar sm"
         :style="h.author?.profile_image ? `background-image: url(${h.author.profile_image})` : ''"
+        aria-hidden="true"
       ></span>
-      <div>
+      <div class="hit-meta">
         <router-link
           v-if="h.author"
           :to="{ name: 'profile', params: { id: h.author.id } }"
-          style="font-weight: 600;"
+          class="hit-author meta-link"
         >{{ h.author.username }}</router-link>
-        <div class="muted" style="font-size: 0.8em;">
-          {{ formatDate(h.created_at) }} · rank {{ h.rank.toFixed(3) }}
-        </div>
+        <span class="muted">
+          <time v-if="isoDate(h.created_at)" :datetime="isoDate(h.created_at)">
+            {{ formatDate(h.created_at) }}
+          </time>
+          · rank {{ h.rank.toFixed(3) }}
+        </span>
       </div>
     </header>
 
-    <router-link :to="{ name: 'post', params: { id: h.id } }" style="color: var(--text);">
-      <h2 style="margin-bottom: 0.25rem;">{{ h.title }}</h2>
-    </router-link>
+    <h2 class="hit-title">
+      <router-link :to="{ name: 'post', params: { id: h.id } }">{{ h.title }}</router-link>
+    </h2>
 
     <!-- Snippet is server-built HTML containing only <mark> tags around hit
          terms; the rest is escaped by Postgres' ts_headline. sanitizeHtml is
          a client-side second wall (defense-in-depth). -->
     <p class="post-content snippet" v-html="sanitizeHtml(h.snippet)"></p>
 
-    <div class="toolbar muted" style="margin-top: 0.5rem;">
-      <router-link :to="{ name: 'post', params: { id: h.id } }">Open →</router-link>
-    </div>
+    <router-link :to="{ name: 'post', params: { id: h.id } }" class="link-action">
+      Open <span aria-hidden="true">→</span>
+    </router-link>
   </article>
 </template>
 
 <style scoped>
+.hit, .hit-skeleton { display: flex; flex-direction: column; gap: var(--sp-3); }
+.hit-head { margin: 0; }
+.hit-meta { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.hit-author { font-weight: 600; }
+.hit-meta .muted { font-size: 0.78rem; }
+
+/* A result is one row in a list, not a page heading — the global h2 scale
+   runs to 2.15rem and made every hit shout. */
+.hit-title { margin: 0; font-size: var(--step-1); line-height: 1.3; overflow-wrap: anywhere; }
+.hit-title a { color: var(--text); }
+.hit-title a:hover { color: var(--accent); text-decoration: none; }
+
+.snippet { margin: 0; color: var(--text-dim); }
 .snippet :deep(mark) {
-  background: rgba(124, 92, 255, 0.25);
+  background: var(--accent-soft);
   color: var(--text);
   padding: 0 2px;
   border-radius: 2px;

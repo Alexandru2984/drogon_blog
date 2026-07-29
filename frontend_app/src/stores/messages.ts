@@ -24,9 +24,28 @@ let reconnectMs = 1000
 let keepalive: ReturnType<typeof setInterval> | null = null
 let manualClose = false
 
+// Posts whose live comments this client wants. The socket may not be open at
+// the moment a view asks — PostView subscribes in onMounted, which for a cold
+// page load runs long before the handshake completes — so the intent is kept
+// here and replayed on open. Previously the request was simply dropped and
+// live comments never arrived on a first page view.
+const desiredPostSubs = new Set<number>()
+
+// How many consecutive failed handshakes before we stop trying. When the
+// endpoint is unreachable for a structural reason (a proxy that does not
+// forward the upgrade, WebSockets disabled at the CDN) retrying forever
+// means every visitor burns a failed request every 30 s for the whole
+// session and fills the console with errors, which buries real ones.
+const MAX_CONSECUTIVE_FAILURES = 6
+let consecutiveFailures = 0
+
 export const useMessagesStore = defineStore('messages', () => {
   const conversations = ref<Map<number, Conversation>>(new Map())
   const connected     = ref(false)
+  // Set once we have given up reconnecting. Lets the UI say "no live
+  // updates" instead of a permanently "connecting…" indicator that never
+  // resolves. Everything else on the page still works over REST.
+  const liveUnavailable = ref(false)
   // Live comments pushed from the server, keyed by post id. PostView watches
   // its own slice and appends entries that aren't already on screen. The
   // store doesn't try to be the source of truth for the full comment list —
@@ -88,6 +107,13 @@ export const useMessagesStore = defineStore('messages', () => {
 
   function clear() {
     conversations.value = new Map()
+    liveCommentsByPost.value = new Map()
+    desiredPostSubs.clear()
+    // A new sign-in deserves a fresh attempt: the previous session may have
+    // given up while the network was down.
+    liveUnavailable.value = false
+    consecutiveFailures = 0
+    reconnectMs = 1000
   }
 
   async function refreshInbox() {
@@ -151,6 +177,7 @@ export const useMessagesStore = defineStore('messages', () => {
 
   function connectSocket() {
     if (!auth.isAuthed) return
+    if (liveUnavailable.value) return
     if (socket && (socket.readyState === WebSocket.OPEN ||
                    socket.readyState === WebSocket.CONNECTING)) return
 
@@ -161,6 +188,11 @@ export const useMessagesStore = defineStore('messages', () => {
     socket.onopen = () => {
       connected.value = true
       reconnectMs = 1000
+      consecutiveFailures = 0
+      // Replay whatever views asked for while the socket was down.
+      for (const postId of desiredPostSubs) {
+        socket!.send(JSON.stringify({ type: 'subscribe_post', post_id: postId }))
+      }
       // Application-level keepalive — Drogon also sends WS pings, but a
       // small text echo here keeps NAT mappings warm.
       if (keepalive) clearInterval(keepalive)
@@ -184,9 +216,20 @@ export const useMessagesStore = defineStore('messages', () => {
     }
 
     socket.onclose = () => {
+      const wasConnected = connected.value
       connected.value = false
       if (keepalive) { clearInterval(keepalive); keepalive = null }
       if (manualClose || !auth.isAuthed) return
+
+      // A close that follows a successful open is an ordinary drop (server
+      // restart, network blip) and resets the failure budget. A close that
+      // never opened is a failed handshake and counts against it.
+      if (wasConnected) consecutiveFailures = 0
+      else if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        liveUnavailable.value = true
+        return
+      }
+
       const delay = reconnectMs
       reconnectMs = Math.min(30_000, reconnectMs * 2)
       setTimeout(() => connectSocket(), delay)
@@ -205,20 +248,26 @@ export const useMessagesStore = defineStore('messages', () => {
     connected.value = false
   }
 
+  // Record the intent first, then send if we can. onopen replays the set,
+  // so a view that mounts before the handshake finishes still ends up
+  // subscribed instead of silently missing every live comment.
   function subscribePost(postId: number) {
+    desiredPostSubs.add(postId)
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'subscribe_post', post_id: postId }))
   }
 
   function unsubscribePost(postId: number) {
+    desiredPostSubs.delete(postId)
+    liveCommentsByPost.value.delete(postId)
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'unsubscribe_post', post_id: postId }))
-    liveCommentsByPost.value.delete(postId)
   }
 
   return {
     conversations,
     connected,
+    liveUnavailable,
     totalUnread,
     liveCommentsByPost,
     refreshInbox,

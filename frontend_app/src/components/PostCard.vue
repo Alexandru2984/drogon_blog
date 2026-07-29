@@ -38,7 +38,7 @@ const isoDate = computed(() => {
         <router-link
           v-if="post.author"
           :to="{ name: 'profile', params: { id: post.author.id } }"
-          class="post-card-author"
+          class="post-card-author meta-link"
         >{{ post.author.username }}</router-link>
         <span v-else class="muted">unknown</span>
         <time v-if="isoDate" :datetime="isoDate" class="muted">
@@ -55,7 +55,7 @@ const isoDate = computed(() => {
 
     <p class="post-content post-card-excerpt">{{ excerpt }}</p>
 
-    <router-link :to="{ name: 'post', params: { id: post.id } }" class="post-card-more">
+    <router-link :to="{ name: 'post', params: { id: post.id } }" class="link-action post-card-more">
       Read <span aria-hidden="true">→</span>
     </router-link>
   </article>
@@ -98,5 +98,5 @@ const isoDate = computed(() => {
   overflow: hidden;
 }
 
-.post-card-more { font-size: var(--step--1); font-weight: 550; align-self: start; }
+.post-card-more { font-size: var(--step--1); align-self: start; }
 </style>
