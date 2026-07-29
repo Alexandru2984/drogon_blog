@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useAuthStore }     from '@/stores/auth'
@@ -46,16 +46,70 @@ watch(isAuthed, (now) => {
 // asked for.
 watch(() => route.fullPath, () => { drawerOpen.value = false })
 
-// Escape closes the drawer. Without it a keyboard user who opens the menu
-// has no way out except tabbing to the close button.
+// --- Drawer keyboard handling -------------------------------------------
+//
+// The drawer is role="dialog" aria-modal="true", which is a promise to a
+// keyboard or screen-reader user that focus is inside it and stays there.
+// It was not being kept: opening the menu left focus on the toggle, seven
+// Tab presses walked out into the page behind the overlay — content the user
+// cannot see and did not ask for — and Escape dropped focus wherever it had
+// wandered to instead of bringing it back. Each of the three is fixed below.
+
+const drawerEl = ref<HTMLElement | null>(null)
+// Where focus was before the drawer opened, so it can be given back.
+let lastFocused: HTMLElement | null = null
+
+function focusableIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(el => el.offsetParent !== null || el === document.activeElement)
+}
+
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && drawerOpen.value) drawerOpen.value = false
+  if (!drawerOpen.value) return
+
+  if (e.key === 'Escape') {
+    drawerOpen.value = false
+    return
+  }
+
+  if (e.key !== 'Tab' || !drawerEl.value) return
+
+  // Cycle within the drawer. Without this the tab order continues into the
+  // document behind the overlay.
+  const items = focusableIn(drawerEl.value)
+  if (!items.length) return
+  const first = items[0]
+  const last  = items[items.length - 1]
+  const active = document.activeElement as HTMLElement | null
+
+  if (e.shiftKey && (active === first || !drawerEl.value.contains(active))) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && (active === last || !drawerEl.value.contains(active))) {
+    e.preventDefault()
+    first.focus()
+  }
 }
 
 // Scroll locking while the drawer is open, so the page behind it does not
-// move under the user's finger on a phone.
-watch(drawerOpen, (open) => {
+// move under the user's finger on a phone; plus focus in on open and back
+// out on close.
+watch(drawerOpen, async (open) => {
   document.body.style.overflow = open ? 'hidden' : ''
+
+  if (open) {
+    lastFocused = document.activeElement as HTMLElement | null
+    await nextTick()
+    if (drawerEl.value) focusableIn(drawerEl.value)[0]?.focus()
+  } else if (lastFocused && document.contains(lastFocused)) {
+    // Returning focus to the control that opened the drawer is what keeps a
+    // keyboard user's place. If that element is gone (logout removed it),
+    // fall back to the document rather than leaving focus on a detached node.
+    lastFocused.focus()
+    lastFocused = null
+  }
 })
 
 onMounted(() => {
@@ -137,7 +191,7 @@ const unread = computed(() => messages.totalUnread)
        accessibility tree twice alongside the desktop nav. -->
   <template v-if="drawerOpen">
     <div class="drawer-backdrop" @click="drawerOpen = false"></div>
-    <div id="mobile-drawer" class="drawer" role="dialog" aria-modal="true" aria-label="Menu">
+    <div id="mobile-drawer" ref="drawerEl" class="drawer" role="dialog" aria-modal="true" aria-label="Menu">
       <form role="search" @submit.prevent="submitSearch">
         <input
           v-model="searchInput"

@@ -27,7 +27,10 @@
 
   --text:        #14161c;
   --text-dim:    #5b6472;
-  --text-faint:  #838d9c;
+  /* 4.77:1 against the page, card and inset backgrounds — the previous
+     #838d9c was 3.16:1 and failed AA for body text everywhere it was used
+     (the footer, the bottom tab bar labels, every placeholder). */
+  --text-faint:  #5e6877;
 
   --accent:       #5b3df5;
   --accent-hover: #4a2ee0;
@@ -36,6 +39,10 @@
 
   --danger:      #d1293d;
   --danger-soft: #fdeaec;
+  /* Foreground for a --danger *fill*. Mirrors --accent-text: the danger
+     hue is tuned for text on the page background, and in dark mode it is
+     light enough that white-on-danger drops to 2.75:1. */
+  --danger-text: #ffffff;   /* 5.13:1 on #d1293d */
   --ok:          #17794b;
   --ok-soft:     #e4f5ec;
   --warn:        #a25b00;
@@ -101,7 +108,7 @@
 
     --text:        #e7eaf0;
     --text-dim:    #9aa4b6;
-    --text-faint:  #6f7a8c;
+    --text-faint:  #8893a5;   /* 4.74:1 on the dark surfaces; #6f7a8c was 4.42:1 */
 
     --accent:       #8b7cff;
     --accent-hover: #9d90ff;
@@ -110,6 +117,7 @@
 
     --danger:      #ff6b7a;
     --danger-soft: #2c1519;
+    --danger-text: #0d0f14;   /* 6.97:1 on #ff6b7a; white would be 2.75:1 */
     --ok:          #4ecf92;
     --ok-soft:     #12271d;
     --warn:        #e0a34a;
@@ -131,13 +139,14 @@
   --border-soft: #212633;
   --text:        #e7eaf0;
   --text-dim:    #9aa4b6;
-  --text-faint:  #6f7a8c;
+  --text-faint:  #8893a5;   /* see the prefers-color-scheme block above */
   --accent:       #8b7cff;
   --accent-hover: #9d90ff;
   --accent-soft:  #221d3d;
   --accent-text:  #0d0f14;
   --danger:      #ff6b7a;
   --danger-soft: #2c1519;
+  --danger-text: #0d0f14;
   --ok:          #4ecf92;
   --ok-soft:     #12271d;
   --warn:        #e0a34a;
@@ -197,6 +206,20 @@ a {
   text-underline-offset: 0.18em;
 }
 a:hover { text-decoration: underline; }
+
+/* WCAG 1.4.1: a link sitting inside a block of text may not be distinguished
+   by colour alone — a reader who cannot separate the two hues has nothing to
+   go on until they hover. Links that are their own block (nav items, buttons,
+   cards, the tab bar) are exempt because their position already identifies
+   them, so this is scoped to running prose rather than applied to every `a`.
+   Underlined by default, so hover adds emphasis rather than information. */
+.post-body a,
+.empty-state a:not(.btn),
+footer a,
+p > a {
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+}
 
 img, svg, video { max-width: 100%; height: auto; }
 
@@ -318,7 +341,7 @@ button.quiet, .btn.quiet {
 }
 button.quiet:hover, .btn.quiet:hover { background: var(--bg-elev2); color: var(--text); }
 
-button.danger, .btn.danger { background: var(--danger); color: #fff; }
+button.danger, .btn.danger { background: var(--danger); color: var(--danger-text); }
 button.danger:hover { filter: brightness(0.92); background: var(--danger); }
 
 button.sm, .btn.sm {
