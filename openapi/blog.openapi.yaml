@@ -25,10 +25,25 @@ info:
 
     **Rate limiting**
 
-    `/auth/login`, `/auth/register`, `/auth/request-reset`,
-    `/auth/resend-verification` and `/posts/search` carry per-IP
-    token-bucket budgets. Exceeding the budget returns `429` with a
-    `Retry-After` header.
+    Two layers, and they answer different attacks.
+
+    Per-IP token buckets sit in front of `/auth/login`, `/auth/register`,
+    `/auth/request-reset`, `/auth/resend-verification`,
+    `/auth/reset-password` and `/posts/search`.
+
+    Per-account buckets sit inside the handler for everything that costs
+    real work or is an oracle for a secret: `/auth/change-password`, the
+    TOTP enrolment pair, `/posts` and `/posts/images` and `/posts/preview`,
+    comment creation, message sending, avatar upload, `/reports`, and both
+    `/account/*` endpoints. Per-account rather than per-IP because the
+    caller is already authenticated — rotating IPs is not supposed to buy
+    them a fresh budget.
+
+    Exceeding either returns `429` with a `Retry-After` header. Responses
+    also carry advisory `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+    `X-RateLimit-Reset` headers, on success as well as on rejection, so a
+    client can see the shape of its budget without having to hit the wall
+    first.
   contact:
     name: Drogon Blog
     url: https://github.com/micutu/drogon_blog
@@ -58,6 +73,18 @@ tags:
     description: Public profiles + the signed-in user's own profile / avatar.
   - name: Ops
     description: Health, readiness, and Prometheus metrics for the running process.
+  - name: Tags
+    description: Post tags — the slug-normalised labels a post is filed under.
+  - name: Social
+    description: Bookmarks, author follows, and the personalised following feed.
+  - name: Notifications
+    description: What happened while you were away — replies, follows, new posts from authors you follow.
+  - name: Privacy
+    description: Data portability and erasure — download a copy of the account, or end it.
+  - name: Moderation
+    description: Abuse reports, plus the staff-only queue and the hide / suspend actions behind it.
+  - name: Flags
+    description: Feature flags as evaluated for the calling user.
 
 security:
   - sessionCookie: []
@@ -1250,6 +1277,810 @@ paths:
                   blog_uptime_seconds 1234
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  # ---------------------------------------------------------------- Tags
+  /tags:
+    get:
+      tags: [Tags]
+      summary: Every tag in use, with post counts
+      description: |
+        Tags are stored by slug, so `C++`, `c++` and ` C ++ ` are one tag.
+        `label` is the spelling the first author to use it typed, which is
+        what gets displayed; `slug` is what the URL carries.
+
+        Tags with no remaining posts are not listed — they are swept by
+        `scripts/cleanup.sh` rather than lingering as empty links.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tags]
+                properties:
+                  tags:
+                    type: array
+                    items: { $ref: '#/components/schemas/TagSummary' }
+
+  /tags/{slug}/posts:
+    get:
+      tags: [Tags]
+      summary: Published posts carrying a tag
+      description: |
+        Drafts and hidden posts are excluded, so this is safe to serve to an
+        anonymous reader.
+
+        An unknown slug answers `200` with an empty list rather than `404`:
+        tags are swept once they have no posts left, so "no such tag" and
+        "that tag has nothing in it" are the same state, and a client
+        rendering a tag page should show an empty page either way.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string, maxLength: 39 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tag:   { type: string }
+                  count: { type: integer }
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+
+  # ------------------------------------------------------- Posts (extras)
+  /posts/drafts:
+    get:
+      tags: [Posts]
+      summary: The signed-in author's own drafts
+      description: |
+        A draft is a post with `published_at IS NULL`. It is invisible to
+        everyone but its author — absent from the feed, from tag listings and
+        from search, and `GET /posts/{id}` answers `404` rather than `403` for
+        anyone else, since a `403` would confirm the draft exists.
+
+        Answered `private, no-store`: unpublished work must never sit in a
+        shared cache.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /posts/preview:
+    post:
+      tags: [Posts]
+      summary: Render Markdown without saving anything
+      description: |
+        Backs the editor's live preview. Rendered server-side, through the
+        same cmark-gfm SAFE pipeline publishing uses — a second, client-side
+        renderer would be one fewer round trip and would quietly disagree,
+        and every place the two disagreed the preview would be lying about
+        what the post is going to look like.
+
+        Rate-limited per account and offloaded to the media worker pool:
+        rendering is unbounded CPU on caller-supplied input. Answered
+        `private, no-store`, because a preview is unpublished work.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, maxLength: 102400 }
+      responses:
+        '200':
+          description: Rendered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content_html:    { type: string }
+                  reading_minutes: { type: integer, minimum: 1 }
+                  excerpt:         { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /posts/{id}/related:
+    get:
+      tags: [Posts]
+      summary: Posts sharing tags with this one
+      description: |
+        Ordered by how many tags the two posts have in common, newest
+        breaking the tie. Drafts and hidden posts are excluded.
+
+        A post with no tag overlap gets an empty list rather than a
+        substitute selection of recent posts: the section claims these are
+        related, and filling it with whatever was published yesterday makes
+        that claim false.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Post'
+                        - type: object
+                          properties:
+                            shared_tags:
+                              type: integer
+                              description: How many tags this post has in common with the one being read.
+
+  /posts/images:
+    post:
+      tags: [Posts]
+      summary: Upload an inline image for a post body
+      description: |
+        The file is re-encoded, stripped of metadata and bounded in size on
+        the server, so the returned URL is always a same-origin image with no
+        EXIF and no surprise payload. Embed it as Markdown: `![](url)`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image: { type: string, format: binary }
+      responses:
+        '200':
+          description: Uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, description: Same-origin path to the stored image. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # -------------------------------------------------------------- Social
+  /bookmarks:
+    get:
+      tags: [Social]
+      summary: The signed-in reader's saved posts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /posts/{id}/bookmark:
+    post:
+      tags: [Social]
+      summary: Save a post
+      description: Idempotent — saving an already-saved post is not an error.
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookmarked: { type: boolean, const: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Social]
+      summary: Un-save a post
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookmarked: { type: boolean, const: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+
+  /users/{id}/follow:
+    post:
+      tags: [Social]
+      summary: Follow an author
+      description: |
+        Following yourself is refused by a database constraint as well as by
+        this handler. A follow makes the author's new posts appear in
+        `/feed/following` and produces a notification for each one.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Following.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  following: { type: boolean, const: true }
+        '400':
+          description: Attempted to follow yourself.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Social]
+      summary: Unfollow an author
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Unfollowed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  following: { type: boolean, const: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+
+  /users/{id}/follow-stats:
+    get:
+      tags: [Social]
+      summary: Follower and following counts for a user
+      description: |
+        `is_following` is the *caller's* relationship to this user and is
+        always false for an anonymous reader, so the response carries
+        `Vary: Cookie`.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FollowStats' }
+
+  /feed/following:
+    get:
+      tags: [Social]
+      summary: Posts from the authors the caller follows
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------- Notifications
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: The caller's notifications, newest first
+      description: |
+        Delivery is push-then-refetch: the WebSocket hub sends a nudge on the
+        shared `blog_event` channel and the client re-reads this endpoint.
+        The nudge carries no content, so nothing sensitive rides the
+        notification channel.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - name: before
+          in: query
+          description: Page backwards — return notifications with an id below this.
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+                  unread: { type: integer, format: int64 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/unread:
+    get:
+      tags: [Notifications]
+      summary: Unread count only
+      description: Backs the navigation badge, which does not need the bodies.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unread: { type: integer, format: int64 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark one notification read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Marked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unread: { type: integer, format: int64 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark every notification read
+      responses:
+        '200':
+          description: Marked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  marked: { type: integer, format: int64 }
+                  unread: { type: integer, const: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+
+  # ---------------------------------------------------------- Your data
+  /account/export:
+    post:
+      tags: [Privacy]
+      summary: Download everything the account holds
+      description: |
+        One JSON document covering the profile, posts and drafts, comments,
+        likes, bookmarks, follows in both directions, every message sent or
+        received, notifications, sign-in history and reports filed.
+
+        Reports filed *about* the caller are deliberately absent: those are
+        somebody else's statement, and returning them would deanonymise the
+        reporter.
+
+        `POST` rather than `GET` because it carries the password, and a
+        password in a URL ends up in the browser history, the `Referer`
+        header and every proxy log on the way. The password is re-verified
+        for the same reason the endpoint exists: a session cookie proves
+        somebody was signed in on this browser at some point, not that they
+        are the account holder now.
+
+        Assembled in one `REPEATABLE READ` transaction, so the sections
+        cannot disagree with each other. Answered `private, no-store` with a
+        `Content-Disposition: attachment`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: The export.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: '`attachment; filename="blog-export-<username>.json"`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountExport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            Wrong password, or the CSRF header was missing. Both are `403`;
+            the body distinguishes them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /account/delete:
+    post:
+      tags: [Privacy]
+      summary: Erase the account
+      description: |
+        Deletes the caller's posts and drafts, comments, likes, bookmarks,
+        follows, every message they sent or received, their notifications,
+        their reports and their 2FA enrolment; anonymises the profile; and
+        revokes every session including the calling one.
+
+        The `users` row survives, anonymised. It has to: `comments.parent_id`
+        is `ON DELETE CASCADE`, so deleting a comment in the middle of a
+        thread would take every reply underneath it, and those replies belong
+        to other people. A comment of the caller's that has replies is
+        tombstoned in place — text replaced, authorship detached — while
+        everything else is deleted outright. What remains carries no name,
+        address, password, picture or biography.
+
+        The username and email are released by the anonymisation, so the same
+        name can be registered again afterwards.
+
+        `confirm` must be the caller's username, typed out. That is not the
+        security control — the password is — but it is what stops an
+        irreversible action being the result of a mis-click.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, confirm]
+              properties:
+                password: { type: string, format: password }
+                confirm:
+                  type: string
+                  description: Must equal the caller's username exactly.
+      responses:
+        '200':
+          description: Erased.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  deleted:
+                    type: object
+                    description: Row counts per table, for the audit trail.
+                    additionalProperties: { type: integer }
+        '400':
+          description: Password missing, or `confirm` did not match the username.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Wrong password, or the CSRF header was missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ----------------------------------------------------------- Reporting
+  /reports:
+    post:
+      tags: [Moderation]
+      summary: Report a post or a comment
+      description: |
+        Open to any signed-in user. Rate-limited per account, because a
+        report queue that anyone can flood is a queue nobody reads.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_type, target_id, reason]
+              properties:
+                target_type: { type: string, enum: [post, comment] }
+                target_id:   { type: integer, minimum: 1 }
+                reason:      { type: string }
+                detail:      { type: string }
+      responses:
+        '201':
+          description: Filed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ---------------------------------------------------------- Moderation
+  #
+  # Every endpoint below answers 404 rather than 403 to a signed-in caller
+  # who lacks the role. The moderation surface is not something an ordinary
+  # user should be able to map: a 403 confirms the endpoint exists and is
+  # worth attacking, while a 404 makes probing it indistinguishable from
+  # probing nonsense. A missing session still gets 401 — that is not a
+  # secret.
+  /admin/reports:
+    get:
+      tags: [Moderation]
+      summary: The report queue
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, dismissed] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports:
+                    type: array
+                    items: { $ref: '#/components/schemas/Report' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/reports/{id}/resolve:
+    post:
+      tags: [Moderation]
+      summary: Close a report
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [resolved, dismissed] }
+                note:   { type: string }
+      responses:
+        '200':
+          description: Closed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report: { $ref: '#/components/schemas/Report' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/posts/{id}/hide:
+    post:
+      tags: [Moderation]
+      summary: Hide a post from every reader
+      description: |
+        Hiding, not deleting: the row stays so the report it came from still
+        points at something, and so the decision can be undone.
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: Hidden. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/posts/{id}/unhide:
+    post:
+      tags: [Moderation]
+      summary: Restore a hidden post
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200': { description: Restored. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/comments/{id}/hide:
+    post:
+      tags: [Moderation]
+      summary: Hide a comment from every reader
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: Hidden. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/comments/{id}/unhide:
+    post:
+      tags: [Moderation]
+      summary: Restore a hidden comment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Restored. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/users/{id}/ban:
+    post:
+      tags: [Moderation]
+      summary: Suspend an account
+      description: |
+        A suspension blocks writes immediately, not just new logins — a ban
+        that leaves an already-signed-in abuser posting is not a ban. It is
+        enforced centrally by a request advice rather than per handler, so a
+        new mutating endpoint cannot silently be exempt.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                days:   { type: integer, minimum: 1, default: 7 }
+                reason: { type: string }
+      responses:
+        '200': { description: Suspended. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/users/{id}/unban:
+    post:
+      tags: [Moderation]
+      summary: Lift a suspension
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Lifted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CsrfMissing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------- Feature flags
+  /flags:
+    get:
+      tags: [Flags]
+      summary: Public feature flags as evaluated for the caller
+      description: |
+        Only flags marked public are listed — the rest are not leaked by key,
+        since a flag name describes unreleased work. Cached `private` for 30 s
+        so a page load does not re-evaluate the whole set.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flags:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:     { type: string }
+                        enabled: { type: boolean }
+
+  /flags/{key}:
+    get:
+      tags: [Flags]
+      summary: One flag, evaluated for the caller
+      description: |
+        An unknown key answers `200` with `known: false, enabled: false`
+        rather than `404`. A client asking about a flag it has been shipped
+        with should get a usable answer, not an error, when the server has
+        not heard of it yet.
+      security: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:     { type: string }
+                  known:   { type: boolean }
+                  enabled: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1456,12 +2287,35 @@ components:
       properties:
         title:   { type: string, minLength: 1, maxLength: 5120 }
         content: { type: string, minLength: 1, maxLength: 102400 }
+        tags:
+          type: array
+          maxItems: 8
+          description: |
+            Free-form labels; the server slugs and deduplicates them, so
+            `["C++", "c++"]` becomes one tag. Also accepted as a single
+            comma-separated string, which is what a text input produces.
+          items: { type: string }
+        draft:
+          type: boolean
+          default: false
+          description: |
+            A draft is invisible to everyone but its author — absent from
+            the feed, tag listings and search, and `404` rather than `403`
+            to another reader.
 
     PostUpdate:
       type: object
+      description: |
+        Omitting `tags` leaves them untouched; passing an empty array clears
+        them. Omitting `draft` leaves the published state alone.
       properties:
         title:   { type: string, maxLength: 5120 }
         content: { type: string, maxLength: 102400 }
+        tags:
+          type: array
+          maxItems: 8
+          items: { type: string }
+        draft:   { type: boolean }
 
     Post:
       type: object
@@ -1470,9 +2324,43 @@ components:
         id:           { type: integer, minimum: 1 }
         title:        { type: string }
         content:      { type: string }
-        content_html: { type: string, description: Sanitized HTML render of `content`. }
+        content_html:
+          type: string
+          description: |
+            Sanitized HTML render of `content`, produced by cmark-gfm in SAFE
+            mode. Fenced code blocks carry the fence's info string on the
+            `<pre>`; the client moves it to `data-lang`, because `lang` is the
+            HTML *human language* attribute and `sql` is not a language tag.
         created_at:   { type: string, format: date-time }
         updated_at:   { type: string, format: date-time }
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null while the post is a draft.
+        is_draft:
+          type: boolean
+          description: |
+            Sent on the single-post and drafts endpoints only. The feed never
+            contains drafts, so its absence there is not a missing field.
+        reading_minutes:
+          type: integer
+          minimum: 1
+          description: Estimated at 200 words per minute; never zero, because "0 min read" reads as a bug.
+        view_count:      { type: integer, format: int64 }
+        excerpt:
+          type: string
+          description: |
+            Plain-text summary with the Markdown stripped, so a card cannot
+            show a literal `##` or a code fence.
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/Tag' }
+        bookmarked:
+          type: boolean
+          description: >-
+            The viewer's own saved state. Single-post endpoint only, so the
+            response carries `Vary: Cookie`.
         author:
           type: object
           properties:
@@ -1516,7 +2404,17 @@ components:
       required: [id, content, created_at]
       properties:
         id:         { type: integer, minimum: 1 }
-        content:    { type: string }
+        content:
+          type: string
+          description: |
+            `[deleted]` when the author erased their account and this comment
+            had replies. The row survives in that case because
+            `comments.parent_id` cascades — deleting it would delete other
+            people's replies with it.
+        parent_id:
+          type: integer
+          nullable: true
+          description: The comment this one replies to; null for a top-level comment.
         created_at: { type: string, format: date-time }
         author:
           type: object
@@ -1541,6 +2439,123 @@ components:
             True when the WS preview was truncated to fit under PG's
             8 KiB NOTIFY payload cap. Re-fetch via `/messages/conversation/{userId}`
             to get the full body.
+
+    Tag:
+      type: object
+      required: [slug, label]
+      properties:
+        slug:
+          type: string
+          maxLength: 39
+          description: |
+            Normalised identifier — what the URL carries. Slugging is what
+            makes `C++`, `c++` and ` C ++ ` one tag rather than three.
+        label:
+          type: string
+          description: The spelling the first author to use the tag typed, for display.
+
+    TagSummary:
+      allOf:
+        - $ref: '#/components/schemas/Tag'
+        - type: object
+          required: [count]
+          properties:
+            count:
+              type: integer
+              description: Published posts carrying this tag.
+
+    FollowStats:
+      type: object
+      required: [followers, following, is_following]
+      properties:
+        followers: { type: integer, format: int64 }
+        following: { type: integer, format: int64 }
+        is_following:
+          type: boolean
+          description: |
+            The *caller's* relationship to this user. Always false for an
+            anonymous reader, which is why the response carries `Vary: Cookie`.
+
+    Notification:
+      type: object
+      required: [id, kind, created_at, read]
+      properties:
+        id:         { type: integer, format: int64 }
+        kind:
+          type: string
+          enum: [comment, reply, follow, new_post, like]
+        created_at: { type: string, format: date-time }
+        read:       { type: boolean }
+        actor:
+          type: object
+          description: Who caused it. Absent when the account has since been erased.
+          properties:
+            id:            { type: integer }
+            username:      { type: string }
+            profile_image: { type: string }
+        post_id:    { type: integer }
+        comment_id: { type: integer }
+        post_title: { type: string }
+        comment_preview:
+          type: string
+          description: First characters of the comment, so the list is readable without a fetch per row.
+
+    Report:
+      type: object
+      required: [id, target_type, target_id, reason, status, created_at]
+      properties:
+        id:          { type: integer }
+        target_type: { type: string, enum: [post, comment] }
+        target_id:   { type: integer }
+        reason:      { type: string }
+        detail:      { type: string }
+        status:      { type: string, enum: [open, resolved, dismissed] }
+        created_at:  { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        resolution_note: { type: string, nullable: true }
+
+    AccountExport:
+      type: object
+      required: [export_version, generated_at, account]
+      description: |
+        Every section is always present, even when empty, so a consumer can
+        tell "you have none of these" from "this export does not cover that".
+      properties:
+        export_version: { type: integer, const: 1 }
+        generated_at:   { type: string, format: date-time }
+        account:
+          type: object
+          properties:
+            id:             { type: integer }
+            username:       { type: string }
+            email:          { type: string, format: email }
+            bio:            { type: string, nullable: true }
+            profile_image:  { type: string, nullable: true }
+            role:           { type: string }
+            email_verified: { type: boolean }
+            created_at:     { type: string, format: date-time }
+            updated_at:     { type: string, format: date-time }
+        posts:
+          type: array
+          description: Drafts included — they are the author's data too.
+          items: { type: object, additionalProperties: true }
+        comments:          { type: array, items: { type: object, additionalProperties: true } }
+        likes:             { type: array, items: { type: object, additionalProperties: true } }
+        bookmarks:         { type: array, items: { type: object, additionalProperties: true } }
+        following:         { type: array, items: { type: object, additionalProperties: true } }
+        followers:         { type: array, items: { type: object, additionalProperties: true } }
+        messages_sent:     { type: array, items: { type: object, additionalProperties: true } }
+        messages_received: { type: array, items: { type: object, additionalProperties: true } }
+        notifications:     { type: array, items: { type: object, additionalProperties: true } }
+        sessions:          { type: array, items: { type: object, additionalProperties: true } }
+        reports_filed:
+          type: array
+          description: |
+            Reports the caller filed. Not reports filed *about* them — those
+            are somebody else's statement, and returning them would
+            deanonymise the reporter.
+          items: { type: object, additionalProperties: true }
+
 
 x-websockets:
   /ws/messages:
