@@ -19,7 +19,8 @@ set(TEST_SOURCES
     test_likes.cc
     test_post_meta.cc
     test_social.cc
-    test_editor.cc)
+    test_editor.cc
+    test_privacy.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 

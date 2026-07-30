@@ -35,6 +35,15 @@ class AuthController : public drogon::HttpController<AuthController>
     ADD_METHOD_TO(AuthController::revokeSession,          "/auth/sessions/revoke",                  Post);
     ADD_METHOD_TO(AuthController::revokeOtherSessions,    "/auth/sessions/revoke-others",           Post);
 
+    // ---- Your data (authenticated user, password re-auth) ----
+    // POST rather than GET for the export because both of these re-verify
+    // the password, and a password does not belong in a URL, a referrer or
+    // a proxy access log. Deletion is POST rather than DELETE for the same
+    // reason: it carries a body, and a body on DELETE is legal but not
+    // uniformly handled by every proxy between here and the browser.
+    ADD_METHOD_TO(AuthController::exportAccountData,      "/account/export",                        Post);
+    ADD_METHOD_TO(AuthController::deleteAccount,          "/account/delete",                        Post);
+
     // ---- Two-step login completion (unauthenticated, session-bound) ----
     ADD_METHOD_TO(AuthController::verifyLoginTotp,        "/auth/login/verify-totp",                Post);
     ADD_METHOD_TO(AuthController::verifyLoginRecovery,    "/auth/login/verify-recovery",            Post);
@@ -51,6 +60,13 @@ class AuthController : public drogon::HttpController<AuthController>
                       std::function<void(const HttpResponsePtr &)> &&callback);
     void revokeOtherSessions(const HttpRequestPtr &req,
                             std::function<void(const HttpResponsePtr &)> &&callback);
+
+    // Data portability and erasure. Implementations live in
+    // AuthControllerPrivacy.cc.
+    void exportAccountData(const HttpRequestPtr &req,
+                          std::function<void(const HttpResponsePtr &)> &&callback);
+    void deleteAccount(const HttpRequestPtr &req,
+                      std::function<void(const HttpResponsePtr &)> &&callback);
 
     void registerUser(const HttpRequestPtr &req,
                      std::function<void(const HttpResponsePtr &)> &&callback);

@@ -338,6 +338,23 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         // per-account buckets.
         login_throttle::recordSuccess(userId);
 
+        // An erased account cannot be signed into. The anonymised row's
+        // password hash is unparseable, so the verify above would already
+        // have failed — this is the explicit statement of the rule rather
+        // than a reliance on that side effect, and it keeps working if the
+        // erasure ever leaves a real hash behind.
+        //
+        // Same 401 as a wrong password: a distinct message would confirm
+        // that the account existed and was deleted, which is a fact about
+        // a person who asked to stop being on the site.
+        if (roles::isErased(userId)) {
+            audit_log::record(req, {"login.erased", userId,
+                                    std::nullopt, std::nullopt,
+                                    Json::objectValue});
+            callback(jsonError(k401Unauthorized, "Invalid credentials"));
+            return;
+        }
+
         // A suspended account gets no session. Checked after the password
         // verify, not before, so the response does not reveal that an
         // account is suspended to someone who cannot authenticate as it.

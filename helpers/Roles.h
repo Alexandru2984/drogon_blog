@@ -70,4 +70,17 @@ bool isBanned(int userId);
 // Applies a ban change observed on the blog_event channel.
 void onBanChangedNotification(int userId, bool banned);
 
+// True when the account has been erased (see migrations/0015). The row
+// still exists — it has to, because tombstoned comments reference it — but
+// it carries no personal data and every read path should treat it as
+// absent.
+//
+// Read straight from the database rather than from an in-memory set like
+// isBanned: erasure is a once-per-account event, the endpoints that ask are
+// not hot, and a stale cache here would mean showing a profile that was
+// deleted.
+//
+// Blocking — call from a worker thread or an already-blocking path.
+bool isErased(int userId);
+
 } // namespace roles

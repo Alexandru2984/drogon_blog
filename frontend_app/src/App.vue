@@ -186,6 +186,9 @@ const unreadNotifs = computed(() => notifs.unread)
             <router-link :to="{ name: 'drafts' }" role="menuitem">{{ $t('nav.drafts') }}</router-link>
             <router-link :to="{ name: 'bookmarks' }" role="menuitem">{{ $t('nav.saved') }}</router-link>
             <router-link to="/account/security" role="menuitem">{{ $t('nav.two_fa') }}</router-link>
+            <router-link :to="{ name: 'account-data' }" role="menuitem">
+              {{ $t('nav.your_data') }}
+            </router-link>
             <template #logout-label>{{ $t('nav.logout') }}</template>
           </AccountMenu>
         </template>
@@ -241,6 +244,7 @@ const unreadNotifs = computed(() => notifs.unread)
           {{ user!.username }}
         </router-link>
         <router-link to="/account/security">{{ $t('nav.two_fa') }}</router-link>
+        <router-link :to="{ name: 'account-data' }">{{ $t('nav.your_data') }}</router-link>
         <hr />
         <button @click="doLogout">{{ $t('nav.logout') }}</button>
       </template>

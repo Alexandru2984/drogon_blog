@@ -152,6 +152,26 @@ bool isBanned(int userId)
     return g_banned.count(userId) != 0;
 }
 
+bool isErased(int userId)
+{
+    try {
+        auto db = drogon::app().getDbClient();
+        const auto r = db->execSqlSync(
+            "SELECT deleted_at IS NOT NULL AS erased FROM users WHERE id = $1",
+            userId);
+        // A row that is not there is, for every purpose a caller has, gone.
+        if (r.empty()) return true;
+        return r[0]["erased"].as<bool>();
+    } catch (const std::exception& e) {
+        LOG_ERROR << "erasure lookup failed: " << e.what();
+        // Fail closed, unlike the ban check above. The two failures are not
+        // symmetric: treating a live account as erased hides a profile for
+        // as long as the database is unwell, while treating an erased one
+        // as live serves data the person asked to have deleted.
+        return true;
+    }
+}
+
 void onBanChangedNotification(int userId, bool banned)
 {
     std::unique_lock<std::shared_mutex> lk(g_bannedMu);

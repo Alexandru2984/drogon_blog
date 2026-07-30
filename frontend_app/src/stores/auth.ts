@@ -65,6 +65,17 @@ export const useAuthStore = defineStore('auth', () => {
     if (user.value) user.value = { ...user.value, ...p }
   }
 
+  // Drop the local session without calling the server. For account
+  // deletion: the server has already revoked every session, so posting to
+  // /auth/logout would be a request on behalf of an account that no longer
+  // exists. This is a setup store, so there is no $reset to fall back on.
+  function clearSession() {
+    pending2fa.value = null
+    user.value = null
+    ready.value = true
+  }
+
   return { user, ready, isAuthed, pending2fa, needs2fa,
-           fetchMe, login, register, logout, patchUser, finalizeAfter2fa }
+           fetchMe, login, register, logout, patchUser, finalizeAfter2fa,
+           clearSession }
 })

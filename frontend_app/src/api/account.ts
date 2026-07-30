@@ -39,4 +39,49 @@ export const accountApi = {
     )
     return data
   },
+
+  // Everything the account holds, as one JSON document. POST, not GET,
+  // because it carries the password: a password in a URL ends up in the
+  // browser history, the Referer header and every proxy log on the way.
+  //
+  // Returned as a Blob so the file reaches the disk byte-for-byte as the
+  // server wrote it. Parsing it into an object here and re-serialising to
+  // download it would hand the user a file that is subtly not the one the
+  // server produced.
+  async exportData(password: string) {
+    try {
+      const res = await api.post('/account/export', { password }, {
+        responseType: 'blob',
+      })
+      const disposition = String(res.headers['content-disposition'] ?? '')
+      const match = /filename="([^"]+)"/.exec(disposition)
+      return {
+        blob: res.data as Blob,
+        filename: match?.[1] ?? 'blog-export.json',
+      }
+    } catch (e: any) {
+      // responseType 'blob' applies to error bodies too, so a 403 arrives
+      // as a Blob and `e.response.data.error` is undefined — the caller
+      // would show "something went wrong" for a wrong password. Unpack it
+      // here so every caller does not have to know that.
+      const body = e?.response?.data
+      if (body instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await body.text())
+          if (parsed?.error) e.response.data = parsed
+        } catch { /* not JSON: leave the original error alone */ }
+      }
+      throw e
+    }
+  },
+
+  // Irreversible. `confirm` must be the username, typed out — the password
+  // is the security control, this is the one that stops a mis-click.
+  async deleteAccount(password: string, confirm: string) {
+    const { data } = await api.post<{
+      message: string
+      deleted: Record<string, number>
+    }>('/account/delete', { password, confirm })
+    return data
+  },
 }

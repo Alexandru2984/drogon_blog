@@ -5,6 +5,7 @@
 #include "../helpers/HttpCache.h"
 #include "../helpers/ImageProcessor.h"
 #include "../helpers/Presence.h"
+#include "../helpers/Roles.h"
 #include "../helpers/Security.h"
 #include "../helpers/Workers.h"
 #include <drogon/orm/Mapper.h>
@@ -13,6 +14,7 @@
 #include <trantor/utils/Logger.h>
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -26,6 +28,21 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
 
     try {
         auto user = mapper.findByPrimaryKey(userId);
+
+        // An erased account still has a row — tombstoned comments in other
+        // people's threads reference it — but there is no profile behind it
+        // any more. 404, the same answer as an id that never existed:
+        // "deleted" and "never here" should be indistinguishable from
+        // outside, because the difference is a fact about a person who
+        // asked to be gone.
+        if (roles::isErased(userId)) {
+            Json::Value ret;
+            ret["error"] = "User not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+            return;
+        }
 
         // Public profile — same data for every viewer, so ETag is keyed
         // only on (id, updated_at) and no Vary is needed. updated_at
@@ -404,6 +421,20 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
                            .limit(static_cast<std::size_t>(limit))
                            .findBy(crit);
 
+        // Erased accounts keep a row so tombstoned comments have something
+        // to point at, but they are not people you can start a conversation
+        // with. One query rather than a per-row check: the partial index
+        // makes it cheap and the set is tiny, whereas asking per user would
+        // be a hundred round trips to build one page.
+        //
+        // Filtered here rather than in the Criteria above because
+        // deleted_at is not on the ORM model — the same reason banned_until
+        // is handled with raw SQL.
+        std::unordered_set<std::int64_t> erased;
+        for (const auto& row : dbClient->execSqlSync(
+                 "SELECT id FROM users WHERE deleted_at IS NOT NULL"))
+            erased.insert(row["id"].as<std::int64_t>());
+
         Json::Value ret;
         ret["users"] = Json::Value(Json::arrayValue);
         std::int64_t minId = 0;
@@ -415,6 +446,7 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
             if (uid == userIdOpt.value()) {
                 continue;
             }
+            if (erased.count(uid)) continue;
 
             Json::Value userJson;
             userJson["id"] = user.getValueOfId();
