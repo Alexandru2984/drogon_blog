@@ -13,7 +13,9 @@ import { useRoute } from 'vue-router'
 // trigger, aria-controls pointing at the menu, Escape to close, focus
 // returned to the trigger, and a click outside dismissing it.
 
-const props = defineProps<{ username: string }>()
+// Not bound to a name: the template reads `username` directly, and an unused
+// `props` const is what `eslint --max-warnings 0` trips on.
+defineProps<{ username: string }>()
 const emit = defineEmits<{ (e: 'logout'): void }>()
 
 const open    = ref(false)

@@ -256,7 +256,7 @@ const unreadNotifs = computed(() => notifs.unread)
     </div>
   </template>
 
-  <main id="main" class="container">
+  <main id="main" class="container" :class="{ wide: route.meta?.wide }">
     <RouterView />
   </main>
 

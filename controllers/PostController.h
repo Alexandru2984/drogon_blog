@@ -18,6 +18,12 @@ class PostController : public drogon::HttpController<PostController>
     // Not /posts/user/{id} with a flag: drafts are never someone else's to
     // list, so the route has no user parameter to get wrong.
     ADD_METHOD_TO(PostController::getMyDrafts, "/posts/drafts", Get);
+    // Render markdown without saving anything, so the editor's preview is
+    // byte-for-byte what publishing would produce. A client-side renderer
+    // would be faster but would drift from cmark-gfm, and a preview that
+    // lies about the result is worse than one that costs a round trip.
+    // Literal segment, so it precedes /posts/{id} too.
+    ADD_METHOD_TO(PostController::previewMarkdown, "/posts/preview", Post);
     // Get single post
     ADD_METHOD_TO(PostController::getPost, "/posts/{1}", Get);
     // Upload an inline image for use in a post body (returns a URL the client
@@ -44,6 +50,8 @@ class PostController : public drogon::HttpController<PostController>
     ADD_METHOD_TO(PostController::listTags, "/tags", Get);
     // Posts carrying one tag.
     ADD_METHOD_TO(PostController::getPostsByTag, "/tags/{1}/posts", Get);
+    // Other posts sharing this one's tags.
+    ADD_METHOD_TO(PostController::getRelatedPosts, "/posts/{1}/related", Get);
     METHOD_LIST_END
     
     void getAllPosts(const HttpRequestPtr &req,
@@ -55,6 +63,11 @@ class PostController : public drogon::HttpController<PostController>
                        const std::string &slug);
     void getMyDrafts(const HttpRequestPtr &req,
                      std::function<void(const HttpResponsePtr &)> &&callback);
+    void previewMarkdown(const HttpRequestPtr &req,
+                         std::function<void(const HttpResponsePtr &)> &&callback);
+    void getRelatedPosts(const HttpRequestPtr &req,
+                         std::function<void(const HttpResponsePtr &)> &&callback,
+                         int postId);
     void searchPosts(const HttpRequestPtr &req,
                      std::function<void(const HttpResponsePtr &)> &&callback);
     void getPost(const HttpRequestPtr &req,

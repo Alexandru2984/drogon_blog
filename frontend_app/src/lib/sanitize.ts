@@ -29,9 +29,30 @@ export function sanitizeHtml(dirty: string | null | undefined): string {
 // a scrollable box that only responds to a pointer is unusable without one.
 // role="region" + aria-label give that tab stop a reason to exist when it is
 // announced.
+// Code blocks get the same treatment for the same reason, plus one fix that
+// is squarely cmark-gfm's doing: it puts the fence's info string on the
+// <pre> as `lang="sql"`. `lang` is the HTML *human language* attribute and
+// expects a BCP-47 tag, so "sql", "cpp" and "bash" are all invalid values —
+// a screen reader asked to switch pronunciation to language "cpp" gets
+// nonsense, and axe flags it as `valid-lang`. The value is genuinely useful,
+// so it moves to `data-lang`, where the highlighter and the CSS label read
+// it, rather than being thrown away.
+function normalizeCodeBlocks(doc: Document) {
+  for (const pre of Array.from(doc.body.querySelectorAll('pre'))) {
+    const lang = pre.getAttribute('lang')
+    if (lang) {
+      pre.removeAttribute('lang')
+      pre.setAttribute('data-lang', lang.trim().toLowerCase())
+    }
+    // `overflow-x: auto` on the <pre> means a long line scrolls inside the
+    // block. Without a tab stop that scrolling is pointer-only.
+    if (!pre.hasAttribute('tabindex')) pre.setAttribute('tabindex', '0')
+  }
+}
+
 export function sanitizePostHtml(dirty: string | null | undefined): string {
   const clean = sanitizeHtml(dirty)
-  if (!clean.includes('<table')) return clean
+  if (!clean.includes('<table') && !clean.includes('<pre')) return clean
 
   // Parse rather than regex: the input is already sanitized, so this is a
   // structural transform on trusted-shaped HTML, and the DOM gets the
@@ -47,5 +68,6 @@ export function sanitizePostHtml(dirty: string | null | undefined): string {
     table.replaceWith(wrap)
     wrap.appendChild(table)
   }
+  normalizeCodeBlocks(doc)
   return doc.body.innerHTML
 }

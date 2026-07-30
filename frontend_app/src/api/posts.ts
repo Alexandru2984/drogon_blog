@@ -36,6 +36,18 @@ export interface TagSummary extends Tag {
   count: number
 }
 
+// A post surfaced by /posts/{id}/related, plus how many tags it has in
+// common with the one being read — the reason it is being suggested.
+export interface RelatedPost extends Post {
+  shared_tags: number
+}
+
+export interface PreviewResult {
+  content_html:    string
+  reading_minutes: number
+  excerpt:         string
+}
+
 export interface FeedPage {
   posts:       Post[]
   next_cursor: number | null
@@ -84,6 +96,18 @@ export const postsApi = {
   },
   get(id: number) {
     return api.get<Post>(`/posts/${id}`).then(r => r.data)
+  },
+  related(id: number) {
+    return api.get<{ posts: RelatedPost[] }>(`/posts/${id}/related`).then(r => r.data.posts)
+  },
+  // Render markdown through the same cmark-gfm pipeline that publishing
+  // uses, so the preview is what the post will be rather than a lookalike
+  // produced by a second renderer. Server-side and rate-limited; the caller
+  // is expected to debounce.
+  preview(content: string, signal?: AbortSignal) {
+    return api
+      .post<PreviewResult>('/posts/preview', { content }, { signal })
+      .then(r => r.data)
   },
   create(payload: { title: string; content: string; tags?: string[]; draft?: boolean }) {
     return api.post('/posts', payload).then(r => r.data)

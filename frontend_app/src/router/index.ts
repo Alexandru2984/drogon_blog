@@ -8,7 +8,10 @@ const routes: RouteRecordRaw[] = [
   { path: '/forgot-password',   name: 'forgot',        component: () => import('@/views/ForgotPasswordView.vue') },
   { path: '/reset-password',    name: 'reset',         component: () => import('@/views/ResetPasswordView.vue') },
   { path: '/verify-email',      name: 'verify',        component: () => import('@/views/VerifyEmailView.vue') },
-  { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true } },
+  // `wide` widens the main container to --wide-width: the editor puts the
+  // markdown and its preview side by side above 900 px, and two panes do not
+  // fit in the 44rem reading measure the rest of the app uses.
+  { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true, wide: true } },
   { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue') },
   { path: '/tags',              name: 'tags',          component: () => import('@/views/TagsView.vue') },
   { path: '/tags/:slug',        name: 'tag',           component: () => import('@/views/TagView.vue'), props: true },

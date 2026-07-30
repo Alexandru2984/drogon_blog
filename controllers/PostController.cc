@@ -441,6 +441,156 @@ void PostController::getMyDrafts(const HttpRequestPtr &req,
         userIdOpt.value());
 }
 
+// Render markdown to the same safe HTML publishing would produce, without
+// writing anything. Authenticated and rate-limited: it runs the parser on
+// caller-supplied input, so it is the one endpoint here that turns a request
+// directly into CPU work.
+void PostController::previewMarkdown(const HttpRequestPtr &req,
+                                     std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    auto session = req->session();
+    auto userIdOpt = session ? session->getOptional<int>("user_id")
+                             : std::optional<int>{};
+    if (!userIdOpt.has_value()) {
+        Json::Value ret;
+        ret["error"] = "Not authenticated";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k401Unauthorized);
+        callback(resp);
+        return;
+    }
+
+    // Generous enough for typing (the client debounces to roughly one call
+    // per pause) and low enough that a script cannot use the editor as a
+    // markdown-rendering service.
+    if (auto rl = security::rateLimitOr429(
+            "post_preview", "uid:" + std::to_string(userIdOpt.value()),
+            30.0, 2.0)) {
+        callback(rl);
+        return;
+    }
+
+    auto json = req->getJsonObject();
+    if (!json) {
+        Json::Value ret;
+        ret["error"] = "Invalid JSON";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    const std::string content = (*json)["content"].asString();
+    if (content.size() > kMaxContentBytes) {
+        Json::Value ret;
+        ret["error"] = "Content too long";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k413RequestEntityTooLarge);
+        callback(resp);
+        return;
+    }
+
+    // Off the event loop: rendering is unbounded CPU on caller-supplied
+    // input, and a large document would otherwise stall every other request
+    // on this thread. Answers 503 with Retry-After if the pool is saturated.
+    workers::offload(workers::Pool::Media, callback, [content, callback]() {
+        Json::Value ret;
+        ret["content_html"]    = markdown::renderToSafeHtml(content);
+        ret["reading_minutes"] = post_meta::estimateReadingMinutes(content);
+        ret["excerpt"]         = post_meta::makeExcerpt(content);
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        // A preview is a function of the request body and nothing else, but
+        // it is also the author's unpublished work.
+        resp->addHeader("Cache-Control", "private, no-store");
+        callback(resp);
+    });
+}
+
+// Other posts sharing tags with this one, most overlap first.
+//
+// Tags are the only signal available: there is no click history, no
+// embedding, and inventing one from title similarity would produce
+// confident nonsense. When a post has no tags the honest answer is an empty
+// list rather than "here are the newest posts", which is not relatedness.
+void PostController::getRelatedPosts(const HttpRequestPtr &req,
+                                     std::function<void(const HttpResponsePtr &)> &&callback,
+                                     int postId)
+{
+    auto dbClient = drogon::app().getDbClient();
+
+    static const char* kSql =
+        "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "       p.reading_minutes, p.excerpt, p.view_count, "
+        "       u.id AS author_id, u.username AS author_username, "
+        "       u.profile_image AS author_profile_image, "
+        "       count(*) AS shared "
+        "  FROM post_tags mine "
+        "  JOIN post_tags theirs ON theirs.tag_id = mine.tag_id "
+        "                       AND theirs.post_id <> mine.post_id "
+        "  JOIN posts p ON p.id = theirs.post_id "
+        "  LEFT JOIN users u ON u.id = p.user_id "
+        " WHERE mine.post_id = $1 "
+        "   AND p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        " GROUP BY p.id, p.title, p.content, p.content_html, p.created_at, "
+        "          p.updated_at, p.reading_minutes, p.excerpt, p.view_count, "
+        "          u.id, u.username, u.profile_image "
+        // Most tags in common first; newest breaks the tie, because between
+        // two equally related posts the fresher one is the better offer.
+        " ORDER BY shared DESC, p.id DESC "
+        " LIMIT 5";
+
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, req](const Result& r) {
+            auto db = drogon::app().getDbClient();
+            std::vector<int> ids;
+            ids.reserve(r.size());
+            for (const auto& row : r) ids.push_back(row["id"].as<int>());
+            const Json::Value tagsById = post_meta::tagsForPosts(db, ids);
+
+            Json::Value ret;
+            ret["posts"] = Json::Value(Json::arrayValue);
+            for (const auto& row : r) {
+                Json::Value post;
+                const auto id           = row["id"].as<int64_t>();
+                post["id"]              = id;
+                post["title"]           = row["title"].as<std::string>();
+                post["content"]         = row["content"].as<std::string>();
+                post["created_at"]      = row["created_at"].as<std::string>();
+                post["updated_at"]      = row["updated_at"].as<std::string>();
+                post["reading_minutes"] = row["reading_minutes"].as<int>();
+                post["view_count"]      = row["view_count"].as<int64_t>();
+                post["shared_tags"]     = row["shared"].as<int64_t>();
+                if (!row["excerpt"].isNull())
+                    post["excerpt"] = row["excerpt"].as<std::string>();
+
+                const std::string key = std::to_string(id);
+                post["tags"] = tagsById.isMember(key) ? tagsById[key]
+                                                     : Json::Value(Json::arrayValue);
+
+                if (!row["author_id"].isNull()) {
+                    post["author"]["id"]       = row["author_id"].as<int64_t>();
+                    post["author"]["username"] = row["author_username"].as<std::string>();
+                    if (!row["author_profile_image"].isNull()) {
+                        const auto img = row["author_profile_image"].as<std::string>();
+                        if (!img.empty()) post["author"]["profile_image"] = img;
+                    }
+                }
+                ret["posts"].append(post);
+            }
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        },
+        [callback](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (getRelatedPosts): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch related posts";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        postId);
+}
+
 void PostController::searchPosts(const HttpRequestPtr &req,
                                 std::function<void(const HttpResponsePtr &)> &&callback)
 {

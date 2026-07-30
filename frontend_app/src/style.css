@@ -43,6 +43,22 @@
      hue is tuned for text on the page background, and in dark mode it is
      light enough that white-on-danger drops to 2.75:1. */
   --danger-text: #ffffff;   /* 5.13:1 on #d1293d */
+
+  /* Syntax tokens. Contrast is against --bg-elev2, which is what a code
+     block sits on, not against the page. Measured, not guessed — the
+     ratio after each is against #f0f2f6, and 4.5 is the AA floor for body
+     text, which is what code is.
+     --hl-type started at #1f6feb (4.13) and --hl-keyword at #8250df
+     (exactly 4.50, no margin at all); axe caught the first on a real post
+     and the second would have gone the same way on the next tweak to the
+     surface underneath. */
+  --hl-keyword: #7a29cf;    /* 6.15 */
+  --hl-string:  #0a6640;    /* 6.27 */
+  --hl-number:  #0550ae;    /* 6.78 */
+  --hl-title:   #953800;    /* 6.59 */
+  --hl-type:    #a3182b;    /* 6.88 — red is the one hue the rest leaves free */
+  --hl-attr:    #6639ba;    /* 6.55 */
+  --hl-meta:    #57606a;    /* 5.70 */
   --ok:          #17794b;
   --ok-soft:     #e4f5ec;
   --warn:        #a25b00;
@@ -118,6 +134,13 @@
     --danger:      #ff6b7a;
     --danger-soft: #2c1519;
     --danger-text: #0d0f14;   /* 6.97:1 on #ff6b7a; white would be 2.75:1 */
+    --hl-keyword: #d2a8ff;
+    --hl-string: #7ee787;
+    --hl-number: #79c0ff;
+    --hl-title: #ffa657;
+    --hl-type: #79c0ff;
+    --hl-attr: #d2a8ff;
+    --hl-meta: #9aa4b6;
     --ok:          #4ecf92;
     --ok-soft:     #12271d;
     --warn:        #e0a34a;
@@ -147,6 +170,13 @@
   --danger:      #ff6b7a;
   --danger-soft: #2c1519;
   --danger-text: #0d0f14;
+  --hl-keyword: #d2a8ff;
+  --hl-string: #7ee787;
+  --hl-number: #79c0ff;
+  --hl-title: #ffa657;
+  --hl-type: #79c0ff;
+  --hl-attr: #d2a8ff;
+  --hl-meta: #9aa4b6;
   --ok:          #4ecf92;
   --ok-soft:     #12271d;
   --warn:        #e0a34a;
@@ -916,6 +946,42 @@ footer {
   min-width: 100%;
   max-width: none;
 }
+
+/* ---------------------------------------------------------------------------
+   Syntax highlighting
+
+   highlight.js ships its own themes, but each is a fixed palette: importing
+   one would give a light theme in dark mode or the reverse. These map its
+   token classes onto the design tokens instead, so code follows the reader's
+   theme like everything else. Only the classes the registered languages
+   actually emit are styled — the rest inherit and read as plain code.
+   --------------------------------------------------------------------------- */
+.post-body pre[data-lang]::before {
+  content: attr(data-lang);
+  display: block;
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* Not selectable, so copying a block does not pick up its label. */
+  user-select: none;
+}
+
+.hljs-comment, .hljs-quote { color: var(--text-faint); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag,
+.hljs-name, .hljs-strong { color: var(--hl-keyword); font-weight: 600; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute,
+.hljs-meta .hljs-string { color: var(--hl-string); }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link,
+.hljs-selector-attr, .hljs-selector-pseudo { color: var(--hl-number); }
+.hljs-title, .hljs-section, .hljs-title.class_, .hljs-title.function_ { color: var(--hl-title); }
+.hljs-type, .hljs-built_in, .hljs-class .hljs-title { color: var(--hl-type); }
+.hljs-variable, .hljs-template-variable, .hljs-attr,
+.hljs-selector-class, .hljs-selector-id { color: var(--hl-attr); }
+.hljs-meta, .hljs-meta .hljs-keyword { color: var(--hl-meta); }
+.hljs-deletion { color: var(--danger); }
+.hljs-emphasis { font-style: italic; }
 
 .post-body mark, mark {
   background: var(--accent-soft);

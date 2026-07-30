@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { postsApi, type Post } from '@/api/posts'
 import { commentsApi, type Comment } from '@/api/comments'
@@ -10,6 +10,8 @@ import { sanitizePostHtml } from '@/lib/sanitize'
 import TagList from '@/components/TagList.vue'
 import PostMeta from '@/components/PostMeta.vue'
 import CommentThread from '@/components/CommentThread.vue'
+import TableOfContents from '@/components/TableOfContents.vue'
+import RelatedPosts from '@/components/RelatedPosts.vue'
 import { socialApi } from '@/api/social'
 
 const props = defineProps<{ id: number }>()
@@ -38,6 +40,27 @@ const isOwner = computed(() => auth.isAuthed && post.value?.author?.id === auth.
 
 const bodyHtml = computed(() =>
   post.value?.content_html ? sanitizePostHtml(post.value.content_html) : '')
+
+// The rendered article element, handed to the table of contents so it can
+// find the headings — they only exist after v-html has run.
+const bodyEl = ref<HTMLElement | null>(null)
+
+// Syntax highlighting runs after the body is in the DOM and the module is
+// loaded lazily, so a reader who only ever opens prose posts never pays for
+// the highlighter. Both are why this is a watcher rather than part of the
+// render: highlight.js rewrites the <code> innerHTML in place.
+watch(bodyHtml, async (html) => {
+  if (!html) return
+  await nextTick()
+  if (!bodyEl.value) return
+  try {
+    const { highlightWithin } = await import('@/lib/highlight')
+    highlightWithin(bodyEl.value)
+  } catch {
+    // A chunk that fails to load leaves plain monospace code. That is a
+    // worse-looking article, not a broken one.
+  }
+}, { immediate: true })
 
 async function load() {
   loading.value = true
@@ -264,7 +287,9 @@ async function deletePost() {
            that additionally wraps tables in a scroll container.
            Fall back to plain-text content for legacy rows where the column
            hasn't been backfilled. -->
-      <div v-if="bodyHtml" class="post-body" v-html="bodyHtml"></div>
+      <TableOfContents :body="bodyEl" :revision="bodyHtml" />
+
+      <div v-if="bodyHtml" ref="bodyEl" class="post-body" v-html="bodyHtml"></div>
       <p v-else class="post-content">{{ post.content }}</p>
 
       <div class="row tight post-actions">
@@ -335,6 +360,10 @@ async function deletePost() {
         @submit="submitReply"
       />
     </section>
+
+    <!-- Last, deliberately: this is the "what next" once there is nothing
+         left to read or reply to. -->
+    <RelatedPosts :post-id="id" />
   </template>
 </template>
 
