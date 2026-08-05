@@ -4,6 +4,7 @@
 #include <drogon/orm/DbClient.h>
 #include <json/json.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -59,8 +60,37 @@ Json::Value tagsForPost(const drogon::orm::DbClientPtr& db, int postId);
 
 // Tags for many posts in one round trip, keyed by post id. The feed renders
 // up to 50 posts; asking per post would be 50 queries for a page.
+//
+// Only for handlers that are already running synchronously. A read path
+// driven by execSqlAsync must use kTagsJsonColumn instead — see the note
+// there for why calling this from a result callback deadlocks.
 Json::Value tagsForPosts(const drogon::orm::DbClientPtr& db,
                          const std::vector<int>& postIds);
+
+// A SELECT-list fragment yielding the tags of the post aliased `p` as a
+// JSON array of {slug, label}, ordered by label, under the column name
+// `tags_json`. Feed it to tagsFromJson().
+//
+// This exists so a listing query fetches its tags in the same round trip
+// instead of following up with a second statement. That is not only one
+// fewer query — a follow-up is actively unsafe from inside an execSqlAsync
+// result callback. Drogon runs those callbacks on the DbClient's own loop
+// threads (min(number_of_connections, hardware_concurrency) of them, and
+// every connection is pinned to one of them). A synchronous query issued
+// from there blocks that loop thread while it waits for a connection whose
+// I/O that same thread is responsible for driving, so under concurrency all
+// the loops park on each other and every query stops: with `"timeout": -1`
+// nothing ever times out and the process serves nothing until it is
+// restarted. A 20-connection load test reproduces it in under a second.
+//
+// The subquery uses its own aliases (ptj/tj) so it can be dropped into a
+// query that already joins post_tags/tags without shadowing them.
+extern const char kTagsJsonColumn[];
+
+// Parse a kTagsJsonColumn value into a JSON array. Never throws; anything
+// unparseable or non-array comes back as an empty array, matching how
+// tagsForPosts degrades when its query fails.
+Json::Value tagsFromJson(const std::string& text);
 
 // Whether a post is currently unpublished. Read back from the database
 // rather than tracked in the caller, so an edit that did not touch the
@@ -103,5 +133,15 @@ long long recordView(const drogon::orm::DbClientPtr& db,
                      int postId,
                      const std::string& viewer,
                      long long fallback);
+
+// recordView() for a caller that is inside an execSqlAsync result callback,
+// where a synchronous query would deadlock the database loop threads (see
+// kTagsJsonColumn). Same statement, same best-effort contract: `cb` is
+// always invoked exactly once, with the fallback if the write failed.
+void recordViewAsync(const drogon::orm::DbClientPtr& db,
+                     int postId,
+                     const std::string& viewer,
+                     long long fallback,
+                     std::function<void(long long)>&& cb);
 
 } // namespace post_meta

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
@@ -205,6 +206,30 @@ Json::Value tagsForPosts(const DbClientPtr& db, const std::vector<int>& postIds)
     return out;
 }
 
+const char kTagsJsonColumn[] =
+    "COALESCE((SELECT json_agg(json_build_object('slug', tj.slug, 'label', tj.label) "
+    "                          ORDER BY tj.label) "
+    "            FROM post_tags ptj "
+    "            JOIN tags tj ON tj.id = ptj.tag_id "
+    "           WHERE ptj.post_id = p.id), '[]'::json)::text AS tags_json";
+
+Json::Value tagsFromJson(const std::string& text)
+{
+    Json::Value out(Json::arrayValue);
+    if (text.empty()) return out;
+
+    Json::CharReaderBuilder builder;
+    const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+    Json::Value parsed;
+    std::string errors;
+    if (!reader->parse(text.data(), text.data() + text.size(), &parsed, &errors)) {
+        LOG_ERROR << "tagsFromJson: " << errors;
+        return out;
+    }
+    if (!parsed.isArray()) return out;
+    return parsed;
+}
+
 bool isDraft(const DbClientPtr& db, int postId)
 {
     try {
@@ -317,28 +342,35 @@ std::string viewerKey(const HttpRequestPtr& req, int userIdOrZero)
     return "a:" + security::sha256Hex(viewSalt() + "|" + ip + "|" + ua).substr(0, 24);
 }
 
+namespace {
+
+// One statement: the CTE inserts the dedup row (or does nothing if this
+// viewer already looked today), and the UPDATE runs only when the insert
+// produced a row. Two statements would let a crash between them leave the
+// counter and the dedup table disagreeing.
+//
+// Shared by the sync and async entry points so the two cannot drift.
+const char kRecordViewSql[] =
+    "WITH ins AS ("
+    "  INSERT INTO post_views (post_id, viewer) VALUES ($1, $2) "
+    "  ON CONFLICT DO NOTHING RETURNING 1"
+    "), bump AS ("
+    "  UPDATE posts SET view_count = view_count + 1 "
+    "   WHERE id = $1 AND EXISTS (SELECT 1 FROM ins) "
+    "  RETURNING view_count"
+    ") "
+    "SELECT COALESCE((SELECT view_count FROM bump), "
+    "                (SELECT view_count FROM posts WHERE id = $1)) AS n";
+
+} // namespace
+
 long long recordView(const DbClientPtr& db,
                      int postId,
                      const std::string& viewer,
                      long long fallback)
 {
     try {
-        // One statement: the CTE inserts the dedup row (or does nothing if
-        // this viewer already looked today), and the UPDATE runs only when
-        // the insert produced a row. Two statements would let a crash
-        // between them leave the counter and the dedup table disagreeing.
-        auto r = db->execSqlSync(
-            "WITH ins AS ("
-            "  INSERT INTO post_views (post_id, viewer) VALUES ($1, $2) "
-            "  ON CONFLICT DO NOTHING RETURNING 1"
-            "), bump AS ("
-            "  UPDATE posts SET view_count = view_count + 1 "
-            "   WHERE id = $1 AND EXISTS (SELECT 1 FROM ins) "
-            "  RETURNING view_count"
-            ") "
-            "SELECT COALESCE((SELECT view_count FROM bump), "
-            "                (SELECT view_count FROM posts WHERE id = $1)) AS n",
-            postId, viewer);
+        auto r = db->execSqlSync(kRecordViewSql, postId, viewer);
         if (!r.empty() && !r[0]["n"].isNull())
             return r[0]["n"].as<long long>();
     } catch (const DrogonDbException& e) {
@@ -346,6 +378,29 @@ long long recordView(const DbClientPtr& db,
                   << e.base().what();
     }
     return fallback;
+}
+
+void recordViewAsync(const DbClientPtr& db,
+                     int postId,
+                     const std::string& viewer,
+                     long long fallback,
+                     std::function<void(long long)>&& cb)
+{
+    auto once = std::make_shared<std::function<void(long long)>>(std::move(cb));
+    db->execSqlAsync(
+        kRecordViewSql,
+        [once, fallback](const Result& r) {
+            if (!r.empty() && !r[0]["n"].isNull())
+                (*once)(r[0]["n"].as<long long>());
+            else
+                (*once)(fallback);
+        },
+        [once, fallback, postId](const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (recordViewAsync, post " << postId << "): "
+                      << e.base().what();
+            (*once)(fallback);
+        },
+        postId, viewer);
 }
 
 } // namespace post_meta
