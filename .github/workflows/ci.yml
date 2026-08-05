@@ -433,13 +433,18 @@ jobs:
 
       - name: Install k6
         run: |
-          # grafana/k6 official apt repo. v0.55 is the current stable.
+          # grafana/k6 official apt repo, pinned. The thresholds in
+          # bench/scenarios.js are calibrated against one load generator;
+          # letting apt hand us whatever is newest means a k6 release can
+          # move the numbers this job exists to police, and the failure
+          # looks like an application regression. Bump this deliberately,
+          # and re-read bench/README.md when you do.
           sudo gpg -k
           sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
               --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
           echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
               | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update -qq && sudo apt-get install -y -qq k6
+          sudo apt-get update -qq && sudo apt-get install -y -qq k6=2.0.0
           k6 version
 
       - name: Seed bench data
@@ -448,6 +453,11 @@ jobs:
           # mmap at init time. Idempotent — re-runs reset to a known
           # corpus.
           python3 bench/seed.py --base http://127.0.0.1:8092
+          # --summary-export will not create its parent, and k6 reports the
+          # miss as a non-fatal error at the very end of the run — so the
+          # artifact upload below silently had nothing to upload on exactly
+          # the runs where the numbers mattered.
+          mkdir -p bench/results-ci
 
       - name: k6 — feed_read (strict)
         run: |
