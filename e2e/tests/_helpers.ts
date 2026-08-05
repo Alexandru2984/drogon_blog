@@ -72,9 +72,33 @@ export async function startLoginExpecting2fa(page: Page, user: TestUser): Promis
 
 // Drives the SPA's logout button. Some tests rely on a clean cookie jar
 // between two phases of the same browser context.
+//
+// Logout is no longer a top-level navbar button: the account-scoped items
+// (profile, drafts, saved, 2FA, your data, logout) moved behind the
+// username menu when twelve items stopped fitting on one row at 1440 px.
+// So the menu has to be opened first — and on a narrow viewport the whole
+// bar collapses into the drawer, which is a different control again.
 export async function logout(page: Page): Promise<void> {
+  await openAccountMenu(page)
   await page.getByRole('button', { name: /logout/i }).click()
   await expect(page.getByRole('link', { name: /login/i })).toBeVisible({ timeout: 5_000 })
+}
+
+// Reveals the account-scoped nav items, whichever shell is on screen.
+// Idempotent: if they are already visible it does nothing.
+export async function openAccountMenu(page: Page): Promise<void> {
+  const trigger = page.locator('.account-trigger')
+  if (await trigger.isVisible().catch(() => false)) {
+    if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
+    await expect(page.locator('#account-menu')).toBeVisible({ timeout: 5_000 })
+    return
+  }
+  // Narrow shell: the hamburger drawer carries the same links.
+  const burger = page.locator('.nav-toggle')
+  if (await burger.isVisible().catch(() => false)) {
+    if ((await burger.getAttribute('aria-expanded')) !== 'true') await burger.click()
+    await expect(page.locator('#mobile-drawer')).toBeVisible({ timeout: 5_000 })
+  }
 }
 
 // ---------------------------------------------------------------- 2FA / TOTP
@@ -90,8 +114,12 @@ export async function enrollTotp(page: Page): Promise<{
   await page.goto('/#/account/security')
   await page.getByRole('button', { name: /begin setup/i }).click()
 
-  // The secret appears in a <code> block under the QR.
-  const secret = (await page.locator('code').first().innerText()).trim()
+  // The secret sits in .totp-secret. It used to be an inline <code>, but a
+  // 32-character base32 string in an inline element ran past the edge of
+  // the card on a phone, so it became a block during the responsive pass.
+  // Selecting on the class rather than the tag is also what keeps this test
+  // from breaking the next time the element changes.
+  const secret = (await page.locator('.totp-secret').first().innerText()).trim()
   expect(secret).toMatch(/^[A-Z2-7]+$/) // base32 alphabet
 
   // Compute the current code from the captured secret.

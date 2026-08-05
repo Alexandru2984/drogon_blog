@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { registerAndLogin } from './_helpers'
+import { registerAndLogin, logout } from './_helpers'
 
 test('register, login, view feed, logout', async ({ page }) => {
   const user = await registerAndLogin(page)
@@ -9,8 +9,9 @@ test('register, login, view feed, logout', async ({ page }) => {
   // is just that the feed page rendered.
   await expect(page.getByRole('heading', { name: /feed/i })).toBeVisible()
 
-  // Logout via the navbar button.
-  await page.getByRole('button', { name: /logout/i }).click()
+  // Logout. It lives behind the username menu now, so go through the
+  // helper rather than reaching for a top-level button that is not there.
+  await logout(page)
   await expect(page.locator('.navbar')).not.toContainText(user.username)
   await expect(page.getByRole('link', { name: /login/i })).toBeVisible()
 })
