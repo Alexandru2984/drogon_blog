@@ -9,10 +9,10 @@
     "install-browsers": "playwright install --with-deps chromium"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0",
-    "@types/node":       "^25.9.3",
+    "@playwright/test": "^1.61.1",
+    "@types/node":       "^26.0.1",
     "otplib":            "^13.4.1",
-    "pg":                "^8.13.0",
+    "pg":                "^8.22.0",
     "@types/pg":         "^8.11.10",
     "typescript":        "^6.0.3"
   }
