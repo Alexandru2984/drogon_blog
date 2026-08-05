@@ -720,7 +720,15 @@ void applySecurityHeaders(const drogon::HttpResponsePtr& resp)
         "base-uri 'self'; "
         "frame-ancestors 'none'; "
         "img-src 'self' data: blob:; "
-        "script-src 'self' https://analytics.micutu.com; "
+        // Cloudflare Browser Insights, by origin only: the beacon is an
+        // external script and it reports to /cdn-cgi/rum on this origin,
+        // which 'self' already covers. The one Cloudflare script still
+        // blocked is Bot Management's JS Detections bootstrap, which is
+        // inline and carries a fresh ray id per request — no static hash
+        // can match it, and the alternative is 'unsafe-inline'. See
+        // ops/nginx/blog-security.conf; keep the two in sync.
+        "script-src 'self' https://analytics.micutu.com "
+            "https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self' data:; "
         "connect-src 'self' https://analytics.micutu.com; "
