@@ -85,7 +85,10 @@ HashSplit splitHash(const std::string& password)
     static const char* kHex = "0123456789ABCDEF";
     std::string hex;
     hex.resize(SHA_DIGEST_LENGTH * 2);
-    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+    // std::size_t, not int: the index expression is 2 * i, and doing that
+    // multiplication in int before widening it to the string's size_type is
+    // the shape that overflows silently on a larger digest.
+    for (std::size_t i = 0; i < SHA_DIGEST_LENGTH; ++i) {
         hex[2 * i]     = kHex[digest[i] >> 4];
         hex[2 * i + 1] = kHex[digest[i] & 0x0F];
     }

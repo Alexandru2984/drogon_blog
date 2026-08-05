@@ -23,5 +23,5 @@ public:
 
     void get(const HttpRequestPtr& req,
              std::function<void(const HttpResponsePtr&)>&& cb,
-             std::string key);
+             const std::string& key);
 };

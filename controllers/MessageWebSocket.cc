@@ -295,7 +295,7 @@ void MessageWebSocket::shutdownAll()
         // Iterate by value; we only need the connection set, the user-id
         // key is unused here. (Older cppcheck flags `auto& [_, set]` as
         // an unused-variable false-positive on the discarded binding.)
-        for (auto& entry : g_byUser) {
+        for (const auto& entry : g_byUser) {
             for (const auto& c : entry.second) conns.push_back(c);
         }
         g_byUser.clear();

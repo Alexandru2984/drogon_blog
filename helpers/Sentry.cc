@@ -61,8 +61,9 @@ bool parseDsn(const std::string& s, DsnState& out)
 
     out.baseUrl   = std::string(isHttps ? "https://" : "http://") + host;
     out.projectId = project;
-    // Strip any trailing slash defensively.
-    if (!out.projectId.empty() && out.projectId.back() == '/') out.projectId.pop_back();
+    // Strip any trailing slash defensively. `project` was checked non-empty
+    // above, so only the last character is in question here.
+    if (out.projectId.back() == '/') out.projectId.pop_back();
     return true;
 }
 

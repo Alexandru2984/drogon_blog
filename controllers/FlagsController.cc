@@ -44,7 +44,7 @@ int callerUserId(const drogon::HttpRequestPtr& req)
 
 void FlagsController::get(const HttpRequestPtr& req,
                           std::function<void(const HttpResponsePtr&)>&& cb,
-                          std::string key)
+                          const std::string& key)
 {
     // Path params are URL-decoded by Drogon, so a key containing a
     // colon or hyphen comes through fine. We bound the length to

@@ -202,9 +202,9 @@ void AuthController::exportAccountData(
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, password] {
             const int uid = *userIdOpt;
-            std::string username;
             HttpResponsePtr err;
             try {
+                std::string username;
                 if (!reauthenticate(uid, password, username, err)) {
                     audit_log::record(req, {"account.export.fail", userIdOpt,
                                             std::nullopt, std::nullopt,
@@ -404,9 +404,9 @@ void AuthController::deleteAccount(
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, password, confirm, keepSid] {
             const int uid = *userIdOpt;
-            std::string username;
             HttpResponsePtr err;
             try {
+                std::string username;
                 if (!reauthenticate(uid, password, username, err)) {
                     audit_log::record(req, {"account.delete.fail", userIdOpt,
                                             std::nullopt, std::nullopt,

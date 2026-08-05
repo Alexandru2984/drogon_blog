@@ -145,7 +145,9 @@ void install()
 
 std::string begin(const drogon::HttpRequestPtr& req, int userId)
 {
-    const std::string sid = security::randomToken(18);
+    // Not const: it is returned by value at the end of the function, and a
+    // const local cannot be moved out — it would be copied instead.
+    std::string sid = security::randomToken(18);
 
     auto session = req->session();
     if (session) session->insert(kSidKey, sid);
