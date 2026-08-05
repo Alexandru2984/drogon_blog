@@ -35,10 +35,11 @@ test('add a passkey, then sign in with it', async ({ page }) => {
   await logout(page)
   await startLoginExpecting2fa(page, user)
 
-  // Switch to the passkey tab and trigger the assertion. The full tab
-  // label is "Passkey / security key" — anchor to that so we don't
-  // double-match the "Authenticate with passkey" action button below.
-  await page.getByRole('button', { name: /passkey \/ security key/i }).click()
+  // Switch to the passkey tab and trigger the assertion. The tab is a
+  // <button role="tab">, so its accessible role is tab, not button —
+  // which is also what keeps it from colliding with the "Authenticate
+  // with passkey" action button inside the panel.
+  await page.getByRole('tab', { name: /passkey/i }).click()
   await page.getByRole('button', { name: /authenticate with passkey/i }).click()
 
   await expect(page.locator('.navbar')).toContainText(user.username, { timeout: 10_000 })

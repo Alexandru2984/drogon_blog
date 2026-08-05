@@ -29,8 +29,8 @@ test('reset password via deep link, then log in with the new password',
     await page.goto(`/#/reset-password?token=${plaintext}`)
     await expect(page.getByRole('heading', { name: /reset password/i })).toBeVisible()
 
-    await page.locator('input[type="password"]').nth(0).fill(newPassword)
-    await page.locator('input[type="password"]').nth(1).fill(newPassword)
+    await page.locator('#reset-pw').fill(newPassword)
+    await page.locator('#reset-pw-confirm').fill(newPassword)
     await page.getByRole('button', { name: /update password/i }).click()
 
     // Success bounces to /login. The new password should authenticate.
@@ -45,8 +45,9 @@ test('mismatched confirm field blocks the request before hitting the API',
     await plantPasswordResetToken(user.email, plaintext)
 
     await page.goto(`/#/reset-password?token=${plaintext}`)
-    await page.locator('input[type="password"]').nth(0).fill('right-password-1234')
-    await page.locator('input[type="password"]').nth(1).fill('different-password')
+    await expect(page.getByRole('heading', { name: /reset password/i })).toBeVisible()
+    await page.locator('#reset-pw').fill('right-password-1234')
+    await page.locator('#reset-pw-confirm').fill('different-password')
     await page.getByRole('button', { name: /update password/i }).click()
     await expect(page.getByText(/passwords do not match/i)).toBeVisible()
     // We're still on the reset page; navigation didn't fire.
@@ -64,15 +65,17 @@ test('the same reset token cannot be replayed after a successful use',
 
     // First use — succeeds.
     await page.goto(`/#/reset-password?token=${plaintext}`)
-    await page.locator('input[type="password"]').nth(0).fill(firstPassword)
-    await page.locator('input[type="password"]').nth(1).fill(firstPassword)
+    await expect(page.getByRole('heading', { name: /reset password/i })).toBeVisible()
+    await page.locator('#reset-pw').fill(firstPassword)
+    await page.locator('#reset-pw-confirm').fill(firstPassword)
     await page.getByRole('button', { name: /update password/i }).click()
     await expect(page).toHaveURL(/#\/login/, { timeout: 5_000 })
 
     // Second attempt with the same plaintext should fail at the API.
     await page.goto(`/#/reset-password?token=${plaintext}`)
-    await page.locator('input[type="password"]').nth(0).fill(secondPassword)
-    await page.locator('input[type="password"]').nth(1).fill(secondPassword)
+    await expect(page.getByRole('heading', { name: /reset password/i })).toBeVisible()
+    await page.locator('#reset-pw').fill(secondPassword)
+    await page.locator('#reset-pw-confirm').fill(secondPassword)
     await page.getByRole('button', { name: /update password/i }).click()
     await expect(page.getByText(/invalid|expired|reset failed/i)).toBeVisible()
   })

@@ -78,27 +78,57 @@ export async function startLoginExpecting2fa(page: Page, user: TestUser): Promis
 // username menu when twelve items stopped fitting on one row at 1440 px.
 // So the menu has to be opened first — and on a narrow viewport the whole
 // bar collapses into the drawer, which is a different control again.
+// The two shells do not expose the same control, so this cannot be one
+// role query:
+//
+//   desktop  <button role="menuitem" class="account-logout">Logout</button>
+//   drawer   <button>Logout</button>
+//
+// The explicit role="menuitem" replaces the implicit button role, so
+// getByRole('button') does not match the desktop one at all — which is
+// how this helper spent six specs timing out on a menu that was open in
+// front of it.
 export async function logout(page: Page): Promise<void> {
-  await openAccountMenu(page)
-  await page.getByRole('button', { name: /logout/i }).click()
+  const shell = await openAccountMenu(page)
+
+  if (shell === 'desktop') {
+    await page.locator('#account-menu .account-logout').click()
+  } else {
+    await page.locator('#mobile-drawer')
+      .getByRole('button', { name: /logout/i })
+      .click()
+  }
+
   await expect(page.getByRole('link', { name: /login/i })).toBeVisible({ timeout: 5_000 })
 }
 
-// Reveals the account-scoped nav items, whichever shell is on screen.
-// Idempotent: if they are already visible it does nothing.
-export async function openAccountMenu(page: Page): Promise<void> {
+// Reveals the account-scoped nav items (profile, drafts, saved, 2FA, your
+// data, logout), which moved off the navbar when twelve items stopped
+// fitting on one row at 1440 px. Returns which shell answered so the
+// caller can address the right control.
+//
+// Idempotent: an already-open menu is left alone. Throws rather than
+// returning quietly when neither shell is on screen — a silent no-op here
+// surfaces later as an opaque 10 s timeout on whatever the caller clicks.
+export async function openAccountMenu(page: Page): Promise<'desktop' | 'drawer'> {
   const trigger = page.locator('.account-trigger')
   if (await trigger.isVisible().catch(() => false)) {
     if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
     await expect(page.locator('#account-menu')).toBeVisible({ timeout: 5_000 })
-    return
+    return 'desktop'
   }
+
   // Narrow shell: the hamburger drawer carries the same links.
   const burger = page.locator('.nav-toggle')
   if (await burger.isVisible().catch(() => false)) {
     if ((await burger.getAttribute('aria-expanded')) !== 'true') await burger.click()
     await expect(page.locator('#mobile-drawer')).toBeVisible({ timeout: 5_000 })
+    return 'drawer'
   }
+
+  throw new Error(
+    'openAccountMenu: neither .account-trigger nor .nav-toggle is visible — ' +
+    'is the page signed in and has the navbar rendered?')
 }
 
 // ---------------------------------------------------------------- 2FA / TOTP

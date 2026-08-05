@@ -53,7 +53,7 @@ test('log in with a recovery code instead of TOTP', async ({ page }) => {
   await startLoginExpecting2fa(page, user)
 
   // Switch to the recovery code tab and submit one.
-  await page.getByRole('button', { name: /recovery code/i }).click()
+  await page.getByRole('tab', { name: /recovery code/i }).click()
   await page.locator('#recov-code').fill(recoveryCodes[0])
   await page.getByRole('button', { name: /sign in/i }).click()
 
@@ -68,7 +68,7 @@ test('the same recovery code cannot be used twice', async ({ page }) => {
   // First use — succeeds.
   await logout(page)
   await startLoginExpecting2fa(page, user)
-  await page.getByRole('button', { name: /recovery code/i }).click()
+  await page.getByRole('tab', { name: /recovery code/i }).click()
   await page.locator('#recov-code').fill(oneShotCode)
   await page.getByRole('button', { name: /sign in/i }).click()
   await expect(page.locator('.navbar')).toContainText(user.username)
@@ -76,7 +76,7 @@ test('the same recovery code cannot be used twice', async ({ page }) => {
   // Second attempt — same code, fresh challenge, should fail.
   await logout(page)
   await startLoginExpecting2fa(page, user)
-  await page.getByRole('button', { name: /recovery code/i }).click()
+  await page.getByRole('tab', { name: /recovery code/i }).click()
   await page.locator('#recov-code').fill(oneShotCode)
   await page.getByRole('button', { name: /sign in/i }).click()
 
