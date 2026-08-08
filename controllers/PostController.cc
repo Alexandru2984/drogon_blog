@@ -616,7 +616,16 @@ void PostController::searchPosts(const HttpRequestPtr &req,
         "FROM posts p "
         "CROSS JOIN q "
         "LEFT JOIN users u ON u.id = p.user_id "
-        "WHERE p.hidden_at IS NULL AND p.search @@ q.query "
+        // published_at IS NOT NULL is not optional here. `search` is a
+        // generated tsvector over every row in `posts`, drafts included, and
+        // this endpoint answers anonymous callers — without the filter a
+        // dictionary walk against /posts/search returns the title, author and
+        // a ts_headline fragment of the body of every unpublished draft in
+        // the database. Every other read path in this file already carries
+        // the pair; this one was written from the tsvector outwards and
+        // inherited only the hidden_at half.
+        "WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "  AND p.search @@ q.query "
         "ORDER BY rank DESC, p.created_at DESC "
         "LIMIT 50";
 
@@ -1312,6 +1321,14 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
         // other benefit; Criteria accepts a column name directly.
         crit = crit && Criteria(std::string("hidden_at"),
                                 CompareOperator::IsNull);
+        // …and unpublished ones. A profile is a public listing: it is reached
+        // without a session and its response carries the full `content` of
+        // every row it returns, so a missing draft filter here hands out
+        // unpublished bodies verbatim rather than the fragment /posts/search
+        // would leak. The author reads their own drafts through
+        // /posts/drafts, which is session-scoped and returns is_draft.
+        crit = crit && Criteria(std::string("published_at"),
+                                CompareOperator::IsNotNull);
         if (cursor > 0)
             crit = crit && Criteria(Cols::_id, CompareOperator::LT, cursor);
         auto posts = mapper.orderBy(Cols::_id, SortOrder::DESC)
@@ -1395,6 +1412,26 @@ void PostController::likePost(const HttpRequestPtr &req,
     // at the DB layer; ON CONFLICT lets us turn the second insert into
     // a clean 409 instead of letting libpq throw and degrading to a 500.
     try {
+        // Resolve the target first, scoped to what the caller is allowed to
+        // see. This used to run after the insert, purely to find the author
+        // to notify, and unscoped — so a like landed on any id at all,
+        // including someone else's unpublished draft, and the resulting
+        // notification told them a stranger had found it. Doing the lookup
+        // up front costs nothing (it is the same round trip, moved) and
+        // turns an invisible post into a 404 instead of a silent write.
+        auto owner = dbClient->execSqlSync(
+            "SELECT user_id FROM posts "
+            " WHERE id = $1 AND hidden_at IS NULL AND published_at IS NOT NULL",
+            postId);
+        if (owner.empty()) {
+            Json::Value ret;
+            ret["error"] = "Post not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+            return;
+        }
+
         auto r = dbClient->execSqlSync(
             "INSERT INTO likes (post_id, user_id) "
             "VALUES ($1, $2) "
@@ -1412,12 +1449,8 @@ void PostController::likePost(const HttpRequestPtr &req,
         // Tell the author. Only on the transition — the ON CONFLICT branch
         // above already returned, so reaching here means a like was really
         // created and not re-sent.
-        auto owner = dbClient->execSqlSync(
-            "SELECT user_id FROM posts WHERE id = $1", postId);
-        if (!owner.empty()) {
-            notifications::emit(dbClient, owner[0]["user_id"].as<int>(),
-                                userIdOpt.value(), notifications::Kind::Like, postId);
-        }
+        notifications::emit(dbClient, owner[0]["user_id"].as<int>(),
+                            userIdOpt.value(), notifications::Kind::Like, postId);
 
         Json::Value ret;
         ret["message"] = "Post liked successfully";

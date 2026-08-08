@@ -35,6 +35,20 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
         "       u.id AS author_id, u.username AS author_username, "
         "       u.profile_image AS author_profile_image "
         "FROM comments c "
+        // The thread inherits the post's visibility. Filtering only on
+        // c.hidden_at made hiding a post a half-measure: the post left every
+        // feed while GET /posts/{id}/comments kept serving its discussion to
+        // anonymous callers, so moderating a thread removed the thing being
+        // discussed and left the discussion. An INNER JOIN also means a
+        // comment can never outlive the visibility of what it replies to.
+        //
+        // Deliberately not viewer-dependent: the response is ETagged and
+        // cacheable, and making the row set depend on the session would
+        // require Vary: Cookie on a hot public path. Drafts have no comments
+        // to show anyway — createComment refuses them below.
+        "JOIN posts p ON p.id = c.post_id "
+        "            AND p.hidden_at IS NULL "
+        "            AND p.published_at IS NOT NULL "
         "LEFT JOIN users u ON u.id = c.user_id "
         "WHERE c.hidden_at IS NULL AND c.post_id = $1 "
         // Ordered by id, not created_at: two comments posted in the same
@@ -174,8 +188,16 @@ void CommentController::createComment(const HttpRequestPtr &req,
         // surface as a 500.
         // Hidden posts are 404 everywhere, including as a comment target —
         // otherwise a moderated thread keeps accepting replies.
+        //
+        // Drafts are 404 here too. They were not, and the gap was an
+        // existence oracle: 201 rather than 404 told an unauthenticated
+        // guesser that post N exists and is somebody's unpublished draft,
+        // and the comment it planted then sat on a page its author had not
+        // published. A draft is not a place anyone else can write.
         auto postRow = dbClient->execSqlSync(
-            "SELECT user_id FROM posts WHERE id = $1 AND hidden_at IS NULL", postId);
+            "SELECT user_id FROM posts "
+            " WHERE id = $1 AND hidden_at IS NULL AND published_at IS NOT NULL",
+            postId);
         if (postRow.empty()) {
             Json::Value ret;
             ret["error"] = "Post not found";

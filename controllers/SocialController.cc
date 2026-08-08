@@ -152,10 +152,38 @@ void SocialController::addBookmark(const HttpRequestPtr &req,
         // ON CONFLICT DO NOTHING makes this idempotent: a double tap on the
         // bookmark button is not an error the client has to distinguish from
         // a real failure.
-        db->execSqlSync(
-            "INSERT INTO bookmarks (user_id, post_id) VALUES ($1, $2) "
-            "ON CONFLICT DO NOTHING",
+        //
+        // INSERT … SELECT rather than VALUES so the post's visibility is part
+        // of the write. A plain VALUES only had the foreign key to stop it,
+        // which proves the row exists and nothing about whether the caller
+        // may see it — so saving someone else's unpublished draft succeeded,
+        // and the 200-vs-404 split told the caller it was there. listBookmarks
+        // already filters drafts back out on read, so the row was invisible
+        // but the answer was not.
+        const auto r = db->execSqlSync(
+            "INSERT INTO bookmarks (user_id, post_id) "
+            "SELECT $1, p.id FROM posts p "
+            " WHERE p.id = $2 AND p.hidden_at IS NULL "
+            "   AND p.published_at IS NOT NULL "
+            "ON CONFLICT DO NOTHING "
+            "RETURNING post_id",
             me.value(), postId);
+
+        // Empty means either "not visible" or "already bookmarked". Ask
+        // which, rather than reporting a 404 for a post the caller has
+        // legitimately saved already.
+        if (r.empty()) {
+            const auto exists = db->execSqlSync(
+                "SELECT 1 FROM bookmarks WHERE user_id = $1 AND post_id = $2",
+                me.value(), postId);
+            if (exists.empty()) {
+                Json::Value ret;
+                ret["error"] = "Post not found";
+                callback(jsonWith(ret, k404NotFound));
+                return;
+            }
+        }
+
         Json::Value ret;
         ret["bookmarked"] = true;
         callback(jsonWith(ret));
