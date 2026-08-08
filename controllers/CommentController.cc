@@ -4,6 +4,7 @@
 #include "../models/Users.h"
 #include "../helpers/HttpCache.h"
 #include "../helpers/Security.h"
+#include "../helpers/Workers.h"
 #include <drogon/orm/Mapper.h>
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
@@ -180,6 +181,13 @@ void CommentController::createComment(const HttpRequestPtr &req,
     // Optional: a reply rather than a top-level comment.
     const int parentId = (*json)["parent_id"].isInt() ? (*json)["parent_id"].asInt() : 0;
 
+    // Up to four synchronous queries (post lookup, parent lookup, insert, one
+    // or two notification inserts) — see helpers/Workers.h for why none of
+    // them may run on an event loop. Posting a comment was parking one of the
+    // twelve IO loops for the duration of all of them.
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback,
+        [userId, postId, parentId, content, callback] {
     auto dbClient = drogon::app().getDbClient();
 
     try {
@@ -235,7 +243,7 @@ void CommentController::createComment(const HttpRequestPtr &req,
             "INSERT INTO comments (post_id, user_id, content, parent_id) "
             "VALUES ($1, $2, $3, NULLIF($4::int, 0)) "
             "RETURNING id, created_at",
-            postId, userIdOpt.value(), content, parentId);
+            postId, userId, content, parentId);
         const int newId = ins[0]["id"].as<int>();
 
         // Notify, in order of who most wants to know.
@@ -246,16 +254,16 @@ void CommentController::createComment(const HttpRequestPtr &req,
         // drops the self-notification, so the author of the reply never
         // hears about it either way.
         if (parentId > 0) {
-            notifications::emit(dbClient, parentAuthorId, userIdOpt.value(),
+            notifications::emit(dbClient, parentAuthorId, userId,
                                 notifications::Kind::Reply, postId, newId);
             // Also tell the post's author, unless they are the one being
             // replied to (they would get two notifications for one event).
             if (postAuthorId != parentAuthorId) {
-                notifications::emit(dbClient, postAuthorId, userIdOpt.value(),
+                notifications::emit(dbClient, postAuthorId, userId,
                                     notifications::Kind::Comment, postId, newId);
             }
         } else {
-            notifications::emit(dbClient, postAuthorId, userIdOpt.value(),
+            notifications::emit(dbClient, postAuthorId, userId,
                                 notifications::Kind::Comment, postId, newId);
         }
 
@@ -278,6 +286,7 @@ void CommentController::createComment(const HttpRequestPtr &req,
         resp->setStatusCode(k500InternalServerError);
         callback(resp);
     }
+        });
 }
 
 void CommentController::updateComment(const HttpRequestPtr &req,

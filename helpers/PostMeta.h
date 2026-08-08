@@ -58,14 +58,12 @@ bool syncPostTags(const drogon::orm::DbClientPtr& db,
 // Tags of one post, as a JSON array of {slug, label}.
 Json::Value tagsForPost(const drogon::orm::DbClientPtr& db, int postId);
 
-// Tags for many posts in one round trip, keyed by post id. The feed renders
-// up to 50 posts; asking per post would be 50 queries for a page.
-//
-// Only for handlers that are already running synchronously. A read path
-// driven by execSqlAsync must use kTagsJsonColumn instead — see the note
-// there for why calling this from a result callback deadlocks.
-Json::Value tagsForPosts(const drogon::orm::DbClientPtr& db,
-                         const std::vector<int>& postIds);
+// (tagsForPosts, a synchronous batch lookup keyed by post id, used to live
+// here. Every caller was a handler that had already gone async, which is
+// exactly where a synchronous query deadlocks — see kTagsJsonColumn. It was
+// removed rather than documented harder: leaving a correct-looking helper
+// whose only safe caller does not exist is an invitation to reintroduce the
+// outage. Select kTagsJsonColumn instead.)
 
 // A SELECT-list fragment yielding the tags of the post aliased `p` as a
 // JSON array of {slug, label}, ordered by label, under the column name

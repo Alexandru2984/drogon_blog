@@ -1,6 +1,8 @@
 #include "SocialController.h"
 #include "../helpers/Notifications.h"
 #include "../helpers/PostMeta.h"
+#include "../helpers/Security.h"
+#include "../helpers/Workers.h"
 
 #include <drogon/drogon.h>
 #include <drogon/orm/Exception.h>
@@ -48,7 +50,7 @@ HttpResponsePtr serverError(const char* what)
 // Shared shape for any list of posts this controller returns, so the
 // bookmarks page and the following feed render with the same client code as
 // the main feed.
-Json::Value postRow(const Row& row, const Json::Value& tagsById)
+Json::Value postRow(const Row& row)
 {
     Json::Value post;
     const auto id      = row["id"].as<int64_t>();
@@ -64,9 +66,7 @@ Json::Value postRow(const Row& row, const Json::Value& tagsById)
     if (!row["excerpt"].isNull())
         post["excerpt"] = row["excerpt"].as<std::string>();
 
-    const std::string key = std::to_string(id);
-    post["tags"] = tagsById.isMember(key) ? tagsById[key]
-                                          : Json::Value(Json::arrayValue);
+    post["tags"] = post_meta::tagsFromJson(row["tags_json"].as<std::string>());
 
     if (!row["author_id"].isNull()) {
         post["author"]["id"]       = row["author_id"].as<int64_t>();
@@ -81,24 +81,32 @@ Json::Value postRow(const Row& row, const Json::Value& tagsById)
 
 Json::Value postList(const Result& r)
 {
-    auto db = drogon::app().getDbClient();
-    std::vector<int> ids;
-    ids.reserve(r.size());
-    for (const auto& row : r) ids.push_back(row["id"].as<int>());
-    const Json::Value tagsById = post_meta::tagsForPosts(db, ids);
-
     Json::Value out(Json::arrayValue);
-    for (const auto& row : r) out.append(postRow(row, tagsById));
+    for (const auto& row : r) out.append(postRow(row));
     return out;
 }
 
 // The column list every post query in this file selects. Kept in one place
 // so postRow() and the queries cannot drift apart.
-constexpr const char* kPostColumns =
-    "p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
-    "p.reading_minutes, p.excerpt, p.view_count, "
-    "u.id AS author_id, u.username AS author_username, "
-    "u.profile_image AS author_profile_image";
+//
+// Tags ride along as a JSON column rather than arriving from a follow-up
+// tagsForPosts() call. That call is execSqlSync, and postList() runs inside
+// an execSqlAsync result callback — which is to say on one of Drogon's
+// DbLoop threads, the very threads that have to drive the connection a
+// synchronous query would be handed. That is a deadlock, not a slow path:
+// it is the same construction that stopped /posts answering in production
+// until 1d84bb9 moved it to this column, and it survived here because the
+// two feeds were written before that fix and never revisited.
+const std::string& kPostColumns()
+{
+    static const std::string cols =
+        "p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
+        "p.reading_minutes, p.excerpt, p.view_count, "
+        "u.id AS author_id, u.username AS author_username, "
+        "u.profile_image AS author_profile_image, " +
+        std::string(post_meta::kTagsJsonColumn);
+    return cols;
+}
 
 } // namespace
 
@@ -112,7 +120,7 @@ void SocialController::listBookmarks(const HttpRequestPtr &req,
 
     auto db = drogon::app().getDbClient();
     const std::string sql =
-        std::string("SELECT ") + kPostColumns + ", b.created_at AS saved_at "
+        std::string("SELECT ") + kPostColumns() + ", b.created_at AS saved_at "
         "  FROM bookmarks b "
         "  JOIN posts p ON p.id = b.post_id "
         "  LEFT JOIN users u ON u.id = p.user_id "
@@ -147,60 +155,68 @@ void SocialController::addBookmark(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
-    auto db = drogon::app().getDbClient();
-    try {
-        // ON CONFLICT DO NOTHING makes this idempotent: a double tap on the
-        // bookmark button is not an error the client has to distinguish from
-        // a real failure.
-        //
-        // INSERT … SELECT rather than VALUES so the post's visibility is part
-        // of the write. A plain VALUES only had the foreign key to stop it,
-        // which proves the row exists and nothing about whether the caller
-        // may see it — so saving someone else's unpublished draft succeeded,
-        // and the 200-vs-404 split told the caller it was there. listBookmarks
-        // already filters drafts back out on read, so the row was invisible
-        // but the answer was not.
-        const auto r = db->execSqlSync(
-            "INSERT INTO bookmarks (user_id, post_id) "
-            "SELECT $1, p.id FROM posts p "
-            " WHERE p.id = $2 AND p.hidden_at IS NULL "
-            "   AND p.published_at IS NOT NULL "
-            "ON CONFLICT DO NOTHING "
-            "RETURNING post_id",
-            me.value(), postId);
-
-        // Empty means either "not visible" or "already bookmarked". Ask
-        // which, rather than reporting a 404 for a post the caller has
-        // legitimately saved already.
-        if (r.empty()) {
-            const auto exists = db->execSqlSync(
-                "SELECT 1 FROM bookmarks WHERE user_id = $1 AND post_id = $2",
-                me.value(), postId);
-            if (exists.empty()) {
-                Json::Value ret;
-                ret["error"] = "Post not found";
-                callback(jsonWith(ret, k404NotFound));
-                return;
-            }
-        }
-
-        Json::Value ret;
-        ret["bookmarked"] = true;
-        callback(jsonWith(ret));
-    } catch (const DrogonDbException& e) {
-        // A foreign-key violation here means the post does not exist. That
-        // is a 404, not a 500 — the client asked about something that is not
-        // there rather than triggering a fault.
-        const std::string what = e.base().what();
-        if (what.find("foreign key") != std::string::npos) {
-            Json::Value ret;
-            ret["error"] = "Post not found";
-            callback(jsonWith(ret, k404NotFound));
-            return;
-        }
-        LOG_ERROR << "DB Error (addBookmark): " << what;
-        callback(serverError("Failed to save bookmark"));
+    // Saving a post is a cheap write with no natural ceiling, so it needs an
+    // explicit one: 60 burst, one a second sustained. Well past any human
+    // reading list, and it stops a loop from filling the table.
+    if (auto rl = security::rateLimitOr429(
+            "bookmark_add", "uid:" + std::to_string(me.value()), 60.0, 1.0)) {
+        callback(rl);
+        return;
     }
+
+    // Everything below is synchronous SQL, which must not run on an event
+    // loop — see helpers/Workers.h. The auth, moderation and privacy
+    // controllers already hand that work to a pool; this file was written
+    // later and kept it inline, so each of these handlers parked one of the
+    // twelve IO loops on a database round trip and stalled every connection
+    // pinned to it. offload() answers 503 + Retry-After by itself when the
+    // pool is saturated, so there is nothing to do with its return value.
+    workers::offload(workers::Pool::Auth, callback, [me, postId, callback] {
+        auto db = drogon::app().getDbClient();
+        try {
+            // ON CONFLICT DO NOTHING makes this idempotent: a double tap on
+            // the bookmark button is not an error the client has to
+            // distinguish from a real failure.
+            //
+            // INSERT … SELECT rather than VALUES so the post's visibility is
+            // part of the write. A plain VALUES only had the foreign key to
+            // stop it, which proves the row exists and nothing about whether
+            // the caller may see it — so saving someone else's unpublished
+            // draft succeeded, and the 200-vs-404 split told the caller it
+            // was there. listBookmarks already filters drafts back out on
+            // read, so the row was invisible but the answer was not.
+            const auto r = db->execSqlSync(
+                "INSERT INTO bookmarks (user_id, post_id) "
+                "SELECT $1, p.id FROM posts p "
+                " WHERE p.id = $2 AND p.hidden_at IS NULL "
+                "   AND p.published_at IS NOT NULL "
+                "ON CONFLICT DO NOTHING "
+                "RETURNING post_id",
+                me.value(), postId);
+
+            // Empty means either "not visible" or "already bookmarked". Ask
+            // which, rather than reporting a 404 for a post the caller has
+            // legitimately saved already.
+            if (r.empty()) {
+                const auto exists = db->execSqlSync(
+                    "SELECT 1 FROM bookmarks WHERE user_id = $1 AND post_id = $2",
+                    me.value(), postId);
+                if (exists.empty()) {
+                    Json::Value ret;
+                    ret["error"] = "Post not found";
+                    callback(jsonWith(ret, k404NotFound));
+                    return;
+                }
+            }
+
+            Json::Value ret;
+            ret["bookmarked"] = true;
+            callback(jsonWith(ret));
+        } catch (const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (addBookmark): " << e.base().what();
+            callback(serverError("Failed to save bookmark"));
+        }
+    });
 }
 
 void SocialController::removeBookmark(const HttpRequestPtr &req,
@@ -210,19 +226,22 @@ void SocialController::removeBookmark(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
-    auto db = drogon::app().getDbClient();
-    try {
-        db->execSqlSync("DELETE FROM bookmarks WHERE user_id = $1 AND post_id = $2",
-                        me.value(), postId);
-        // Idempotent in the other direction too: removing a bookmark that is
-        // not there leaves the caller in the state they asked for.
-        Json::Value ret;
-        ret["bookmarked"] = false;
-        callback(jsonWith(ret));
-    } catch (const DrogonDbException& e) {
-        LOG_ERROR << "DB Error (removeBookmark): " << e.base().what();
-        callback(serverError("Failed to remove bookmark"));
-    }
+    workers::offload(workers::Pool::Auth, callback, [me, postId, callback] {
+        auto db = drogon::app().getDbClient();
+        try {
+            db->execSqlSync(
+                "DELETE FROM bookmarks WHERE user_id = $1 AND post_id = $2",
+                me.value(), postId);
+            // Idempotent in the other direction too: removing a bookmark that
+            // is not there leaves the caller in the state they asked for.
+            Json::Value ret;
+            ret["bookmarked"] = false;
+            callback(jsonWith(ret));
+        } catch (const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (removeBookmark): " << e.base().what();
+            callback(serverError("Failed to remove bookmark"));
+        }
+    });
 }
 
 // ============================================================= follows
@@ -243,33 +262,49 @@ void SocialController::follow(const HttpRequestPtr &req,
         return;
     }
 
-    auto db = drogon::app().getDbClient();
-    try {
-        auto r = db->execSqlSync(
-            "INSERT INTO follows (follower_id, followee_id) VALUES ($1, $2) "
-            "ON CONFLICT DO NOTHING RETURNING 1",
-            me.value(), userId);
-
-        // Only notify on a transition. Without the RETURNING check, a client
-        // that re-sends the follow (a retry, a double tap) would send the
-        // author a fresh notification each time.
-        if (!r.empty()) {
-            notifications::emit(db, userId, me.value(), notifications::Kind::Follow);
-        }
-        Json::Value ret;
-        ret["following"] = true;
-        callback(jsonWith(ret));
-    } catch (const DrogonDbException& e) {
-        const std::string what = e.base().what();
-        if (what.find("foreign key") != std::string::npos) {
-            Json::Value ret;
-            ret["error"] = "User not found";
-            callback(jsonWith(ret, k404NotFound));
-            return;
-        }
-        LOG_ERROR << "DB Error (follow): " << what;
-        callback(serverError("Failed to follow"));
+    // Following is the one relationship write that notifies someone, and the
+    // ON CONFLICT guard below only suppresses a *repeat* follow — unfollow
+    // then follow again is a fresh transition and a fresh notification. A
+    // loop over that pair therefore had no ceiling at all: it could fill the
+    // target's notification list and the notifications table with it. 30
+    // burst, one every two seconds sustained, keyed per account so it holds
+    // regardless of how many IPs the caller has.
+    if (auto rl = security::rateLimitOr429(
+            "follow", "uid:" + std::to_string(me.value()), 30.0, 0.5)) {
+        callback(rl);
+        return;
     }
+
+    workers::offload(workers::Pool::Auth, callback, [me, userId, callback] {
+        auto db = drogon::app().getDbClient();
+        try {
+            auto r = db->execSqlSync(
+                "INSERT INTO follows (follower_id, followee_id) VALUES ($1, $2) "
+                "ON CONFLICT DO NOTHING RETURNING 1",
+                me.value(), userId);
+
+            // Only notify on a transition. Without the RETURNING check, a
+            // client that re-sends the follow (a retry, a double tap) would
+            // send the author a fresh notification each time.
+            if (!r.empty()) {
+                notifications::emit(db, userId, me.value(),
+                                    notifications::Kind::Follow);
+            }
+            Json::Value ret;
+            ret["following"] = true;
+            callback(jsonWith(ret));
+        } catch (const DrogonDbException& e) {
+            const std::string what = e.base().what();
+            if (what.find("foreign key") != std::string::npos) {
+                Json::Value ret;
+                ret["error"] = "User not found";
+                callback(jsonWith(ret, k404NotFound));
+                return;
+            }
+            LOG_ERROR << "DB Error (follow): " << what;
+            callback(serverError("Failed to follow"));
+        }
+    });
 }
 
 void SocialController::unfollow(const HttpRequestPtr &req,
@@ -279,18 +314,29 @@ void SocialController::unfollow(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
-    auto db = drogon::app().getDbClient();
-    try {
-        db->execSqlSync(
-            "DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2",
-            me.value(), userId);
-        Json::Value ret;
-        ret["following"] = false;
-        callback(jsonWith(ret));
-    } catch (const DrogonDbException& e) {
-        LOG_ERROR << "DB Error (unfollow): " << e.base().what();
-        callback(serverError("Failed to unfollow"));
+    // Shares the follow bucket deliberately: the abusive pattern is the
+    // unfollow/follow cycle, so budgeting the two halves separately would
+    // leave it costing one token per notification instead of two.
+    if (auto rl = security::rateLimitOr429(
+            "follow", "uid:" + std::to_string(me.value()), 30.0, 0.5)) {
+        callback(rl);
+        return;
     }
+
+    workers::offload(workers::Pool::Auth, callback, [me, userId, callback] {
+        auto db = drogon::app().getDbClient();
+        try {
+            db->execSqlSync(
+                "DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2",
+                me.value(), userId);
+            Json::Value ret;
+            ret["following"] = false;
+            callback(jsonWith(ret));
+        } catch (const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (unfollow): " << e.base().what();
+            callback(serverError("Failed to unfollow"));
+        }
+    });
 }
 
 void SocialController::followStats(const HttpRequestPtr &req,
@@ -335,7 +381,7 @@ void SocialController::followingFeed(const HttpRequestPtr &req,
 
     auto db = drogon::app().getDbClient();
     const std::string sql =
-        std::string("SELECT ") + kPostColumns +
+        std::string("SELECT ") + kPostColumns() +
         "  FROM posts p "
         "  JOIN follows f ON f.followee_id = p.user_id AND f.follower_id = $1 "
         "  LEFT JOIN users u ON u.id = p.user_id "
@@ -372,15 +418,22 @@ void SocialController::listNotifications(const HttpRequestPtr &req,
     int limit = 50;
     try { limit = std::stoi(req->getParameter("limit")); } catch (...) { limit = 50; }
 
-    auto db = drogon::app().getDbClient();
-    Json::Value ret;
-    ret["notifications"] = notifications::list(db, me.value(), limit, before);
-    ret["unread"]        = static_cast<Json::Int64>(
-                               notifications::unreadCount(db, me.value()));
+    // Two synchronous queries, one of them a join across four tables. The
+    // notification bell polls this, so it was also the most frequent way an
+    // IO loop got parked.
+    workers::offload(workers::Pool::Auth, callback,
+        [me, limit, before, callback] {
+            auto db = drogon::app().getDbClient();
+            Json::Value ret;
+            ret["notifications"] =
+                notifications::list(db, me.value(), limit, before);
+            ret["unread"] = static_cast<Json::Int64>(
+                                notifications::unreadCount(db, me.value()));
 
-    auto resp = HttpResponse::newHttpJsonResponse(ret);
-    resp->addHeader("Cache-Control", "private, no-store");
-    callback(resp);
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->addHeader("Cache-Control", "private, no-store");
+            callback(resp);
+        });
 }
 
 void SocialController::unreadCount(const HttpRequestPtr &req,
@@ -389,14 +442,16 @@ void SocialController::unreadCount(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
-    auto db = drogon::app().getDbClient();
-    Json::Value ret;
-    ret["unread"] = static_cast<Json::Int64>(
-                        notifications::unreadCount(db, me.value()));
+    workers::offload(workers::Pool::Auth, callback, [me, callback] {
+        auto db = drogon::app().getDbClient();
+        Json::Value ret;
+        ret["unread"] = static_cast<Json::Int64>(
+                            notifications::unreadCount(db, me.value()));
 
-    auto resp = HttpResponse::newHttpJsonResponse(ret);
-    resp->addHeader("Cache-Control", "private, no-store");
-    callback(resp);
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->addHeader("Cache-Control", "private, no-store");
+        callback(resp);
+    });
 }
 
 void SocialController::markNotificationRead(const HttpRequestPtr &req,
@@ -417,16 +472,18 @@ void SocialController::markNotificationRead(const HttpRequestPtr &req,
         return;
     }
 
-    auto db = drogon::app().getDbClient();
-    // markRead scopes to the owner in its WHERE clause, so a miss means
-    // either "not yours" or "already read". Both are a no-op for the caller
-    // and neither should reveal which.
-    notifications::markRead(db, me.value(), nid);
+    workers::offload(workers::Pool::Auth, callback, [me, nid, callback] {
+        auto db = drogon::app().getDbClient();
+        // markRead scopes to the owner in its WHERE clause, so a miss means
+        // either "not yours" or "already read". Both are a no-op for the
+        // caller and neither should reveal which.
+        notifications::markRead(db, me.value(), nid);
 
-    Json::Value ret;
-    ret["unread"] = static_cast<Json::Int64>(
-                        notifications::unreadCount(db, me.value()));
-    callback(jsonWith(ret));
+        Json::Value ret;
+        ret["unread"] = static_cast<Json::Int64>(
+                            notifications::unreadCount(db, me.value()));
+        callback(jsonWith(ret));
+    });
 }
 
 void SocialController::markAllRead(const HttpRequestPtr &req,
@@ -435,10 +492,12 @@ void SocialController::markAllRead(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
-    auto db = drogon::app().getDbClient();
-    Json::Value ret;
-    ret["marked"] = static_cast<Json::Int64>(
-                        notifications::markAllRead(db, me.value()));
-    ret["unread"] = 0;
-    callback(jsonWith(ret));
+    workers::offload(workers::Pool::Auth, callback, [me, callback] {
+        auto db = drogon::app().getDbClient();
+        Json::Value ret;
+        ret["marked"] = static_cast<Json::Int64>(
+                            notifications::markAllRead(db, me.value()));
+        ret["unread"] = 0;
+        callback(jsonWith(ret));
+    });
 }

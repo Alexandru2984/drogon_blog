@@ -1403,6 +1403,19 @@ void PostController::likePost(const HttpRequestPtr &req,
         return;
     }
 
+    // Liking is a cheap write that notifies someone, so it gets the same
+    // treatment as follow: a per-account ceiling well above human use.
+    if (auto rl = security::rateLimitOr429(
+            "post_like", "uid:" + std::to_string(userIdOpt.value()),
+            60.0, 1.0)) {
+        callback(rl);
+        return;
+    }
+
+    // Two synchronous queries; helpers/Workers.h has the argument for why
+    // they must not sit on an event loop.
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback, [userId, postId, callback] {
     auto dbClient = drogon::app().getDbClient();
 
     // ON CONFLICT DO NOTHING + RETURNING id avoids the SELECT-then-INSERT
@@ -1437,7 +1450,7 @@ void PostController::likePost(const HttpRequestPtr &req,
             "VALUES ($1, $2) "
             "ON CONFLICT (post_id, user_id) DO NOTHING "
             "RETURNING id",
-            postId, userIdOpt.value());
+            postId, userId);
         if (r.empty()) {
             Json::Value ret;
             ret["error"] = "Post already liked";
@@ -1450,7 +1463,7 @@ void PostController::likePost(const HttpRequestPtr &req,
         // above already returned, so reaching here means a like was really
         // created and not re-sent.
         notifications::emit(dbClient, owner[0]["user_id"].as<int>(),
-                            userIdOpt.value(), notifications::Kind::Like, postId);
+                            userId, notifications::Kind::Like, postId);
 
         Json::Value ret;
         ret["message"] = "Post liked successfully";
@@ -1463,6 +1476,7 @@ void PostController::likePost(const HttpRequestPtr &req,
         resp->setStatusCode(k500InternalServerError);
         callback(resp);
     }
+    });
 }
 
 void PostController::unlikePost(const HttpRequestPtr &req,
@@ -1481,40 +1495,41 @@ void PostController::unlikePost(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Likes> mapper(dbClient);
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback, [userId, postId, callback] {
+        auto dbClient = drogon::app().getDbClient();
+        try {
+            // One statement instead of the mapper's find-then-delete. That
+            // pair was two round trips on an event loop, and it raced: two
+            // concurrent unlikes could both see the row and the second would
+            // delete a primary key that no longer existed. DELETE … RETURNING
+            // settles existence and removal together, in the database.
+            const auto r = dbClient->execSqlSync(
+                "DELETE FROM likes WHERE post_id = $1 AND user_id = $2 "
+                "RETURNING id",
+                postId, userId);
 
-    try {
-        auto likes = mapper.findBy(
-            Criteria(drogon_model::blog_db::Likes::Cols::_post_id, 
-                    CompareOperator::EQ, postId) &&
-            Criteria(drogon_model::blog_db::Likes::Cols::_user_id, 
-                    CompareOperator::EQ, userIdOpt.value())
-        );
+            if (r.empty()) {
+                Json::Value ret;
+                ret["error"] = "Like not found";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k404NotFound);
+                callback(resp);
+                return;
+            }
 
-        if (likes.size() == 0) {
             Json::Value ret;
-            ret["error"] = "Like not found";
+            ret["message"] = "Post unliked successfully";
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error (unlikePost): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to unlike post";
             auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k404NotFound);
+            resp->setStatusCode(k500InternalServerError);
             callback(resp);
-            return;
         }
-
-        mapper.deleteByPrimaryKey(likes[0].getValueOfId());
-
-        Json::Value ret;
-        ret["message"] = "Post unliked successfully";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to unlike post";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+    });
 }
 
 void PostController::getLikesCount(const HttpRequestPtr &req,

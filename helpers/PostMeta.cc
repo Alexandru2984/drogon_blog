@@ -169,43 +169,6 @@ Json::Value tagsForPost(const DbClientPtr& db, int postId)
     return out;
 }
 
-Json::Value tagsForPosts(const DbClientPtr& db, const std::vector<int>& postIds)
-{
-    Json::Value out(Json::objectValue);
-    if (postIds.empty()) return out;
-
-    try {
-        // = ANY($1) with an array literal, not an IN list built by string
-        // concatenation: one prepared statement shape regardless of how
-        // many ids, and no interpolation to get wrong.
-        std::string arr = "{";
-        for (std::size_t i = 0; i < postIds.size(); ++i) {
-            if (i) arr += ',';
-            arr += std::to_string(postIds[i]);
-        }
-        arr += '}';
-
-        auto r = db->execSqlSync(
-            "SELECT pt.post_id, t.slug, t.label FROM post_tags pt "
-            "JOIN tags t ON t.id = pt.tag_id "
-            "WHERE pt.post_id = ANY($1::int[]) "
-            "ORDER BY pt.post_id, t.label",
-            arr);
-
-        for (const auto& row : r) {
-            const std::string key = std::to_string(row["post_id"].as<int>());
-            if (!out.isMember(key)) out[key] = Json::Value(Json::arrayValue);
-            Json::Value tag;
-            tag["slug"]  = row["slug"].as<std::string>();
-            tag["label"] = row["label"].as<std::string>();
-            out[key].append(tag);
-        }
-    } catch (const DrogonDbException& e) {
-        LOG_ERROR << "DB Error (tagsForPosts): " << e.base().what();
-    }
-    return out;
-}
-
 const char kTagsJsonColumn[] =
     "COALESCE((SELECT json_agg(json_build_object('slug', tj.slug, 'label', tj.label) "
     "                          ORDER BY tj.label) "
