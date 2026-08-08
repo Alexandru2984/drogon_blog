@@ -43,6 +43,20 @@ public:
     // Number of currently-connected sockets (for /metrics). Cheap mutex-only.
     static std::size_t connectionCount();
 
+    // Hang up every socket opened under `sid`, with close code 1008.
+    //
+    // A WebSocket authenticates once, at the handshake, and then lives
+    // outside the request pipeline that enforces revocation — so a session
+    // killed by logout, "sign out this device", a password change, a ban or
+    // an account deletion stayed live on the socket, which is precisely the
+    // channel carrying that user's private messages. Revoking a session has
+    // to reach the connection it opened, not just the next HTTP request.
+    //
+    // Wired to sessions::setRevocationObserver in main(), so it fires for
+    // local revocations and for ones another process announces on
+    // blog_event alike. Idempotent; unknown sids are a no-op.
+    static void closeForSession(const std::string& sid);
+
     // Close every open WebSocket with a clean kNormalClosure frame. The
     // SPA's reconnect logic picks up the new pod after a short backoff
     // (see frontend_app/src/stores/messages.ts) so users barely notice

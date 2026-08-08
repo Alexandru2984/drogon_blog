@@ -36,6 +36,11 @@ constexpr auto kLastSeenInterval = std::chrono::minutes(5);
 std::mutex g_seenMu;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastSeen;
 
+// Set once at startup, read on every revocation. Not guarded: it is
+// installed before run() and never reassigned, so the only concurrency is
+// reads against a value that stopped changing before any thread existed.
+std::function<void(const std::string&)> g_revocationObserver;
+
 bool isRevoked(const std::string& sid)
 {
     std::shared_lock<std::shared_mutex> lk(g_revokedMu);
@@ -44,8 +49,18 @@ bool isRevoked(const std::string& sid)
 
 void markRevokedLocally(const std::string& sid)
 {
-    std::unique_lock<std::shared_mutex> lk(g_revokedMu);
-    g_revoked.insert(sid);
+    {
+        std::unique_lock<std::shared_mutex> lk(g_revokedMu);
+        // Nothing to announce for a sid that was already dead — a repeat
+        // revocation should not re-run the observer.
+        if (!g_revoked.insert(sid).second) return;
+    }
+
+    // Outside the lock. The observer hangs up WebSockets, which lands in
+    // MessageWebSocket's own mutex and, through handleConnectionClosed,
+    // arbitrary teardown; holding the revocation lock across that invites a
+    // deadlock for no benefit.
+    if (g_revocationObserver) g_revocationObserver(sid);
 }
 
 // Best-effort, fire-and-forget: a failed last_seen update is not worth
@@ -263,6 +278,11 @@ void onRevokedNotification(const std::string& sid)
 {
     if (sid.empty()) return;
     markRevokedLocally(sid);
+}
+
+void setRevocationObserver(std::function<void(const std::string&)> observer)
+{
+    g_revocationObserver = std::move(observer);
 }
 
 } // namespace sessions

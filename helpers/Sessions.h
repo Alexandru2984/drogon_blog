@@ -3,6 +3,7 @@
 #include <drogon/HttpRequest.h>
 #include <json/json.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -65,5 +66,20 @@ Json::Value list(int userId, const std::string& currentSid);
 // Applies a revocation observed on the blog_event channel. Called from the
 // pg_notify listener in main().
 void onRevokedNotification(const std::string& sid);
+
+// Installs a callback invoked with the sid every time a session becomes
+// revoked in this process — whether the revocation was issued here or
+// arrived on blog_event from another one.
+//
+// The hook exists because the revocation advice only fires on the *next*
+// HTTP request of a session, which is the wrong moment for anything
+// already holding an open connection. main() points this at
+// MessageWebSocket::closeForSession so a hung-up session's live socket
+// stops receiving that user's private messages immediately.
+//
+// Kept as a callback rather than a direct call so this helper does not
+// have to know that a WebSocket layer exists. Call once, before run();
+// the observer runs on whichever thread performed the revocation.
+void setRevocationObserver(std::function<void(const std::string&)> observer);
 
 } // namespace sessions

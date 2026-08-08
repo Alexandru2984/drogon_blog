@@ -271,6 +271,17 @@ int main()
     // a revoked session should not become a way to skip them.
     sessions::install();
 
+    // A revoked session must lose its WebSocket, not just its next request.
+    // The socket authenticates once at the handshake and then sits outside
+    // the request pipeline the revocation advice lives in, so logout,
+    // "sign out this device", a password change, a ban and an account
+    // deletion all left the live connection — the one carrying that user's
+    // private messages — happily connected. Every one of those paths runs
+    // through sessions::revoke / revokeOthers, so this single hook covers
+    // them all, plus revocations announced by another process on
+    // blog_event.
+    sessions::setRevocationObserver(&MessageWebSocket::closeForSession);
+
     // Roles + the write gate for suspended accounts. Fifteen mutating
     // endpoints exist today and each new one would otherwise have to
     // remember its own check, so this is enforced centrally.

@@ -3,6 +3,7 @@
 #include <drogon/drogon_test.h>
 #include <sodium.h>
 
+#include "../controllers/MessageWebSocket.h"
 #include "../helpers/AccessLog.h"
 #include "../helpers/Ops.h"
 #include "../helpers/PublicPages.h"
@@ -145,6 +146,15 @@ int main(int argc, char** argv)
     // handler runs. main() installs this after security::registerAdvices();
     // without it here, revocation silently does nothing in tests.
     sessions::install();
+
+    // …and the hook that carries a revocation out to the WebSocket the
+    // session opened. Same line as main(), for the same reason it is a hook
+    // at all: a revoked session that keeps its socket keeps receiving the
+    // account's private messages. This one is easy to forget here because
+    // main.cc is not part of the test binary, so production wiring only
+    // exists in the harness if it is written out twice.
+    sessions::setRevocationObserver(&MessageWebSocket::closeForSession);
+
     roles::install();
 
     std::promise<void> ready;
@@ -158,7 +168,15 @@ int main(int argc, char** argv)
 
     int status = test::run(argc, argv);
 
-    app().getLoop()->queueInLoop([]() { app().quit(); });
+    // Hang up any open socket, then stop — on the loop, in that order,
+    // exactly as main()'s signal handler does. Doing the shutdown from this
+    // thread instead would only queue the closes and let quit() race past
+    // them, leaving a live connection pinned to a loop that is trying to
+    // stop.
+    app().getLoop()->queueInLoop([]() {
+        MessageWebSocket::shutdownAll();
+        app().quit();
+    });
     loop.join();
     workers::stop();
     return status;
