@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -39,7 +40,20 @@ POSTS = [
 ]
 
 NUM_USERS = 5
-PASSWORD  = 'bench-pw-very-long-2026'
+
+# Generated per run rather than hard-coded.
+#
+# The literal that used to sit here was the only secret gitleaks found in the
+# whole history, and while it opens nothing today the reason is luck: this
+# script registers real accounts through the real /auth/register, so the
+# password is only harmless for as long as nobody points it at an instance
+# that matters. Bench runs are driven against production hosts often enough
+# that "nobody would" is not a control. A fresh random value per run also
+# removes the temptation to reuse it by hand.
+#
+# BENCH_PASSWORD overrides it, for the case where a run has to be resumed and
+# the existing users logged into again.
+PASSWORD = os.environ.get('BENCH_PASSWORD') or 'bench-' + secrets.token_urlsafe(24)
 
 
 def request_json(method: str, url: str, *, body=None, cookies=None, extra_headers=None):
