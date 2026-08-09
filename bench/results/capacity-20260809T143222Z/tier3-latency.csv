@@ -1,0 +1,10 @@
+label,n,ttfb_p50,ttfb_p95,total_p50,total_p95,cf_cache
+direct     /healthz,25,1.0,1.2,1.0,1.4,-
+nginx      /healthz,25,8.3,10.3,8.3,10.3,-
+cloudflare /healthz,25,39.5,58.5,39.6,58.6,-
+direct     /posts,25,2.0,3.2,2.1,3.3,-
+nginx      /posts,25,9.4,12.1,9.4,12.1,-
+cloudflare /posts,25,39.1,60.6,39.2,60.8,-
+direct     asset,25,1.2,1.7,1.2,1.8,-
+nginx      asset,25,8.0,11.0,8.1,11.2,-
+cloudflare asset,25,40.2,68.2,41.8,70.4,-

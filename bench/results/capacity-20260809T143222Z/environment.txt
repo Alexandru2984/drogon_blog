@@ -1,0 +1,16 @@
+Benchmark environment — 2026-08-09T14:35:10Z
+Host:            12 cores, 45G RAM
+Kernel:          7.0.0-28-generic
+Drogon:          number_of_threads=0 (=hardware_concurrency=12 IO loops), number_of_connections=16
+                 max_connections=20000, LimitNOFILE=65536
+nginx:           12 workers, worker_connections=4096, worker_rlimit_nofile=16384
+Generator:       wrk, ON THE SAME BOX as the server + PostgreSQL.
+                 => every number is a LOWER BOUND: the load generator competes
+                    with the server for the same 12 cores. An external generator
+                    would show higher ceilings.
+Bench VPS:       81.181.166.237 (micus-stuff) was DOWN this session — no external
+                 generator available, so tier 3 (through Cloudflare) is measured
+                 as realistic per-request latency, not max throughput (a single
+                 source IP saturating Cloudflare measures CF's bot/DDoS shaping,
+                 not the application).
+DB dataset:      2 posts, 7 users
