@@ -8,6 +8,18 @@ updates:
     groups:
       vue:        { patterns: ["vue", "vue-router", "pinia", "@vitejs/*", "vite", "vue-tsc"] }
       types:      { patterns: ["@types/*", "typescript"] }
+    # TypeScript majors are gated on the lint toolchain, not on us.
+    # typescript-eslint declares `typescript ">=4.8.4 <6.1.0"` and still does
+    # as of 8.66.0, its latest, so TypeScript 7 installs fine and then breaks
+    # `npm run lint` — a required check. Dependabot proposed it as #43, had it
+    # closed, and recreated the impossible half as #44 within the minute; left
+    # alone it would keep doing that every week.
+    #
+    # Minor and patch updates still flow. Drop this entry once
+    # typescript-eslint widens its peer range.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # End-to-end test harness — Playwright + TS.
   - package-ecosystem: "npm"
