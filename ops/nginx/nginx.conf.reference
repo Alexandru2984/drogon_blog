@@ -1,0 +1,121 @@
+# Reference copy of the host's /etc/nginx/nginx.conf — documentation, not a
+# deployment artifact. nginx does not read this file.
+#
+# Tracked for one directive: worker_rlimit_nofile. This nginx serves 71
+# hostnames across every project on the box, so its descriptor budget is a
+# shared resource, and the reason it is set is not obvious from the value:
+# without it, systemd's default soft limit of 1024 made worker_connections
+# 4096 unreachable by a factor of five. See the comment at the directive.
+#
+# Everything else here is the distribution default.
+
+user www-data;
+worker_processes auto;
+
+# Descriptor budget per worker. Every connection nginx holds costs one, and a
+# proxied request costs a second while it is in flight, so this — not
+# worker_connections — is what actually caps concurrency.
+#
+# systemd hands each process a soft limit of 1024 against a hard limit of
+# 524288, and nginx does not raise its own. That left `worker_connections
+# 4096` unreachable by a factor of five: measured on this host at 1.19
+# descriptors per active client, a worker ran out at roughly 800, so the 12
+# workers serving all 71 hostnames on this box topped out near 9,500
+# concurrent users rather than the 49,152 the config implied.
+#
+# 16384 puts the ceiling around 40,000 with room to spare, and stays far
+# enough below the hard limit that a descriptor leak exhausts this service
+# rather than the host. nginx keeps roughly 256 bytes of state per
+# connection, so the memory this admits is tens of megabytes, not hundreds.
+worker_rlimit_nofile 16384;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+	worker_connections 4096;
+	# multi_accept on;
+}
+
+http {
+
+	##
+	# Basic Settings
+	##
+
+	sendfile on;
+	tcp_nopush on;
+	types_hash_max_size 2048;
+	server_tokens off;
+
+	# server_names_hash_bucket_size 64;
+	# server_name_in_redirect off;
+
+	include /etc/nginx/mime.types;
+	default_type application/octet-stream;
+
+	##
+	# SSL Settings
+	##
+
+	ssl_protocols TLSv1.2 TLSv1.3; # Dropping SSLv3, ref: POODLE
+	ssl_prefer_server_ciphers on;
+
+	##
+	# Logging Settings
+	##
+
+	access_log /var/log/nginx/access.log;
+
+	##
+	# Security Headers (default; per-vhost add_header REPLACES this list,
+	# so any vhost that sets its own headers needs to repeat the ones below)
+	##
+	add_header X-Content-Type-Options "nosniff" always;
+	add_header X-Frame-Options "SAMEORIGIN" always;
+	add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+	add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+	##
+	# Gzip Settings
+	##
+
+	gzip on;
+
+	# gzip_vary on;
+	# gzip_proxied any;
+	# gzip_comp_level 6;
+	# gzip_buffers 16 8k;
+	# gzip_http_version 1.1;
+	# gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+	##
+	# Virtual Host Configs
+	##
+
+#	include /etc/nginx/crowdsec_nginx.conf;
+	include /etc/nginx/conf.d/*.conf;
+	include /etc/nginx/sites-enabled/*;
+}
+
+
+#mail {
+#	# See sample authentication script at:
+#	# http://wiki.nginx.org/ImapAuthenticateWithApachePhpScript
+#
+#	# auth_http localhost/auth.php;
+#	# pop3_capabilities "TOP" "USER";
+#	# imap_capabilities "IMAP4rev1" "UIDPLUS";
+#
+#	server {
+#		listen     localhost:110;
+#		protocol   pop3;
+#		proxy      on;
+#	}
+#
+#	server {
+#		listen     localhost:143;
+#		protocol   imap;
+#		proxy      on;
+#	}
+#}
