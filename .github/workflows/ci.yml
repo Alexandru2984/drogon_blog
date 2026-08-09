@@ -60,7 +60,36 @@ jobs:
           TEST_DB_PASSWORD:    blog_ci_password
           TEST_DB_NAME:        blog_test_db
           TEST_MIGRATIONS_DIR: ${{ github.workspace }}/migrations
-        run: ./build/test/blog_test
+        run: |
+          # Keep the core file. This suite segfaulted once in six runs on
+          # 2026-08-09 (run #110, retried green on the same commit) and left
+          # nothing to work with: "Segmentation fault (core dumped)" and no
+          # stack. It does not reproduce on the production host — twenty runs,
+          # twelve of them under full CPU contention — so the only place it can
+          # be caught is here, and only if the core survives the job.
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p > /dev/null
+          ./build/test/blog_test
+
+      - name: Backtrace, if the suite crashed
+        if: failure()
+        # A stack from the core turns a heisenbug into an ordinary bug. Runs
+        # only on failure, so it costs nothing on the normal path.
+        run: |
+          sudo apt-get install -y -qq gdb
+          shopt -s nullglob
+          cores=(/tmp/core.*)
+          if [ ${#cores[@]} -eq 0 ]; then
+            echo "No core file — the failure was not a crash."
+            exit 0
+          fi
+          for c in "${cores[@]}"; do
+            echo "::group::backtrace from $c"
+            gdb -batch -q \
+                -ex "thread apply all bt full" \
+                ./build/test/blog_test "$c" 2>&1 | head -300
+            echo "::endgroup::"
+          done
 
   frontend:
     name: Frontend (lint + typecheck + build)
