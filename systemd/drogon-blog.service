@@ -14,6 +14,25 @@ EnvironmentFile=/home/micu/drogon_blog/.env
 Restart=on-failure
 RestartSec=5
 
+# One file descriptor per connection, so this is the real ceiling on how many
+# visitors can be connected at once — not config.json's `max_connections`,
+# which was set to 4096 and could never be reached.
+#
+# systemd's default is a soft limit of 1024 against a hard limit of 524288,
+# and it is the soft one that binds. Drogon never raises its own, so the
+# process stopped accepting at 1024 open descriptors — about 880 usable once
+# the database pool, listeners and Redis have taken theirs. Measured: while
+# 1024 were held, the kernel had 1470 connections established that the
+# application could not pick up, and a new visitor got no response at all.
+# Not a 503, not a reset — silence until their client gave up.
+#
+# 65536 rather than the hard limit: it is far above anything this box will
+# see, and leaving headroom below the hard limit keeps a runaway descriptor
+# leak from consuming the host instead of just this service. Idle connections
+# cost about 7 KB each here (measured: 900 of them moved RSS from 57 to 63
+# MB), so the memory implied by this ceiling is on the order of 450 MB.
+LimitNOFILE=65536
+
 # ---- Sandboxing ----
 # Defence-in-depth so an RCE in a C++ parser (libvips / cmark / grpc / libpq)
 # is confined. Kept compatible with running in-tree as User=micu: the app
