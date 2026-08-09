@@ -148,7 +148,23 @@
         // Hardening: bound total connections to a sane ceiling. Behind nginx on
         // loopback this is plenty (upstream concurrency is modest) while
         // capping memory under a connection flood.
-        "max_connections": 4096,
+        // 4096 was below what the edge in front of this can carry, so it
+        // would have been the first thing to break: nginx sustains about
+        // 9,500 concurrent active users on this host (12 workers, ~1.19
+        // descriptors per client measured under load), and Drogon refusing
+        // at 4096 turns those into 502s while nginx still has room.
+        //
+        // Measured ceiling of the application itself: 58,000 connections
+        // held with new visitors still served instantly, 451 MB resident,
+        // memory perfectly linear at ~7 KB each. There is no lower
+        // application limit to discover — whatever is set here is the limit.
+        //
+        // 20000 sits above the edge's ceiling with room to spare, and well
+        // under LimitNOFILE=65536. That gap is the point: reaching *this*
+        // limit force-closes the connection and nginx answers 502 in 9 ms,
+        // while reaching the descriptor limit instead leaves the client
+        // hanging with no response at all until it gives up.
+        "max_connections": 20000,
         //max_connections_per_ip: maximum number of connections per client, 0 by default which means no limit
         // Deliberately left at 0 (unlimited): every connection originates from
         // nginx at 127.0.0.1, so a per-IP cap here would throttle the entire
