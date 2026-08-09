@@ -582,6 +582,11 @@ uploads/uploads/
 # Environment / secrets
 .env
 .env.*
+# …except the template, which is the opposite of a secret: it is the list of
+# knobs a deployer has to know about, and it was being withheld from them by
+# the wildcard above. It carries placeholders only (DB_PASSWORD=change-me) and
+# is checked for real values before each commit.
+!.env.example
 
 # Symlinked uploads in public dir
 public/uploads
