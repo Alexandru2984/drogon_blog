@@ -100,6 +100,15 @@ void issueCsrfCookie(const drogon::HttpRequestPtr& req,
 // Acquires (or returns false / 429-able state) one slot from the per-IP token
 // bucket identified by `bucketName`. Different bucket names give independent
 // budgets (e.g. "login" vs "register").
+//
+// The buckets live in a process-local map. On one instance that is the right
+// implementation and costs a hash lookup; across two it silently doubles every
+// limit, because each process budgets on its own. A chart ships in chart/, so
+// that is a configuration change away rather than a rewrite — moving these
+// buckets into Redis (already a dependency via BLOG_REDIS_URL) is a
+// prerequisite for running more than one replica, not an optimisation to do
+// afterwards. Restarting also empties them, which resets every limit; that is
+// tolerable because restarts are operator-initiated.
 struct RateLimitDecision {
     bool   allowed;
     double retryAfterSeconds; // populated when !allowed

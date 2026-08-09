@@ -22,6 +22,23 @@ groups:
             Prometheus has not scraped {{ $labels.instance }} for 1 minute.
             Either the systemd unit died or /metrics started returning 401.
 
+      - alert: BlogRestartLoop
+        # Restart=on-failure in the unit means a crash comes straight back
+        # up, so a crashloop and a healthy service look identical from the
+        # outside: `up` never drops long enough for BlogDown to fire and the
+        # site answers between crashes. Uptime resetting repeatedly is the
+        # only signal that separates them.
+        expr: blog_uptime_seconds < 600 and changes(blog_uptime_seconds[30m]) > 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Blog process is restart-looping
+          description: |
+            Uptime has reset more than three times in half an hour.
+            `journalctl -u drogon-blog` will have the reason; a crash during
+            startup (bad migration, missing env var) is the usual cause.
+
       - alert: BlogHighErrorRate
         # 5xx ratio over the last 5 minutes. We accept the occasional 5xx
         # (e.g. transient DB blip) but anything sustained > 1% is on us.
@@ -82,6 +99,25 @@ groups:
             Investigate mailcow / Postfix relay health. Users trying to
             register or reset passwords are currently waiting longer than
             they should for verification mail.
+
+      - alert: BlogWorkerPoolShedding
+        # The pools in front of Argon2id and libvips refuse work rather than
+        # queue it without bound, so a rejection is a 503 handed to a real
+        # person — a login or an image upload that did not happen. This is
+        # distinct from BlogHighInFlight: that one catches the event loops
+        # saturating, this one catches the blocking pools behind them.
+        expr: increase(blog_worker_pool_rejected_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Worker pool {{ $labels.pool }} is refusing jobs
+            ({{ $value }} in 10m)
+          description: |
+            Either the pool is undersized for current load (BLOG_AUTH_WORKERS
+            defaults to 4, BLOG_MEDIA_WORKERS to 2) or something inside it has
+            stopped completing and the backlog is not draining.
 
       - alert: BlogHighInFlight
         # If many requests pile up in-flight, the event loop is saturated.

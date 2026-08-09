@@ -69,6 +69,29 @@ unless noted otherwise.
 - **Avatar path traversal.** The upload filename is generated server-side (`profile_<user_id>_<unix_ts><ext>`); the user-supplied filename is discarded except for its extension. Decompression-bomb and EXIF risks are addressed in the follow-up image-pipeline work (libvips).
 - **CSRF.** Mutating endpoints require a double-submit cookie/header match (see `helpers/Security.cc`).
 
+### Known limitations
+
+These are not defects in the current deployment. They are properties of it,
+written down so that changing the deployment does not silently invalidate a
+control.
+
+- **Rate limiting is per process, in memory.** `helpers/Security.cc` keeps its
+  token buckets in a process-local map. On the single instance this runs on
+  that is exactly right and costs a hash lookup. Run two replicas and every
+  limit doubles, because each replica budgets independently — a chart ships in
+  `chart/`, so this is reachable by configuration rather than by a rewrite.
+  Redis is already a dependency (`BLOG_REDIS_URL`, used by `helpers/Presence.cc`)
+  and would be the natural backing store, but a distributed limiter is a change
+  to the most security-sensitive helper in the codebase and is not worth making
+  speculatively. **Scaling past one instance means moving the buckets first.**
+  The buckets are also lost on restart, which resets every limit; that is
+  acceptable because restarts are operator-initiated.
+
+- **`/metrics` is protected by a bearer token, not by identity.** Anyone holding
+  `METRICS_TOKEN` can read it. It is additionally unreachable from outside
+  (nginx returns 404, the listener binds to loopback), so the token is a second
+  layer rather than the only one.
+
 ---
 
 ## Controls overview
