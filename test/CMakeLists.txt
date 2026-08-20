@@ -71,4 +71,26 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${HIREDIS_LIBRARIES}
     brotlidec brotlienc)
 
+# Exercise the optional gRPC reader whenever the toolchain is present. Reuse
+# the protobuf outputs generated for the production build and compile the
+# exact service implementation that ships, instead of testing a SQL
+# look-alike.
+if (BLOG_GRPC_AVAILABLE)
+    target_sources(${PROJECT_NAME} PRIVATE
+        test_grpc.cc
+        ${CMAKE_BINARY_DIR}/proto/blog.pb.cc
+        ${CMAKE_BINARY_DIR}/proto/blog.grpc.pb.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/grpc/BlogReaderService.cc)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_BINARY_DIR}/proto
+        ${GRPCPP_INCLUDE_DIRS}
+        ${PROTOBUF_INCLUDE_DIRS})
+    target_link_directories(${PROJECT_NAME} PRIVATE
+        ${GRPCPP_LIBRARY_DIRS}
+        ${PROTOBUF_LIBRARY_DIRS})
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${GRPCPP_LIBRARIES}
+        ${PROTOBUF_LIBRARIES})
+endif ()
+
 ParseAndAddDrogonTests(${PROJECT_NAME})

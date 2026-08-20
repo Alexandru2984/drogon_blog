@@ -100,7 +100,11 @@ void install(const std::string& siteOrigin)
                 "       u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
-                " WHERE p.hidden_at IS NULL "
+                // Public discovery must use the same visibility predicate as
+                // the REST feed. `hidden_at IS NULL` only covers moderation;
+                // without `published_at IS NOT NULL`, Atom becomes an
+                // unauthenticated export of every saved draft.
+                " WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL "
                 " ORDER BY p.id DESC LIMIT 30";
 
             db->execSqlAsync(kSql,
@@ -182,7 +186,9 @@ void install(const std::string& siteOrigin)
             auto db = app().getDbClient();
             static const char* kSql =
                 "SELECT id, updated_at FROM posts "
-                " WHERE hidden_at IS NULL "
+                // Draft IDs are private too. Advertising one in the sitemap
+                // leaks its existence and hands crawlers the preview URL.
+                " WHERE hidden_at IS NULL AND published_at IS NOT NULL "
                 " ORDER BY id DESC LIMIT 5000";
 
             db->execSqlAsync(kSql,
@@ -287,7 +293,11 @@ void install(const std::string& siteOrigin)
                 "SELECT p.title, p.content, u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
-                " WHERE p.hidden_at IS NULL AND p.id = $1";
+                // A guessed id must not turn the social-card preview into a
+                // public draft reader. Keep this predicate aligned with the
+                // REST `getPost` rule for anonymous viewers.
+                " WHERE p.hidden_at IS NULL "
+                "   AND p.published_at IS NOT NULL AND p.id = $1";
 
             db->execSqlAsync(kSql,
                 [origin, postId, cb](const orm::Result& r) {

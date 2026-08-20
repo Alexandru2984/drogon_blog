@@ -328,3 +328,59 @@ DROGON_TEST(Drafts_ServeNoCommentThread)
                 });
         });
 }
+
+DROGON_TEST(Drafts_AreAbsentFromPublicDiscoverySurfaces)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+    const std::string token = "draftdiscovery_" + uniqueSuffix();
+
+    withAuthor(client, "draftdiscovery",
+        [TEST_CTX, client, token](const Author& a) {
+            auto create = makePost("Discovery draft " + token,
+                                   "Private preview body " + token + ".",
+                                   /*draft=*/true);
+            a.attachAuth(create);
+
+            client->sendRequest(create,
+                [TEST_CTX, client, token](ReqResult result,
+                                          const HttpResponsePtr& created) {
+                    REQUIRE(result == ReqResult::Ok);
+                    REQUIRE(created->getStatusCode() == k201Created);
+                    const auto json = created->getJsonObject();
+                    REQUIRE(json);
+                    const int postId = (*json)["post"]["id"].asInt();
+                    REQUIRE(postId > 0);
+
+                    // Atom previously returned the complete rendered body.
+                    client->sendRequest(anonGet("/feed.xml"),
+                        [TEST_CTX, token](ReqResult r,
+                                          const HttpResponsePtr& resp) {
+                            REQUIRE(r == ReqResult::Ok);
+                            REQUIRE(resp->getStatusCode() == k200OK);
+                            CHECK(resp->body().find(token) == std::string::npos);
+                        });
+
+                    // Even a URL without the body confirms a private draft
+                    // exists and gives crawlers a stable address for it.
+                    client->sendRequest(anonGet("/sitemap.xml"),
+                        [TEST_CTX, postId](ReqResult r,
+                                           const HttpResponsePtr& resp) {
+                            REQUIRE(r == ReqResult::Ok);
+                            REQUIRE(resp->getStatusCode() == k200OK);
+                            const std::string leakedPath =
+                                "/preview/posts/" + std::to_string(postId);
+                            CHECK(resp->body().find(leakedPath) ==
+                                  std::string::npos);
+                        });
+
+                    // The share-card endpoint carried title and a raw-markdown
+                    // excerpt for anyone who could guess the monotonic id.
+                    client->sendRequest(
+                        anonGet("/preview/posts/" + std::to_string(postId)),
+                        [TEST_CTX](ReqResult r, const HttpResponsePtr& resp) {
+                            REQUIRE(r == ReqResult::Ok);
+                            CHECK(resp->getStatusCode() == k404NotFound);
+                        });
+                });
+        });
+}

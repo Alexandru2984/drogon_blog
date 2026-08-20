@@ -40,6 +40,8 @@ jobs:
             libsodium-dev libcurl4-openssl-dev libssl-dev libbrotli-dev \
             libvips-dev \
             libcmark-gfm-dev libcmark-gfm-extensions-dev \
+            libgrpc++-dev libprotobuf-dev \
+            protobuf-compiler protobuf-compiler-grpc \
             postgresql-client
 
       - name: Configure
