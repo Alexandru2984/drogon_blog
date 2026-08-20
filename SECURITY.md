@@ -62,6 +62,7 @@ Regression coverage lives beside the affected subsystem.
 | 21| **Med**  | **No privilege model and no way to deal with abuse.** Every account was equal: there was no moderator role, no way to take down abusive content short of editing the database by hand, and no way for a reader to report anything at all. For a public site accepting user-submitted posts, comments and direct messages, that is a gap that eventually closes itself the unpleasant way. | Migration 0012 adds `users.role` (constrained to `user`/`moderator`/`admin`), reversible hide columns on posts and comments, ban columns, and a `reports` table with a partial unique index that stops one reporter flooding the queue with the same complaint. `helpers/Roles` is the single gate: privileged routes answer **404, not 403**, to an authenticated caller without the role, so the moderation surface is not discoverable by probing. Hidden content is filtered from *every* read path — feed, single post, search, profile listing, comments, Atom feed, share preview and the gRPC reader — because a predicate missing from any one of them makes hiding cosmetic. Bans are enforced by a central pre-routing advice rather than per-handler, since fifteen mutating endpoints exist today and a new one would otherwise be silently exempt; the check reads an in-memory set kept current by a `user_ban_changed` event on `blog_event`, so it costs no query. Banning also revokes the account's sessions, and staff accounts cannot be banned through the endpoint — otherwise one compromised moderator could lock out every other moderator and the admins. Roles are granted out of band via `scripts/grant-role.sh`; there is no escalation endpoint. Tests in `test/test_moderation.cc`. |
 | 22| **High** | **A malformed TOTP encryption key silently downgraded new 2FA seeds to plaintext.** The parser returned the same `nullopt` for “unset” and “invalid,” so one typo in `BLOG_TOTP_KEY` disabled encryption without stopping startup. The Helm chart did not expose the key at all. | Invalid keys now throw at the parser and write boundary; startup validates before accepting traffic, and TLS/production mode refuses a missing key. The chart accepts an external Secret (preferred), validates inline key shape, injects `BLOG_TOTP_KEY`, and refuses a TLS render without it. Encryption round-trip and invalid-key regressions live in `test/test_2fa.cc`. |
 | 23| **High** | **A stolen authenticated session could add an attacker's passkey or TOTP seed.** Factor enrolment and passkey removal trusted the session alone, turning a transient session theft into durable account access. Provisioning secrets and recovery codes were also returned without an explicit no-store policy. | TOTP setup, WebAuthn registration begin, and passkey removal now require the current password, verified off the IO loop. Setup creates a session-bound, one-shot authorization that expires after ten minutes and is required by TOTP confirmation / WebAuthn finish. Sensitive 2FA status, credential, provisioning, and recovery-code responses emit `Cache-Control: private, no-store`, `Pragma: no-cache`, and `Vary: Cookie`. Failed re-authentication is audited, and the enrolment/removal paths have per-account rate limits. Integration and browser regressions cover the flows. |
+| 24| **High** | **The Helm chart defaulted to two app replicas despite process-local sessions.** Requests load-balanced to a different pod lost authentication, and every pod startup globally retired the session-registry rows belonging to still-running peers. The optional HPA amplified both failures and multiplied every in-memory security rate-limit budget. | The chart now defaults to one replica and fails template rendering for `replicaCount != 1` or `autoscaling.enabled=true`. The dormant HPA manifest was removed, chart documentation no longer advertises horizontal application scaling, and CI asserts both unsafe configurations are rejected. Multi-pod support is blocked until sessions and rate limits have distributed stores. |
 
 ### Vectors verified clean
 
@@ -77,17 +78,17 @@ These are not defects in the current deployment. They are properties of it,
 written down so that changing the deployment does not silently invalidate a
 control.
 
-- **Rate limiting is per process, in memory.** `helpers/Security.cc` keeps its
-  token buckets in a process-local map. On the single instance this runs on
-  that is exactly right and costs a hash lookup. Run two replicas and every
-  limit doubles, because each replica budgets independently — a chart ships in
-  `chart/`, so this is reachable by configuration rather than by a rewrite.
-  Redis is already a dependency (`BLOG_REDIS_URL`, used by `helpers/Presence.cc`)
-  and would be the natural backing store, but a distributed limiter is a change
-  to the most security-sensitive helper in the codebase and is not worth making
-  speculatively. **Scaling past one instance means moving the buckets first.**
-  The buckets are also lost on restart, which resets every limit; that is
-  acceptable because restarts are operator-initiated.
+- **Sessions and rate limiting are per process, in memory.** Drogon's session
+  store and the token buckets in `helpers/Security.cc` are process-local. The
+  Helm chart refuses `replicaCount != 1` and HPA so this limitation cannot be
+  enabled accidentally. Manually scaling the Deployment would bypass that
+  guard, produce intermittent logouts, and multiply every limit by the number
+  of pods. **Scaling past one instance means moving both stores first.** Redis
+  is already an optional dependency (`BLOG_REDIS_URL`, used by
+  `helpers/Presence.cc`) and is the natural candidate, but a distributed
+  limiter is a change to a security-sensitive helper and is not worth making
+  speculatively. Buckets are also lost on restart; that is acceptable because
+  restarts are operator-initiated and all in-memory sessions end with them.
 
 - **`/metrics` is protected by a bearer token, not by identity.** Anyone holding
   `METRICS_TOKEN` can read it. It is additionally unreachable from outside

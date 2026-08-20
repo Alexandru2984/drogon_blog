@@ -9,7 +9,7 @@ type: application
 # appVersion: image tag this chart was tested against; values.image.tag
 #             overrides per-install. Quoted because SemVer-ish strings
 #             starting with a digit can be parsed as numbers otherwise.
-version:    0.1.1
+version:    0.1.2
 appVersion: "0.1.0"
 kubeVersion: ">=1.27.0"
 home: https://github.com/Alexandru2984/drogon_blog

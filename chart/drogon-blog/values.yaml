@@ -10,8 +10,9 @@ image:
 
 imagePullSecrets: []
 
-# Pod replicas. HPA (below) takes precedence when enabled.
-replicaCount: 2
+# Drogon's session store is process-local. Exactly one app replica is safe;
+# the chart rejects any other value until a distributed session store lands.
+replicaCount: 1
 
 # Names. `nameOverride` swaps the chart name; `fullnameOverride`
 # replaces the whole release-prefixed name. Both empty → use the
@@ -51,12 +52,11 @@ database:
 # stays bounded even if the app spikes thread-pool concurrency
 # (Drogon's worker pool, large bench bursts, etc.).
 #
-# Trade-off: an extra hop per query (loopback, ~50µs). Worth it once
-# you have >1 app replica or burst load that would otherwise overshoot
-# PG's max_connections; for a single replica it's marginal.
+# Trade-off: an extra hop per query (loopback, ~50µs). Worth it for burst
+# load that would otherwise overshoot PG's max_connections; with the
+# currently supported single app replica it is otherwise marginal.
 #
-# Defaults are sized for a 1-2 CPU pod hitting a 100-connection PG
-# cap with a couple of replicas — bump pool_size if you scale out.
+# Defaults are sized for a 1-2 CPU pod hitting a 100-connection PG cap.
 pgbouncer:
   enabled: false
   image:
@@ -101,9 +101,9 @@ cnpg:
 # WebSocket-online users in a shared Redis (SETEX user:N:online TTL).
 # /users/{id} surfaces an `online: true` field for active users.
 #
-# Useful once you scale past one app pod — pg_notify already fans
-# out new messages across pods, but "is user N online globally?"
-# needs a shared store. Leave empty for single-pod deployments.
+# This also supplies the shared presence primitive a future multi-pod
+# deployment will need. Multi-pod app deployments are currently rejected
+# because authentication sessions and rate limits remain process-local.
 #
 # Production note: the binary needs to be built with libhiredis-dev
 # (the Dockerfile does this; bare-metal builds may not). When the
@@ -240,8 +240,10 @@ resources: {}
   #   memory: "512Mi"
 
 # ------------------------------------------------------------------
-# Autoscaler
+# Autoscaler (reserved, currently unsupported)
 # ------------------------------------------------------------------
+# Enabling this is rejected at template time. HPA can return only after
+# sessions and security rate limits have distributed backing stores.
 autoscaling:
   enabled: false
   minReplicas: 2

@@ -60,9 +60,10 @@ Redis better than the SQL trigger model.
 
 ## Consequences
 
-- The hub trivially scales horizontally: every pod listens on the
-  same channel, every pod gets every event, and each pod filters
-  for sockets it owns.
+- The hub itself can scale horizontally: every pod listens on the same
+  channel, receives every event, and filters for sockets it owns. The full
+  application cannot yet do so safely because sessions and security rate
+  limits are process-local; the Helm chart blocks multiple app replicas.
 - Operationally, the listener is one more long-lived libpq
   connection per pod. At 1 pod × 1 conn this is a non-issue; at
   100 pods × 1 conn that's 100 idle connections to PG, which

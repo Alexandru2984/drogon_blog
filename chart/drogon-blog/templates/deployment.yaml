@@ -7,17 +7,19 @@
 {{- if and .Values.app.secureCookies (not (or .Values.totp.encryptionKey .Values.totp.existingSecret)) -}}
 {{- fail "totp.encryptionKey or totp.existingSecret is required when app.secureCookies=true" -}}
 {{- end -}}
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail "replicaCount must be 1: Drogon sessions and security rate limits are process-local" -}}
+{{- end -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- fail "autoscaling is unsupported until sessions and security rate limits use distributed stores" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "drogon-blog.fullname" . }}
   labels: {{- include "drogon-blog.labels" . | nindent 4 }}
 spec:
-  # HPA-managed: omit replicas when autoscaling is on, so HPA can take
-  # ownership without the helm upgrade fighting it.
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -107,8 +109,8 @@ spec:
                 command: ["/bin/sh", "-c", "sleep {{ .Values.lifecycle.preStopSleepSeconds }}"]
         {{- if .Values.pgbouncer.enabled }}
         # PgBouncer sidecar. Pools app-side queries onto a bounded set
-        # of connections to the upstream Postgres so a multi-replica
-        # rollout / burst doesn't run PG's max_connections cap. The
+        # of connections to the upstream Postgres so a worker-pool burst
+        # doesn't run PG's max_connections cap. The
         # app talks to this container on 127.0.0.1:6432 (see the
         # appDbHost/Port helpers + configmap.yaml).
         #

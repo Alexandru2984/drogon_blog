@@ -6,7 +6,7 @@ clusters without a values fork.
 
 ## What this chart owns
 
-- `Deployment` running the `blog` binary, rolling update (`maxSurge: 1,
+- Single-replica `Deployment` running the `blog` binary, rolling update (`maxSurge: 1,
   maxUnavailable: 0`), liveness on `/healthz`, readiness on `/readyz`.
 - `Service` (ClusterIP by default) on port `8092` (the only port the
   app exposes — frontend is served as static assets from `/app/public`
@@ -19,9 +19,9 @@ clusters without a values fork.
 - `ServiceAccount` with token automount disabled — the app never talks
   to the Kubernetes API, so the in-pod token is just a stray
   credential surface.
-- `Ingress`, `HorizontalPodAutoscaler`, `ServiceMonitor` — all gated
-  by their own `enabled` flag, off by default. Each one is wired only
-  when you opt in.
+- `Ingress` and `ServiceMonitor` — gated by their own `enabled` flags,
+  off by default. Horizontal app scaling is intentionally rejected while
+  authentication sessions and security rate limits are process-local.
 
 ## What this chart does NOT own
 
@@ -65,8 +65,8 @@ connection that isn't routed through bouncer). Tunables:
 | `pgbouncer.maxClient` | `200` | client-side cap |
 | `pgbouncer.image.tag` | `1.23.1` | pin via image tag |
 
-Worth turning on when you have >1 app replica or a workload that
-bursts above PG's `max_connections` cap.
+Worth turning on for a workload that bursts above PG's
+`max_connections` cap even on the supported single app replica.
 
 ### CNPG (`cnpg.enabled: true`)
 
@@ -120,7 +120,7 @@ helm upgrade --install blog ./chart/drogon-blog \
 |---|---|---|
 | `image.repository` | `ghcr.io/alexandru2984/drogon-blog` | image repo |
 | `image.tag` | `""` (→ `.Chart.appVersion`) | pin per install |
-| `replicaCount` | `2` | ignored when `autoscaling.enabled` |
+| `replicaCount` | `1` | only supported value; other values fail rendering |
 | `database.host` / `port` / `name` / `user` | `postgres / 5432 / blog_db / blog_user` | non-secret PG conn |
 | `database.password` | `""` | required unless `database.existingSecret` is set |
 | `database.existingSecret` / `existingSecretKey` | `""` / `password` | bring-your-own Secret |
@@ -133,7 +133,7 @@ helm upgrade --install blog ./chart/drogon-blog \
 | `app.disableRateLimit` | `false` | bypass `/auth/*` token buckets — bench only |
 | `service.type` / `port` | `ClusterIP / 8092` | |
 | `ingress.enabled` | `false` | when true, templates a v1 Ingress |
-| `autoscaling.*` | `enabled: false`, `minReplicas: 2`, `maxReplicas: 6`, `targetCPUUtilizationPercentage: 70` | HPA v2 (Resource/CPU) |
+| `autoscaling.enabled` | `false` | reserved; `true` fails rendering until distributed session/rate-limit stores land |
 | `metrics.serviceMonitor.enabled` | `false` | requires `app.metricsToken` or `metrics.serviceMonitor.bearerToken` |
 | `resources` | `{}` | set requests + limits in prod |
 | `podSecurityContext` / `containerSecurityContext` | hardened defaults | non-root, capabilities dropped, seccomp `RuntimeDefault` |
@@ -145,6 +145,8 @@ helm upgrade --install blog ./chart/drogon-blog \
   unless `database.existingSecret` is set.
 - TLS-mode installs require either `totp.encryptionKey` or
   `totp.existingSecret`; inline keys are shape-validated before rendering.
+- `replicaCount` must be exactly `1` and autoscaling must remain disabled;
+  the application cannot safely load-balance process-local sessions.
 - `metrics.serviceMonitor.enabled` is `fail`-validated against having
   *some* bearer token defined — a ServiceMonitor against a 403'd
   `/metrics` is a silent monitoring outage waiting to happen.
@@ -157,4 +159,5 @@ helm upgrade --install blog ./chart/drogon-blog \
 `.github/workflows/ci.yml` runs `helm lint`, then `helm template +
 kubeconform` twice — once with defaults and once with every opt-in
 feature on — so a template that only renders behind a flag (Ingress,
-HPA, ServiceMonitor) still gets schema-validated on every change.
+ServiceMonitor, PgBouncer, CNPG) still gets schema-validated on every change.
+Separate negative renders prove that multiple replicas and HPA fail closed.

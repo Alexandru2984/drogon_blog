@@ -339,7 +339,7 @@ jobs:
       - name: Render & validate (all opt-ins on)
         # Covers the templates only emitted when their feature flag is
         # set — otherwise lint / kubeconform never sees ingress.yaml,
-        # hpa.yaml, servicemonitor.yaml, the metrics secret, the
+        # servicemonitor.yaml, the metrics secret, the
         # pgbouncer sidecar container, or the CNPG Cluster CR.
         # -ignore-missing-schemas is essential because the CNPG
         # Cluster CR is a CRD that kubeconform's bundled schemas
@@ -350,13 +350,32 @@ jobs:
             --set database.password=ci-only-not-real \
             --set-string totp.encryptionKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
             --set ingress.enabled=true \
-            --set autoscaling.enabled=true \
             --set app.metricsToken=ci-token \
             --set metrics.serviceMonitor.enabled=true \
             --set pgbouncer.enabled=true \
             --set cnpg.enabled=true \
             | kubeconform -summary -strict -ignore-missing-schemas \
                           -kubernetes-version 1.30.0
+
+      - name: Refuse unsafe horizontal app scaling
+        run: |
+          common_args=(
+            --set database.password=ci-only-not-real
+            --set-string totp.encryptionKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          )
+          if helm template ci chart/drogon-blog "${common_args[@]}" \
+              --set replicaCount=2 >/tmp/replicas.out 2>/tmp/replicas.err; then
+            echo "replicaCount=2 rendered but must be rejected" >&2
+            exit 1
+          fi
+          grep -q "replicaCount must be 1" /tmp/replicas.err
+
+          if helm template ci chart/drogon-blog "${common_args[@]}" \
+              --set autoscaling.enabled=true >/tmp/hpa.out 2>/tmp/hpa.err; then
+            echo "autoscaling.enabled=true rendered but must be rejected" >&2
+            exit 1
+          fi
+          grep -q "autoscaling is unsupported" /tmp/hpa.err
 
   e2e:
     name: E2E (Playwright vs docker-compose)
