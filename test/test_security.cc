@@ -201,9 +201,9 @@ DROGON_TEST(Security_LoginShapeDoesNotLeakUserExistence)
         });
 }
 
-// Two consecutive reset-password calls with the same token: the second one
-// must fail because the row was atomically deleted by the first.
-DROGON_TEST(Security_ResetPasswordTokenIsSingleUse)
+// Policy failure must not consume a legitimate recovery token. Once a valid
+// password succeeds, however, the same token is permanently single-use.
+DROGON_TEST(Security_ResetPasswordTokenIsConsumedOnlyOnSuccess)
 {
     auto client = HttpClient::newHttpClient(testBaseUrl());
     const std::string suffix = uniqueSuffix();
@@ -230,21 +230,29 @@ DROGON_TEST(Security_ResetPasswordTokenIsSingleUse)
                 "SELECT id, $2, NOW() + INTERVAL '10 minutes' "
                 "FROM users WHERE username = $1",
                 [TEST_CTX, client, token](const orm::Result&) {
-                    Json::Value body;
-                    body["token"]    = token;
-                    body["password"] = "new-password-1";
+                    Json::Value weak;
+                    weak["token"]    = token;
+                    weak["password"] = "password";
 
-                    client->sendRequest(jsonPost("/auth/reset-password", body),
-                        [TEST_CTX, client, token](ReqResult, const HttpResponsePtr& r1) {
-                            REQUIRE(r1->getStatusCode() == k200OK);
+                    client->sendRequest(jsonPost("/auth/reset-password", weak),
+                        [TEST_CTX, client, token](ReqResult, const HttpResponsePtr& r0) {
+                            REQUIRE(r0->getStatusCode() == k400BadRequest);
 
-                            Json::Value replay;
-                            replay["token"]    = token;
-                            replay["password"] = "yet-another-pass";
+                            Json::Value valid;
+                            valid["token"]    = token;
+                            valid["password"] = "new-password-1";
+                            client->sendRequest(jsonPost("/auth/reset-password", valid),
+                                [TEST_CTX, client, token](ReqResult, const HttpResponsePtr& r1) {
+                                    REQUIRE(r1->getStatusCode() == k200OK);
 
-                            client->sendRequest(jsonPost("/auth/reset-password", replay),
-                                [TEST_CTX](ReqResult, const HttpResponsePtr& r2) {
-                                    CHECK(r2->getStatusCode() == k400BadRequest);
+                                    Json::Value replay;
+                                    replay["token"]    = token;
+                                    replay["password"] = "yet-another-pass";
+
+                                    client->sendRequest(jsonPost("/auth/reset-password", replay),
+                                        [TEST_CTX](ReqResult, const HttpResponsePtr& r2) {
+                                            CHECK(r2->getStatusCode() == k400BadRequest);
+                                        });
                                 });
                         });
                 },

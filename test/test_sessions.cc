@@ -2,6 +2,8 @@
 #include <drogon/drogon_test.h>
 #include <drogon/HttpClient.h>
 
+#include "../helpers/Security.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -228,6 +230,103 @@ DROGON_TEST(Sessions_PasswordChangeEvictsOtherSessions)
                                             CHECK(r5->getStatusCode() == k200OK);
                                         });
                                 });
+                        });
+                });
+        });
+}
+
+// An emailed password reset is the account-recovery path, so it must be
+// stronger than an in-session password change: every browser is signed out,
+// including the one that happened to submit the reset. Otherwise an attacker
+// who already stole a cookie survives the victim's recovery action.
+DROGON_TEST(Sessions_PasswordResetEvictsEverySession)
+{
+    const std::string suffix = uniqueSuffix();
+    const std::string user   = "reset_sess_" + suffix;
+    const std::string pass   = "reset-old-password-1";
+    const std::string newPw  = "reset-new-password-2";
+    const std::string token  = "reset-token-" + suffix;
+
+    auto a = std::make_shared<Client>(testBaseUrl());
+    auto b = std::make_shared<Client>(testBaseUrl());
+
+    Json::Value reg;
+    reg["username"] = user;
+    reg["email"]    = user + "@example.test";
+    reg["password"] = pass;
+
+    Json::Value login;
+    login["username"] = user;
+    login["password"] = pass;
+
+    a->http->sendRequest(jsonPost("/auth/register", reg),
+        [TEST_CTX, a, b, login, user, newPw, token](ReqResult, const HttpResponsePtr& r0) {
+            REQUIRE(r0->getStatusCode() == k201Created);
+
+            a->http->sendRequest(jsonPost("/auth/login", login),
+                [TEST_CTX, a, b, login, user, newPw, token](ReqResult, const HttpResponsePtr& r1) {
+                    REQUIRE(r1->getStatusCode() == k200OK);
+                    a->absorb(r1);
+
+                    b->http->sendRequest(jsonPost("/auth/login", login),
+                        [TEST_CTX, a, b, user, newPw, token](ReqResult, const HttpResponsePtr& r2) {
+                            REQUIRE(r2->getStatusCode() == k200OK);
+                            b->absorb(r2);
+
+                            auto db = app().getDbClient();
+                            db->execSqlAsync(
+                                "INSERT INTO password_reset_tokens "
+                                "       (user_id, token, expires_at) "
+                                "SELECT id, $2, NOW() + INTERVAL '10 minutes' "
+                                "  FROM users WHERE username = $1",
+                                [TEST_CTX, a, b, user, newPw, token]
+                                (const orm::Result&) {
+                                    Json::Value reset;
+                                    reset["token"]    = token;
+                                    reset["password"] = newPw;
+                                    a->http->sendRequest(
+                                        jsonPost("/auth/reset-password", reset),
+                                        [TEST_CTX, a, b, user, newPw]
+                                        (ReqResult, const HttpResponsePtr& r3) {
+                                            REQUIRE(r3->getStatusCode() == k200OK);
+                                            auto body = r3->getJsonObject();
+                                            REQUIRE(body);
+                                            CHECK((*body)["revoked_sessions"].asInt() >= 2);
+
+                                            auto meA = HttpRequest::newHttpRequest();
+                                            meA->setMethod(Get);
+                                            meA->setPath("/auth/me");
+                                            meA->addCookie("JSESSIONID", a->sessionCookie);
+                                            a->http->sendRequest(meA,
+                                                [TEST_CTX](ReqResult, const HttpResponsePtr& r4) {
+                                                    CHECK(r4->getStatusCode() == k401Unauthorized);
+                                                });
+
+                                            auto meB = HttpRequest::newHttpRequest();
+                                            meB->setMethod(Get);
+                                            meB->setPath("/auth/me");
+                                            meB->addCookie("JSESSIONID", b->sessionCookie);
+                                            b->http->sendRequest(meB,
+                                                [TEST_CTX, b, user, newPw]
+                                                (ReqResult, const HttpResponsePtr& r5) {
+                                                    CHECK(r5->getStatusCode() == k401Unauthorized);
+
+                                                    Json::Value relogin;
+                                                    relogin["username"] = user;
+                                                    relogin["password"] = newPw;
+                                                    b->http->sendRequest(
+                                                        jsonPost("/auth/login", relogin),
+                                                        [TEST_CTX](ReqResult, const HttpResponsePtr& r6) {
+                                                            CHECK(r6->getStatusCode() == k200OK);
+                                                        });
+                                                });
+                                        });
+                                },
+                                [TEST_CTX](const orm::DrogonDbException& e) {
+                                    FAIL(std::string("reset seed failed: ") +
+                                         e.base().what());
+                                },
+                                user, security::sha256Hex(token));
                         });
                 });
         });

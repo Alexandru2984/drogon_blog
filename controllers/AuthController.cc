@@ -45,6 +45,7 @@ constexpr std::size_t kMaxPasswordLen = 256;
 constexpr std::size_t kMinUsernameLen = 3;
 constexpr std::size_t kMaxUsernameLen = 32;
 constexpr std::size_t kMaxEmailLen    = 255;
+constexpr std::size_t kMaxResetTokenLen = 128;
 
 bool passwordTooWeak(const std::string& p)
 {
@@ -671,7 +672,8 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
 
     std::string token       = (*json)["token"].asString();
     std::string newPassword = (*json)["password"].asString();
-    if (token.empty() || newPassword.empty()) {
+    if (token.empty() || token.size() > kMaxResetTokenLen ||
+        newPassword.empty()) {
         callback(jsonError(k400BadRequest, "Token and password are required"));
         return;
     }
@@ -681,64 +683,110 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
         return;
     }
 
-    // Atomic token consumption: a successful DELETE returns the user_id, after
-    // which we can't fail the password update without leaving the token gone.
-    // Two parallel requests with the same token: only one DELETE returns rows.
-    auto dbClient = drogon::app().getDbClient();
-    dbClient->execSqlAsync(
-        "DELETE FROM password_reset_tokens "
-        " WHERE token = $1 AND expires_at > NOW() "
-        "RETURNING user_id",
-        [dbClient, newPassword, callback, req](const Result& r) {
-            if (r.empty()) {
-                callback(jsonError(k400BadRequest, "Invalid or expired token"));
+    // Reject invented tokens before spending an Argon2 operation on them.
+    // This lookup deliberately does not consume the row: a policy rejection
+    // or Argon2 allocation failure must not burn a legitimate recovery link.
+    // The final statement below repeats the validity check and is still the
+    // authority in case two requests race after both pass this cheap probe.
+    const std::string tokenHash = security::sha256Hex(token);
+    auto finishReset = [newPassword, tokenHash, callback, req] {
+        try {
+            // The reset flow knows the user only through a token, so the
+            // context checks have no username or email to compare against;
+            // the blocklist and breach checks still apply.
+            if (auto why = password_policy::validate(
+                    newPassword, "", ""); !why.empty())
+            {
+                callback(jsonError(k400BadRequest, why));
                 return;
             }
-            const int userId = r[0]["user_id"].as<int>();
+            const std::string hash = hashPassword(newPassword);
 
-            // This callback runs on the database connection's own thread,
-            // not an IO loop, but hashing here still parks that connection
-            // for ~167 ms and every query queued behind it waits. Hand the
-            // Argon2id work to the auth pool and let the connection go.
-            workers::offload(workers::Pool::Auth, callback,
-                [dbClient, newPassword, callback, req, userId] {
-                    // The reset flow knows the user only through a token,
-                    // so the context checks have no username or email to
-                    // compare against; the blocklist and breach checks
-                    // still apply.
-                    if (auto why = password_policy::validate(
-                            newPassword, "", ""); !why.empty())
-                    {
-                        callback(jsonError(k400BadRequest, why));
-                        return;
-                    }
-                    const std::string hash = hashPassword(newPassword);
+            // One PostgreSQL statement is the transaction boundary for all
+            // three security effects: consume the one-time token, update the
+            // password, and revoke every existing session. If any part fails
+            // the statement rolls back, so there is no state where the token
+            // is gone but the old password or a stolen session remains usable.
+            auto db = drogon::app().getDbClient();
+            const auto rows = db->execSqlSync(
+                "WITH consumed AS ("
+                "  DELETE FROM password_reset_tokens"
+                "   WHERE token = $1 AND expires_at > NOW()"
+                "   RETURNING user_id"
+                "), updated_user AS ("
+                "  UPDATE users AS u SET password_hash = $2"
+                "    FROM consumed AS c WHERE u.id = c.user_id"
+                "   RETURNING u.id"
+                "), revoked_sessions AS ("
+                "  UPDATE user_sessions AS s"
+                "     SET revoked_at = NOW(),"
+                "         revoked_reason = 'password_reset'"
+                "    FROM updated_user AS u"
+                "   WHERE s.user_id = u.id AND s.revoked_at IS NULL"
+                "   RETURNING s.sid"
+                ")"
+                " SELECT u.id AS user_id, r.sid"
+                "   FROM updated_user AS u"
+                "   LEFT JOIN revoked_sessions AS r ON TRUE",
+                tokenHash, hash);
 
-                    dbClient->execSqlAsync(
-                        "UPDATE users SET password_hash = $1 WHERE id = $2",
-                        [callback, req, userId](const Result&) {
-                            audit_log::record(req, {"password.reset", userId,
-                                                    std::nullopt, std::nullopt,
-                                                    Json::objectValue});
-                            Json::Value ret;
-                            ret["message"] = "Password reset successfully";
-                            callback(HttpResponse::newHttpJsonResponse(ret));
-                        },
-                        [callback](const DrogonDbException& e) {
-                            LOG_ERROR << "DB Error (reset update): "
-                                      << e.base().what();
-                            callback(jsonError(k500InternalServerError,
-                                               "Failed to reset password"));
-                        },
-                        hash, userId);
-                });
+            if (rows.empty()) {
+                callback(jsonError(k400BadRequest,
+                                   "Invalid or expired token"));
+                return;
+            }
+
+            const int userId = rows[0]["user_id"].as<int>();
+            int revoked = 0;
+            for (const auto& row : rows) {
+                if (row["sid"].isNull()) continue;
+                sessions::onRevokedNotification(
+                    row["sid"].as<std::string>());
+                ++revoked;
+            }
+
+            Json::Value meta;
+            meta["revoked_sessions"] = revoked;
+            audit_log::record(req, {"password.reset", userId,
+                                    std::nullopt, std::nullopt, meta});
+
+            Json::Value ret;
+            ret["message"] = "Password reset successfully";
+            ret["revoked_sessions"] = revoked;
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        } catch (const DrogonDbException& e) {
+            LOG_ERROR << "DB Error (password reset): " << e.base().what();
+            callback(jsonError(k500InternalServerError,
+                               "Failed to reset password"));
+        } catch (const std::exception& e) {
+            LOG_ERROR << "Password reset failed: " << e.what();
+            callback(jsonError(k500InternalServerError,
+                               "Failed to reset password"));
+        }
+    };
+
+    auto dbClient = drogon::app().getDbClient();
+    dbClient->execSqlAsync(
+        "SELECT 1 FROM password_reset_tokens"
+        " WHERE token = $1 AND expires_at > NOW()",
+        [callback, finishReset](const Result& probe) {
+            if (probe.empty()) {
+                callback(jsonError(k400BadRequest,
+                                   "Invalid or expired token"));
+                return;
+            }
+
+            // Policy validation and hashing are blocking, so they belong on
+            // the bounded auth pool rather than a Drogon IO or DB thread.
+            workers::offload(workers::Pool::Auth, callback, finishReset);
         },
         [callback](const DrogonDbException& e) {
-            LOG_ERROR << "DB Error (reset consume): " << e.base().what();
+            LOG_ERROR << "DB Error (password reset probe): "
+                      << e.base().what();
             callback(jsonError(k500InternalServerError,
                                "Failed to reset password"));
         },
-        security::sha256Hex(token));
+        tokenHash);
 }
 
 void AuthController::resendVerification(const HttpRequestPtr &req,
