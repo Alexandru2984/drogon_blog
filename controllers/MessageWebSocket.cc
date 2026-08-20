@@ -81,6 +81,7 @@ struct ConnCtx {
     // cppcheck-suppress unusedStructMember  // read via ctx->sid after shared_ptr deref
     std::string                  sid;
     std::unordered_set<int>      subscribedPosts;   // protected by g_mu
+    // cppcheck-suppress unusedStructMember  // read via ctx after shared_ptr deref
     double                       controlTokens{kControlMessageBurst};
     std::chrono::steady_clock::time_point controlLastRefill{
         std::chrono::steady_clock::now()};
