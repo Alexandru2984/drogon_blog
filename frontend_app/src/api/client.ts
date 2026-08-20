@@ -1,9 +1,12 @@
 import axios from 'axios'
 
 export const api = axios.create({
-  // Same-origin in production; Vite proxies in dev. baseURL '' lets requests
-  // be relative to the current host, so cookies (JSESSIONID) flow naturally.
-  baseURL: '',
+  // Production stays same-origin. Development uses one reserved prefix that
+  // Vite strips before proxying to Drogon. A single catch-all prevents every
+  // new top-level API route from needing another proxy entry (the missing
+  // /tags, /flags, /bookmarks, /feed, /notifications and /account entries
+  // previously returned Vite's index.html to Axios).
+  baseURL: import.meta.env.DEV ? '/__api' : '',
   withCredentials: true,
   headers: { 'Content-Type': 'application/json' },
 })

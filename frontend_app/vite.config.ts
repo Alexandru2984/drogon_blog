@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
+const backend = 'http://127.0.0.1:8092'
+
 // Build output goes straight into ../public (Drogon's document_root).
 // emptyOutDir is disabled so user-uploaded content under public/uploads/ is preserved.
 export default defineConfig({
@@ -37,13 +39,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Backend API endpoints — proxy to Drogon during `npm run dev`.
-      '/auth':     'http://127.0.0.1:8092',
-      '/posts':    'http://127.0.0.1:8092',
-      '/users':    'http://127.0.0.1:8092',
-      '/comments': 'http://127.0.0.1:8092',
-      '/messages': 'http://127.0.0.1:8092',
-      '/uploads':  'http://127.0.0.1:8092',
+      // Axios sends every API request through this reserved prefix in dev.
+      // Strip it at the proxy so Drogon still sees its production route.
+      '/__api': {
+        target: backend,
+        rewrite: path => path.replace(/^\/__api/, ''),
+      },
+      // Upload URLs appear directly in img/src and Markdown, outside Axios.
+      '/uploads': backend,
       // WebSocket: needs ws:true so Vite proxies the Upgrade handshake.
       '/ws':       { target: 'ws://127.0.0.1:8092', ws: true },
     },

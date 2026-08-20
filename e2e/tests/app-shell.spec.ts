@@ -70,3 +70,13 @@ test('the responsive header has 44px targets and no horizontal overflow',
       }
     }
   })
+
+test('the tags route reaches the backend and leaves its loading state',
+  async ({ page }) => {
+    await page.goto('/#/tags')
+
+    await expect(page.getByRole('heading', { name: 'Tags', exact: true })).toBeVisible()
+    await expect(page.getByText('Loading tags…')).toHaveCount(0)
+    await expect(page.locator('.cloud, .empty-state')).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+  })
