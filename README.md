@@ -185,7 +185,7 @@ drogon_blog/
 | Method | Path                                | Auth     | Notes                                                                            |
 |--------|-------------------------------------|----------|----------------------------------------------------------------------------------|
 | POST   | `/auth/register`                    | —        | Returns 201 immediately; email is async                                          |
-| POST   | `/auth/login`                       | —        | Returns `{ requires_2fa: true, methods: [...] }` if 2FA enrolled; otherwise sets `JSESSIONID` |
+| POST   | `/auth/login`                       | —        | Returns a 10-minute `{ requires_2fa: true, methods: [...] }` gate if 2FA enrolled; otherwise sets `JSESSIONID` |
 | POST   | `/auth/logout`                      | —        | Clears session                                                                   |
 | GET    | `/auth/me`                          | ✓        | Current session user                                                             |
 | POST   | `/auth/verify-email`                | —        | Body `{ token }`                                                                 |
@@ -194,8 +194,8 @@ drogon_blog/
 | POST   | `/auth/resend-verification`         | —        | Body `{ email }`                                                                 |
 | POST   | `/auth/login/verify-totp`           | pending  | Two-step completion with `{ code }`                                              |
 | POST   | `/auth/login/verify-recovery`       | pending  | Two-step completion with a recovery code                                         |
-| POST   | `/auth/login/verify-webauthn/begin` | pending  | Returns challenge + allow-credentials list                                       |
-| POST   | `/auth/login/verify-webauthn/finish`| pending  | Verifies the assertion; completes the session                                    |
+| POST   | `/auth/login/verify-webauthn/begin` | pending  | Replaces and returns a non-cacheable challenge + allow-credentials list           |
+| POST   | `/auth/login/verify-webauthn/finish`| pending  | Atomically consumes the challenge, verifies the assertion, and completes login    |
 | GET    | `/auth/2fa/status`                  | ✓        | What's enrolled (TOTP / passkeys / recovery codes remaining)                     |
 | POST   | `/auth/2fa/totp/setup`              | ✓        | Body `{ password }`; returns `{ secret, otpauth_url }` for QR rendering           |
 | POST   | `/auth/2fa/totp/confirm`            | ✓        | Body `{ code }`; requires setup within 10 min; returns 10 one-time recovery codes |

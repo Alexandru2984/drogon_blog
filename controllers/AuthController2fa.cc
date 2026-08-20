@@ -8,6 +8,7 @@
 #include "../helpers/RecoveryCodes.h"
 #include "../helpers/Security.h"
 #include "../helpers/Totp.h"
+#include "../helpers/TwoFactorSession.h"
 #include "../helpers/WebAuthn.h"
 #include "../helpers/Workers.h"
 #include "../helpers/Sessions.h"
@@ -18,7 +19,6 @@
 #include <trantor/utils/Logger.h>
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -41,6 +41,10 @@ constexpr const char* kWebauthnRegisterUidKey =
     "pending_webauthn_register_uid";
 constexpr const char* kWebauthnRegisterAtKey =
     "pending_webauthn_register_at";
+constexpr const char* kWebauthnRegisterChallengeKey =
+    "pending_webauthn_register_challenge";
+constexpr const char* kWebauthnLoginChallengeKey =
+    "pending_webauthn_challenge";
 
 drogon::HttpResponsePtr jsonError(drogon::HttpStatusCode code,
                                   const std::string&    message)
@@ -59,13 +63,20 @@ std::optional<int> currentUserId(const HttpRequestPtr& req)
 
 std::optional<int> pendingUserId(const HttpRequestPtr& req)
 {
-    return req->session()->getOptional<int>("pending_user_id");
-}
-
-std::int64_t unixSeconds()
-{
-    return std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto pending = two_factor_session::getPendingLogin(req);
+    if (pending.status == two_factor_session::PendingLoginStatus::Expired) {
+        Json::Value metadata;
+        metadata["ttl_seconds"] =
+            static_cast<Json::Int64>(
+                two_factor_session::kPendingLoginTtlSeconds);
+        audit_log::record(req, {"login.2fa.expired", pending.userId,
+                                std::nullopt, std::nullopt,
+                                std::move(metadata)});
+        return std::nullopt;
+    }
+    return pending.status == two_factor_session::PendingLoginStatus::Valid
+               ? pending.userId
+               : std::nullopt;
 }
 
 void rememberEnrollmentAuthorization(const HttpRequestPtr& req,
@@ -73,18 +84,16 @@ void rememberEnrollmentAuthorization(const HttpRequestPtr& req,
                                      const char* userKey,
                                      const char* timeKey)
 {
-    auto session = req->session();
-    session->insert(userKey, userId);
-    session->insert(timeKey, unixSeconds());
+    two_factor_session::authorizeEnrollment(
+        req, userId, userKey, timeKey);
 }
 
 void clearEnrollmentAuthorization(const HttpRequestPtr& req,
                                   const char* userKey,
                                   const char* timeKey)
 {
-    auto session = req->session();
-    session->erase(userKey);
-    session->erase(timeKey);
+    two_factor_session::clearEnrollmentAuthorization(
+        req, userKey, timeKey);
 }
 
 bool hasEnrollmentAuthorization(const HttpRequestPtr& req,
@@ -92,14 +101,8 @@ bool hasEnrollmentAuthorization(const HttpRequestPtr& req,
                                 const char* userKey,
                                 const char* timeKey)
 {
-    auto session = req->session();
-    auto authorizedUser = session->getOptional<int>(userKey);
-    auto authorizedAt   = session->getOptional<std::int64_t>(timeKey);
-    if (!authorizedUser || !authorizedAt || *authorizedUser != userId) {
-        return false;
-    }
-    const auto now = unixSeconds();
-    return *authorizedAt <= now && now - *authorizedAt <= kEnrollmentAuthTtlSec;
+    return two_factor_session::enrollmentAuthorized(
+        req, userId, userKey, timeKey, kEnrollmentAuthTtlSec);
 }
 
 bool validPasswordInput(const std::string& password)
@@ -302,8 +305,7 @@ void completeTwoStepLogin(const HttpRequestPtr& req,
     }
 
     auto session = req->session();
-    session->erase("pending_user_id");
-    session->erase("pending_webauthn_challenge");
+    two_factor_session::clearPendingLogin(req);
     // Rotate the session ID again now that the user is fully authenticated.
     // The password step already rotated once when it dropped pending_user_id
     // in, but the same session value carried through the 2FA window — so an
@@ -745,11 +747,10 @@ void AuthController::webauthnRegisterBegin(const HttpRequestPtr& req,
                 }
                 const auto username = rows[0]["username"].as<std::string>();
                 const std::string challenge = webauthn::makeChallenge();
-                req->session()->insert(
-                    "pending_webauthn_register_challenge", challenge);
-                rememberEnrollmentAuthorization(
+                two_factor_session::beginEnrollmentChallenge(
                     req, *userIdOpt,
-                    kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
+                    kWebauthnRegisterUidKey, kWebauthnRegisterAtKey,
+                    kWebauthnRegisterChallengeKey, challenge);
 
                 Json::Value ret;
                 ret["challenge"]  = challenge;
@@ -806,21 +807,6 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
-    auto session = req->session();
-    auto chalOpt = session->getOptional<std::string>(
-        "pending_webauthn_register_challenge");
-    if (!chalOpt || !hasEnrollmentAuthorization(
-            req, *userIdOpt,
-            kWebauthnRegisterUidKey, kWebauthnRegisterAtKey))
-    {
-        session->erase("pending_webauthn_register_challenge");
-        clearEnrollmentAuthorization(
-            req, kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
-        callback(jsonError(k403Forbidden,
-                           "Restart registration and confirm your password"));
-        return;
-    }
-
     const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
     const std::string attestationObj = (*json)["attestationObject"].asString();
     const std::string nickname = (*json).get("nickname", "").asString();
@@ -841,12 +827,19 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
         return;
     }
 
-    // Claim the challenge before expensive parsing/hashing. It is a one-shot
-    // authorization, including for authenticators whose sign counter is zero.
-    const std::string challenge = *chalOpt;
-    session->erase("pending_webauthn_register_challenge");
-    clearEnrollmentAuthorization(
-        req, kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
+    // Atomically claim both the fresh-password authorization and challenge
+    // before expensive parsing/hashing. A second concurrent finish cannot
+    // reuse either one, and a repeated begin always replaced both together.
+    auto challengeOpt = two_factor_session::claimEnrollmentChallenge(
+        req, *userIdOpt,
+        kWebauthnRegisterUidKey, kWebauthnRegisterAtKey,
+        kWebauthnRegisterChallengeKey, kEnrollmentAuthTtlSec);
+    if (!challengeOpt) {
+        callback(jsonError(k403Forbidden,
+                           "Restart registration and confirm your password"));
+        return;
+    }
+    const std::string challenge = std::move(*challengeOpt);
 
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, clientDataJSON, attestationObj,
@@ -1184,7 +1177,8 @@ void AuthController::webauthnLoginBegin(const HttpRequestPtr& req,
     if (rows.empty()) { callback(jsonError(k400BadRequest, "No passkeys")); return; }
 
     const std::string challenge = webauthn::makeChallenge();
-    req->session()->insert("pending_webauthn_challenge", challenge);
+    two_factor_session::storeChallenge(
+        req, kWebauthnLoginChallengeKey, challenge);
 
     Json::Value ret;
     ret["challenge"] = challenge;
@@ -1197,7 +1191,7 @@ void AuthController::webauthnLoginBegin(const HttpRequestPtr& req,
         allow.append(e);
     }
     ret["allowCredentials"] = allow;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    callback(noStoreJson(ret));
 }
 
 // =========================================================================
@@ -1216,9 +1210,6 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
         return;
     }
 
-    auto chalOpt = req->session()->getOptional<std::string>("pending_webauthn_challenge");
-    if (!chalOpt) { callback(jsonError(k400BadRequest, "No pending challenge")); return; }
-
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
@@ -1226,6 +1217,29 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     const std::string clientData   = (*json)["clientDataJSON"].asString();
     const std::string authData     = (*json)["authenticatorData"].asString();
     const std::string signature    = (*json)["signature"].asString();
+
+    constexpr std::size_t kMaxCredentialId = 4 * 1024;
+    constexpr std::size_t kMaxCeremonyField = 128 * 1024;
+    if (credentialId.empty() || clientData.empty() || authData.empty() ||
+        signature.empty() || credentialId.size() > kMaxCredentialId ||
+        clientData.size() > kMaxCeremonyField ||
+        authData.size() > kMaxCeremonyField ||
+        signature.size() > kMaxCeremonyField)
+    {
+        callback(jsonError(k400BadRequest, "Invalid authentication payload"));
+        return;
+    }
+
+    // Claim before any database or signature work. Session::modify keeps the
+    // read+erase indivisible, so even zero-counter authenticators cannot use
+    // the same signed assertion in two concurrent finish requests.
+    auto challengeOpt = two_factor_session::claimChallenge(
+        req, kWebauthnLoginChallengeKey);
+    if (!challengeOpt) {
+        callback(jsonError(k400BadRequest, "No pending challenge"));
+        return;
+    }
+    const std::string challenge = std::move(*challengeOpt);
 
     auto db = drogon::app().getDbClient();
     auto rows = db->execSqlSync(
@@ -1244,11 +1258,10 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     std::string err;
     auto res = webauthn::finishAuthentication(
         clientData, authData, signature,
-        *chalOpt, rpId(), siteOrigin(),
+        challenge, rpId(), siteOrigin(),
         std::vector<unsigned char>(storedKey.begin(), storedKey.end()),
         static_cast<std::uint32_t>(storedCnt),
         err);
-    req->session()->erase("pending_webauthn_challenge");
     if (!res) {
         LOG_INFO << "webauthn assertion rejected: " << err;
         audit_log::record(req, {"2fa.verify.webauthn.fail", pendingOpt,
@@ -1275,7 +1288,7 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     // `sign_count < $1` would be `0 < 0` = false and reject every login as a
     // replay. Counter-based clone detection is simply unavailable for these
     // keys; replay is instead prevented by the single-use challenge, which is
-    // erased from the session immediately after finishAuthentication above.
+    // atomically claimed from the session before finishAuthentication above.
     //
     // The `0::bigint` cast is load-bearing: an untyped `$1 = 0` makes Postgres
     // infer $1 as `integer`, but we bind an int64 (sign_count is bigint), so

@@ -65,6 +65,7 @@ Regression coverage lives beside the affected subsystem.
 | 24| **High** | **The Helm chart defaulted to two app replicas despite process-local sessions.** Requests load-balanced to a different pod lost authentication, and every pod startup globally retired the session-registry rows belonging to still-running peers. The optional HPA amplified both failures and multiplied every in-memory security rate-limit budget. | The chart now defaults to one replica and fails template rendering for `replicaCount != 1` or `autoscaling.enabled=true`. The dormant HPA manifest was removed, chart documentation no longer advertises horizontal application scaling, and CI asserts both unsafe configurations are rejected. Multi-pod support is blocked until sessions and rate limits have distributed stores. |
 | 25| **High** | **Session-registry writes failed open.** Login remained successful when inserting the new `sid` into `user_sessions` failed, creating an authenticated 14-day session invisible to device lists, password-reset revocation, bans, and “sign out everywhere.” | The registry row is now a prerequisite for publishing the `sid` into either a password-only or 2FA-completed session. Failure clears and rotates the session, returns `503` with `Retry-After`, and emits `login.session_registry_fail`; `login.ok` is emitted only after the durable row exists. Test-only fault injection proves both login paths fail closed and leave no active row or authenticated cookie. |
 | 26| **Med**  | **2FA factor changes were non-atomic.** Recovery-code rotation deleted the old batch and inserted ten replacements one by one; TOTP/passkey activation and “disable all” likewise used independent writes. A DB or Argon2 failure could leave no recovery codes, an enabled factor whose response said it failed, or only some factors removed. Exceptions in regeneration/disable escaped the worker without an HTTP response. | All ten hashes are prepared before mutation. TOTP activation + code issuance, first-passkey + code issuance, rotation, and deletion of every factor now each use one data-modifying PostgreSQL CTE, so the statement commits completely or rolls back completely. Every worker path catches failures and returns `500`. Test-only database faults prove old codes and all factors survive rollback, TOTP remains disabled after failed confirmation, retries succeed, and the final disable removes the full set. |
+| 27| **Med**  | **A password-approved 2FA login stayed pending for the full 14-day session, and WebAuthn challenge replacement was broken.** Drogon's `Session::insert()` does not overwrite an existing key, so a second begin response carried a fresh challenge while the server retained the abandoned first one. Challenge read and erase were also separate operations, allowing two concurrent finishes to read the same assertion authorization; zero-counter passkeys had no database counter guard to close that replay window. | `helpers/TwoFactorSession` gives pending login state a ten-minute TTL and clears expired state plus its challenge atomically. Session-map updates now replace prior challenges, and finish atomically claims (reads + erases) the challenge before verification, so exactly one concurrent request can proceed even when the authenticator always reports counter zero. WebAuthn enrolment claims its password step-up and challenge in the same lock. Intermediate 2FA/challenge responses are `private, no-store`, oversized login ceremony fields are rejected before parsing, expiry emits `login.2fa.expired`, and integration plus virtual-authenticator regressions cover expiry and repeated begins. |
 
 ### Vectors verified clean
 
@@ -172,7 +173,15 @@ returns `requires_2fa: true`, and waits for a matching factor on
 `/auth/login/verify-totp`, `/auth/login/verify-recovery`, or the
 `/auth/login/verify-webauthn/{begin,finish}` pair. The pending state is
 attached to the session ID (which was just rotated for fixation defense
-by the password step), so an off-origin attacker cannot bootstrap one.
+by the password step), expires after ten minutes, and is cleared together
+with any outstanding WebAuthn challenge. An off-origin attacker therefore
+cannot bootstrap one or retain a password-approved partial login indefinitely.
+
+**WebAuthn challenges are replaceable and single-use.** Repeating a begin
+request replaces the abandoned challenge, which keeps normal browser retries
+usable. Finish atomically claims and removes the current challenge before
+signature work; only one concurrent request can receive it. The same atomic
+operation binds a passkey-enrolment challenge to its fresh-password step-up.
 
 **Disable requires re-proof.** `/auth/2fa/disable` demands both the
 current password and a fresh TOTP code so a hijacked session by itself
@@ -208,7 +217,8 @@ factor set intact and returns a bounded error response rather than hanging.
 `2fa.verify.recovery.used`, `2fa.verify.recovery.fail`,
 `2fa.verify.webauthn.ok`, `2fa.verify.webauthn.fail`, and `login.password_ok`
 for the in-between state where the password was correct but 2FA still
-needs to complete. `login.session_registry_fail` identifies a rejected login
+needs to complete. `login.2fa.expired` identifies partial logins that reached
+their ten-minute limit. `login.session_registry_fail` identifies a rejected login
 whose revocation record could not be made durable; it must be alerted on as an
 authentication-dependency failure, not counted as a successful login.
 

@@ -321,6 +321,86 @@ DROGON_TEST(Sessions_RegistryFailureRejectsTwoFactorCompletion)
         });
 }
 
+// A correct password is not an open-ended partial authentication. The normal
+// session lasts 14 days, but the identity waiting for its second factor must
+// disappear after ten minutes together with any challenge attached to it.
+DROGON_TEST(Sessions_PendingTwoFactorLoginExpires)
+{
+    const std::string suffix = uniqueSuffix();
+    const std::string user   = "expired2fa_" + suffix;
+    const std::string pass   = "Juniper-Quartz-7251";
+    const std::string secret = totp::generateSecret();
+    auto client = std::make_shared<Client>(testBaseUrl());
+
+    Json::Value reg;
+    reg["username"] = user;
+    reg["email"]    = user + "@example.test";
+    reg["password"] = pass;
+
+    Json::Value login;
+    login["username"] = user;
+    login["password"] = pass;
+
+    client->http->sendRequest(jsonPost("/auth/register", reg),
+        [TEST_CTX, client, login, user, secret]
+        (ReqResult, const HttpResponsePtr& registered) {
+            REQUIRE(registered->getStatusCode() == k201Created);
+
+            app().getDbClient()->execSqlSync(
+                "INSERT INTO user_totp_secrets "
+                "(user_id, secret_b32, enabled, confirmed_at) "
+                "SELECT id, $2, TRUE, NOW() FROM users WHERE username = $1",
+                user, security::wrapTotpSecret(secret));
+
+            auto loginReq = jsonPost("/auth/login", login);
+            // Test-only fault injection backdates the state at creation; the
+            // production binary compiles this header branch out entirely.
+            loginReq->addHeader("X-Test-Expire-Pending-2FA", "1");
+            client->http->sendRequest(loginReq,
+                [TEST_CTX, client, secret]
+                (ReqResult, const HttpResponsePtr& pending) {
+                    REQUIRE(pending->getStatusCode() == k200OK);
+                    auto pendingBody = pending->getJsonObject();
+                    REQUIRE(pendingBody);
+                    REQUIRE((*pendingBody)["requires_2fa"].asBool());
+                    CHECK(pending->getHeader("Cache-Control").find("no-store") !=
+                          std::string::npos);
+                    client->absorb(pending);
+                    REQUIRE(!client->sessionCookie.empty());
+
+                    const auto code = totp::generateCode(
+                        secret, static_cast<std::uint64_t>(std::time(nullptr)));
+                    char codeText[7];
+                    std::snprintf(codeText, sizeof(codeText), "%06u", code);
+                    Json::Value verify;
+                    verify["code"] = codeText;
+                    auto verifyReq = jsonPost("/auth/login/verify-totp", verify);
+                    client->apply(verifyReq);
+
+                    client->http->sendRequest(verifyReq,
+                        [TEST_CTX, client]
+                        (ReqResult, const HttpResponsePtr& expired) {
+                            REQUIRE(expired->getStatusCode() == k401Unauthorized);
+                            auto body = expired->getJsonObject();
+                            REQUIRE(body);
+                            CHECK((*body)["error"].asString() ==
+                                  "No pending login");
+
+                            auto me = HttpRequest::newHttpRequest();
+                            me->setMethod(Get);
+                            me->setPath("/auth/me");
+                            client->apply(me);
+                            client->http->sendRequest(me,
+                                [TEST_CTX]
+                                (ReqResult, const HttpResponsePtr& meResp) {
+                                    CHECK(meResp->getStatusCode() ==
+                                          k401Unauthorized);
+                                });
+                        });
+                });
+        });
+}
+
 // Changing a password must evict other sessions. This is the case users
 // most expect to work: changing the password is what someone does when
 // they think another party is in their account, and an attacker's session

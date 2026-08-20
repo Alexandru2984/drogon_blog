@@ -133,9 +133,9 @@ paths:
         A fully authenticated success sets the session cookie and the CSRF
         cookie. If the account has 2FA enrolled, the intermediate response
         carries `requires_2fa` and the available methods. Pending login state
-        is bound to the rotated, HttpOnly session cookie; the client must then
-        complete one of `/auth/login/verify-{totp,recovery,webauthn}` with the
-        same cookie.
+        is bound to the rotated, HttpOnly session cookie and expires after ten
+        minutes; the client must then complete one of
+        `/auth/login/verify-{totp,recovery,webauthn}` with the same cookie.
       security: []
       requestBody:
         required: true
@@ -742,6 +742,9 @@ paths:
     post:
       tags: [2FA login challenges]
       summary: Start a WebAuthn assertion for the current login challenge
+      description: |
+        Returns a non-cacheable, single-use challenge. Calling begin again
+        replaces any abandoned challenge for this pending login.
       security: []
       responses:
         '200':
@@ -756,6 +759,9 @@ paths:
     post:
       tags: [2FA login challenges]
       summary: Finalise a WebAuthn assertion
+      description: |
+        Atomically consumes the current challenge before verification. The
+        assertion cannot be retried; start a new challenge after any failure.
       security: []
       requestBody:
         required: true

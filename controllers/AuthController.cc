@@ -10,6 +10,7 @@
 #include "../helpers/PasswordPolicy.h"
 #include "../helpers/Roles.h"
 #include "../helpers/Sessions.h"
+#include "../helpers/TwoFactorSession.h"
 
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
@@ -394,10 +395,10 @@ void AuthController::loginUser(const HttpRequestPtr &req,
         session->changeSessionIdToClient();
 
         if (has2fa) {
-            // Two-step gate: stash a pending_user_id but DO NOT set user_id.
-            // Anything reading the session before /auth/login/verify-* runs
-            // will see an unauthenticated state.
-            session->insert("pending_user_id", userId);
+            // Two-step gate: stash a short-lived pending identity but DO NOT
+            // set user_id. Anything reading the session before an accepted
+            // factor runs will see an unauthenticated state.
+            two_factor_session::beginPendingLogin(req, userId);
 
             Json::Value ret;
             ret["requires_2fa"] = true;
@@ -410,7 +411,11 @@ void AuthController::loginUser(const HttpRequestPtr &req,
             audit_log::record(req, {"login.password_ok",
                                     userId, std::nullopt, std::nullopt,
                                     Json::objectValue});
-            callback(HttpResponse::newHttpJsonResponse(ret));
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->addHeader("Cache-Control", "private, no-store");
+            resp->addHeader("Pragma", "no-cache");
+            resp->addHeader("Vary", "Cookie");
+            callback(resp);
             return;
         }
 

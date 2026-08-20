@@ -22,6 +22,30 @@ test('add a passkey, then sign in with it', async ({ page }) => {
   await page.goto('/#/account/security')
   await page.getByLabel(/current password for 2fa changes/i).fill(user.password)
   await page.getByPlaceholder(/macbook touch id/i).fill('Virtual Test Key')
+
+  // Deliberately start and abandon one registration. The next UI action must
+  // replace this challenge; Drogon Session::insert() does not overwrite, so
+  // the old implementation returned an unverifiable second challenge here.
+  const abandonedRegistration = await page.evaluate(async (password) => {
+    const cookie = document.cookie.split('; ').find(part =>
+      part.startsWith('csrf_token=') || part.startsWith('__Host-csrf_token='))
+    const csrf = cookie ? decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)) : ''
+    const response = await fetch('/auth/2fa/webauthn/register/begin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
+      body: JSON.stringify({ password }),
+    })
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control') ?? '',
+    }
+  }, user.password)
+  expect(abandonedRegistration.status).toBe(200)
+  expect(abandonedRegistration.cacheControl).toContain('no-store')
+
   await page.getByRole('button', { name: /add passkey/i }).click()
 
   // The passkeys list should now contain our nickname.
@@ -41,6 +65,22 @@ test('add a passkey, then sign in with it', async ({ page }) => {
   // which is also what keeps it from colliding with the "Authenticate
   // with passkey" action button inside the panel.
   await page.getByRole('tab', { name: /passkey/i }).click()
+
+  // Same regression on login: discard one challenge, then let the UI request
+  // the replacement it will actually sign. The replacement must be the value
+  // retained server-side and every challenge response must be non-cacheable.
+  const abandonedLogin = await page.evaluate(async () => {
+    const response = await fetch('/auth/login/verify-webauthn/begin', {
+      method: 'POST',
+    })
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control') ?? '',
+    }
+  })
+  expect(abandonedLogin.status).toBe(200)
+  expect(abandonedLogin.cacheControl).toContain('no-store')
+
   await page.getByRole('button', { name: /authenticate with passkey/i }).click()
 
   await expect(page.locator('.navbar')).toContainText(user.username, { timeout: 10_000 })
