@@ -626,7 +626,13 @@ loadTotpKey()
     for (std::size_t i = 0; i < crypto_secretbox_KEYBYTES; ++i) {
         const int hi = hexVal(s[2 * i]);
         const int lo = hexVal(s[2 * i + 1]);
-        key[i] = static_cast<unsigned char>((hi << 4) | lo);
+        if (hi < 0 || lo < 0) {
+            throw std::runtime_error(
+                "BLOG_TOTP_KEY must be exactly 64 hexadecimal characters");
+        }
+        key[i] = static_cast<unsigned char>(
+            (static_cast<unsigned>(hi) << 4U) |
+            static_cast<unsigned>(lo));
     }
     return key;
 }
@@ -671,12 +677,13 @@ bool b64Decode(std::string_view s, std::vector<unsigned char>& out)
     }();
     out.clear();
     out.reserve((s.size() / 4) * 3);
-    int bits = 0, val = 0;
+    int bits = 0;
+    unsigned val = 0;
     for (char c : s) {
         if (c == '=' || c == '\n' || c == '\r') continue;
         signed char v = table[static_cast<unsigned char>(c)];
         if (v < 0) return false;
-        val = (val << 6) | v;
+        val = (val << 6U) | static_cast<unsigned>(v);
         bits += 6;
         if (bits >= 8) {
             bits -= 8;

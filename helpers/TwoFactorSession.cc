@@ -216,7 +216,7 @@ std::optional<std::string> claimEnrollmentChallenge(
                 freshTimestamp(authorizedAt, now, ttlSeconds) &&
                 storedChallenge)
             {
-                challenge = std::move(*storedChallenge);
+                challenge = *storedChallenge;
             }
             values.erase(challengeKey);
             eraseEnrollment(values, userKey, timeKey);

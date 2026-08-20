@@ -13,7 +13,7 @@
 // one lock.
 namespace two_factor_session {
 
-constexpr std::int64_t kPendingLoginTtlSeconds = 10 * 60;
+constexpr std::int64_t kPendingLoginTtlSeconds = std::int64_t{10} * 60;
 
 enum class PendingLoginStatus {
     Missing,

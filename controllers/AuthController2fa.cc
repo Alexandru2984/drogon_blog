@@ -35,7 +35,7 @@ using namespace drogon::orm;
 namespace {
 
 constexpr std::size_t  kMaxPasswordLen       = 256;
-constexpr std::int64_t kEnrollmentAuthTtlSec = 10 * 60;
+constexpr std::int64_t kEnrollmentAuthTtlSec = std::int64_t{10} * 60;
 
 constexpr const char* kTotpSetupUidKey = "pending_totp_setup_uid";
 constexpr const char* kTotpSetupAtKey  = "pending_totp_setup_at";
@@ -844,7 +844,7 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
     const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
     const std::string attestationObj = (*json)["attestationObject"].asString();
     const std::string nickname = (*json).get("nickname", "").asString();
-    constexpr std::size_t kMaxCeremonyField = 128 * 1024;
+    constexpr std::size_t kMaxCeremonyField = std::size_t{128} * 1024;
     if (clientDataJSON.empty() || attestationObj.empty() ||
         clientDataJSON.size() > kMaxCeremonyField ||
         attestationObj.size() > kMaxCeremonyField || nickname.size() > 128)
@@ -1252,8 +1252,8 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     const std::string authData     = (*json)["authenticatorData"].asString();
     const std::string signature    = (*json)["signature"].asString();
 
-    constexpr std::size_t kMaxCredentialId = 4 * 1024;
-    constexpr std::size_t kMaxCeremonyField = 128 * 1024;
+    constexpr std::size_t kMaxCredentialId = std::size_t{4} * 1024;
+    constexpr std::size_t kMaxCeremonyField = std::size_t{128} * 1024;
     if (credentialId.empty() || clientData.empty() || authData.empty() ||
         signature.empty() || credentialId.size() > kMaxCredentialId ||
         clientData.size() > kMaxCeremonyField ||
