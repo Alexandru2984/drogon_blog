@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # ---------- Stage 1: build the frontend ----------
-FROM node:26-alpine AS frontend
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS frontend
 WORKDIR /app
 COPY frontend_app/package*.json ./
 RUN npm ci --no-audit --no-fund
@@ -17,9 +17,10 @@ RUN npm run build
 # provides — the surface we depend on (registerSyncAdvice, runOnQuit,
 # HttpResponsePtr-returning sync advice) landed in 1.9.x and isn't in the
 # Ubuntu noble apt package (1.8.7).
-FROM ubuntu:24.04 AS drogon-builder
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS drogon-builder
 ARG DEBIAN_FRONTEND=noninteractive
 ARG DROGON_VERSION=v1.9.13
+ARG DROGON_COMMIT=4c5430757ea5451a7c38fbbef4b4bef7dbb47f2f
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates pkg-config \
         libssl-dev libjsoncpp-dev \
@@ -28,8 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --recurse-submodules --depth 1 --branch ${DROGON_VERSION} \
-        https://github.com/drogonframework/drogon.git drogon
+RUN git clone --depth 1 --branch ${DROGON_VERSION} \
+        https://github.com/drogonframework/drogon.git drogon \
+ && test "$(git -C drogon rev-parse HEAD)" = "${DROGON_COMMIT}" \
+ && git -C drogon submodule update --init --recursive --depth 1
 WORKDIR /src/drogon
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_DROGON_SHARED=OFF \
@@ -42,7 +45,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 3: build the C++ backend ----------
 # Same base as the drogon-builder so libstdc++ ABI matches at link time;
 # multi-arch via the Ubuntu base + Drogon-from-source above.
-FROM ubuntu:24.04 AS backend
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS backend
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config cmake \
@@ -73,7 +76,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 4: runtime ----------
 # Match the build base (Ubuntu 24.04) so libstdc++ matches; libdrogon is
 # statically linked, so we only need the third-party shared deps.
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \

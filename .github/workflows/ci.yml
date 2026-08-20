@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (build + integration tests)
@@ -15,10 +18,10 @@ jobs:
     # because the version in Ubuntu noble (1.8.7) is too old for the API we
     # depend on (registerSyncAdvice/HttpResponsePtr return, runOnQuit, …).
     container:
-      image: drogonframework/drogon:latest
+      image: drogonframework/drogon:latest@sha256:6e6855f2fac69c394b574f23cde70e88a23f7453bc8a0be67d4c2e7c5f1e2fca
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
         env:
           POSTGRES_USER:     blog_user
           POSTGRES_PASSWORD: blog_ci_password
@@ -30,8 +33,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install build-time extras
         run: |
           apt-get update
@@ -101,8 +103,8 @@ jobs:
         working-directory: frontend_app
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '26'
           cache: 'npm'
@@ -124,7 +126,7 @@ jobs:
         run: npm run build-storybook
 
       - name: Upload Storybook static
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: storybook-static
           path: frontend_app/storybook-static/
@@ -134,10 +136,9 @@ jobs:
     name: Static analysis (clang-tidy + cppcheck)
     runs-on: ubuntu-24.04
     container:
-      image: drogonframework/drogon:latest
+      image: drogonframework/drogon:latest@sha256:6e6855f2fac69c394b574f23cde70e88a23f7453bc8a0be67d4c2e7c5f1e2fca
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install tooling
         run: |
           apt-get update
@@ -198,18 +199,16 @@ jobs:
     name: OpenAPI lint (spectral)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: spectral lint
-        # @stoplight/spectral-cli pinned to a known-good major. We use
-        # npx --package so the version is captured in the CI log and
-        # doesn't drift silently against npm's "latest" pointer.
         run: |
-          npx --yes --package=@stoplight/spectral-cli@6.15.0 \
-              spectral lint openapi/blog.openapi.yaml --ruleset .spectral.yaml \
-              --fail-severity=error
+          docker run --rm --user 65534:65534 --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --network=none \
+            --env SCARF_ANALYTICS=false \
+            --mount type=bind,src="$PWD",dst=/src,readonly --workdir /src \
+            stoplight/spectral:6.16.3@sha256:a07aa4455367b9501b574423b684ab0ef3ee42556089013583318ec015249050 \
+            lint openapi/blog.openapi.yaml --ruleset .spectral.yaml \
+            --fail-severity=error
 
   backup-restore:
     name: Backup → restore round-trip
@@ -217,10 +216,10 @@ jobs:
     # postgresql-client + bash are all we need; reuse a stock postgres image
     # as the runner-side toolchain rather than installing packages by hand.
     container:
-      image: postgres:17-alpine
+      image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
         env:
           POSTGRES_USER:     blog_user
           POSTGRES_PASSWORD: blog_ci_password
@@ -237,8 +236,7 @@ jobs:
       DB_PASSWORD: blog_ci_password
       DB_NAME:     blog_db
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Tooling
         run: apk add --no-cache bash coreutils findutils
 
@@ -275,11 +273,15 @@ jobs:
                -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
 
       - name: Restore
-        # Use the newest .dump in /tmp/dr (there's exactly one in CI, but
-        # the glob protects us if we ever add seed-after-backup steps).
+        # There must be exactly one dump in this isolated CI directory.
         run: |
-          dump=$(ls -1t /tmp/dr/blog-*.dump | head -n 1)
-          bash scripts/restore.sh "$dump"
+          shopt -s nullglob
+          dumps=(/tmp/dr/blog-*.dump)
+          if ((${#dumps[@]} != 1)); then
+            echo "expected one backup, found ${#dumps[@]}" >&2
+            exit 1
+          fi
+          bash scripts/restore.sh "${dumps[0]}"
 
       - name: Verify round-trip
         run: |
@@ -310,15 +312,19 @@ jobs:
     name: Helm chart (lint + template + kubeconform)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v3.16.2
 
       - name: Install kubeconform
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /tmp
+          curl --fail --silent --show-error --location \
+            --output /tmp/kubeconform-linux-amd64.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  /tmp/kubeconform-linux-amd64.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf /tmp/kubeconform-linux-amd64.tar.gz -C /tmp kubeconform
           sudo mv /tmp/kubeconform /usr/local/bin/kubeconform
           kubeconform -v
 
@@ -382,9 +388,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '26'
           cache: 'npm'
@@ -421,7 +426,7 @@ jobs:
             docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
                 up -d --build
           # Block until /healthz is green or 90 s pass.
-          for i in $(seq 1 90); do
+          for _ in {1..90}; do
             curl -fsS http://127.0.0.1:8092/healthz >/dev/null && break || true
             sleep 1
           done
@@ -446,7 +451,7 @@ jobs:
 
       - name: Upload report on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
           path: e2e/playwright-report/
@@ -465,8 +470,7 @@ jobs:
     # for the ubuntu-24.04 4-vCPU runner; bumping the runner class
     # warrants a paired bump in those thresholds. See bench/README.md.
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Bring up the stack
         run: |
           # Same docker-compose override as the e2e job — rate limiter
@@ -484,7 +488,7 @@ jobs:
           DB_PASSWORD=perf_db_password \
             docker compose -f docker-compose.yml -f docker-compose.perf.yml \
                 up -d --build
-          for i in $(seq 1 90); do
+          for _ in {1..90}; do
             curl -fsS http://127.0.0.1:8092/healthz >/dev/null && break || true
             sleep 1
           done
@@ -548,7 +552,7 @@ jobs:
 
       - name: Upload k6 summaries on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: k6-summaries
           path: bench/results-ci/
@@ -573,11 +577,10 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           push: false
@@ -589,26 +592,32 @@ jobs:
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to:   type=gha,scope=docker-${{ matrix.arch }},mode=max
 
-      - name: Smoke-test image binary
+      - name: Validate runtime image ABI and contents
         run: |
-          # The binary parses config.json before opening any socket, so
-          # `--help` exits cleanly without needing a DB. A startup ABI
-          # failure (missing .so, unresolved symbol) would surface here.
-          docker run --rm --entrypoint /app/blog drogon-blog:ci-${{ matrix.arch }} --help \
-            | head -3
+          # Real startup is exercised by E2E with Postgres. This check stays
+          # database-free while still failing on a missing runtime library,
+          # dropped frontend, wrong user, or incomplete image assembly.
+          docker run --rm --entrypoint /bin/sh drogon-blog:ci-${{ matrix.arch }} -ec '
+            test "$(id -u)" = 1000
+            test -x /app/blog
+            test -r /app/public/index.html
+            test -d /app/migrations
+            if ldd /app/blog | grep -F "not found"; then
+              exit 1
+            fi
+          '
 
   trivy:
     name: Trivy scan (amd64 image)
     runs-on: ubuntu-24.04
     needs: docker
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       # Rebuild the amd64 image from the gha cache layer the matrix job
       # warmed up — cheaper than uploading the image as an artifact.
       - name: Materialise amd64 image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           push: false
@@ -620,9 +629,10 @@ jobs:
       - name: Trivy scan (image)
         # Upstream switched to a leading `v` for the v0.36.0 tag; the
         # un-prefixed 0.36.0 tag doesn't exist on the repo any more.
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref:    drogon-blog:ci
+          version:      'v0.73.0'
           severity:     'HIGH,CRITICAL'
           exit-code:    '1'
           # Don't fail the whole pipeline when the vuln DB itself is
@@ -636,10 +646,10 @@ jobs:
     name: Backend (ASan + UBSan)
     runs-on: ubuntu-24.04
     container:
-      image: drogonframework/drogon:latest
+      image: drogonframework/drogon:latest@sha256:6e6855f2fac69c394b574f23cde70e88a23f7453bc8a0be67d4c2e7c5f1e2fca
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
         env:
           POSTGRES_USER:     blog_user
           POSTGRES_PASSWORD: blog_ci_password
@@ -650,8 +660,7 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install build-time extras
         run: |
           apt-get update
@@ -689,18 +698,24 @@ jobs:
     name: Secret + dependency scan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0          # gitleaks walks the full history
 
+      - name: Reject floating supply-chain inputs
+        run: scripts/check-supply-chain-pins.sh
+
       - name: gitleaks (secret scan)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: osv-scanner (JS dependency CVEs)
         run: |
-          docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:latest \
+          docker run --rm --user 65534:65534 --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges \
+            --mount type=bind,src="$PWD",dst=/src,readonly \
+            ghcr.io/google/osv-scanner:v2.5.1@sha256:8108ae94eadea5a02c9bec6e646909d5b790b44bd62d7f5b7f0b1d6d0ffc7734 \
             scan --lockfile=/src/frontend_app/package-lock.json \
                  --lockfile=/src/e2e/package-lock.json
 
