@@ -21,6 +21,37 @@
     "en": "Engleză",
     "ro": "Română"
   },
+  "theme": {
+    "light": "Temă: luminoasă",
+    "dark": "Temă: întunecată",
+    "system": "Temă: urmează sistemul"
+  },
+  "a11y": {
+    "skip_to_content": "Sari la conținut",
+    "primary_navigation": "Navigare principală",
+    "mobile_navigation": "Navigare principală, mobil",
+    "menu": "Meniu",
+    "open_menu": "Deschide meniul",
+    "close_menu": "Închide meniul",
+    "page_loaded": "S-a încărcat pagina {page}"
+  },
+  "footer": {
+    "built_with": "Construit cu"
+  },
+  "meta": {
+    "default_description": "Articole, comentarii și mesaje — backend C++ Drogon și interfață Vue 3."
+  },
+  "pages": {
+    "default": "Blogul lui Micu",
+    "reset_password": "Resetare parolă",
+    "verify_email": "Verificare email",
+    "search": "Căutare",
+    "tag": "Etichetă",
+    "post": "Articol",
+    "verify_2fa": "Verificare în doi pași",
+    "account_security": "Securitatea contului",
+    "not_found": "Pagina nu a fost găsită"
+  },
   "common": {
     "submit": "Trimite",
     "save": "Salvează",

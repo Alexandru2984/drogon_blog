@@ -295,11 +295,10 @@ watch(
 }
 .mchat-input input { flex: 1; min-width: 0; }
 
-/* Single pane below the app's own breakpoint. The old rule broke at 720px,
-   which is neither 48rem (where the shell switches to the drawer + tab bar)
-   nor anything else in the design — so between 720 and 768 the page had a
-   mobile message list and a desktop navbar. */
-@media (max-width: 48rem) {
+/* Single pane below the app's own breakpoint. Keeping this aligned with the
+   shell prevents a tablet from getting a mobile drawer/tab bar around a
+   squeezed two-column conversation layout. */
+@media (max-width: 70rem) {
   .messages-layout { grid-template-columns: minmax(0, 1fr); }
 
   .mlist, .mchat {

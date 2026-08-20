@@ -21,6 +21,37 @@
     "en": "English",
     "ro": "Romanian"
   },
+  "theme": {
+    "light": "Theme: light",
+    "dark": "Theme: dark",
+    "system": "Theme: follows your system"
+  },
+  "a11y": {
+    "skip_to_content": "Skip to content",
+    "primary_navigation": "Primary navigation",
+    "mobile_navigation": "Primary navigation, mobile",
+    "menu": "Menu",
+    "open_menu": "Open menu",
+    "close_menu": "Close menu",
+    "page_loaded": "{page} loaded"
+  },
+  "footer": {
+    "built_with": "Built with"
+  },
+  "meta": {
+    "default_description": "Posts, comments and messages — a C++ Drogon backend with a Vue 3 front end."
+  },
+  "pages": {
+    "default": "Micu's Blog",
+    "reset_password": "Reset password",
+    "verify_email": "Email verification",
+    "search": "Search",
+    "tag": "Tag",
+    "post": "Post",
+    "verify_2fa": "Two-factor verification",
+    "account_security": "Account security",
+    "not_found": "Page not found"
+  },
   "common": {
     "submit": "Submit",
     "save": "Save",

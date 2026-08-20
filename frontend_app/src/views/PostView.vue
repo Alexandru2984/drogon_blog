@@ -13,6 +13,7 @@ import CommentThread from '@/components/CommentThread.vue'
 import TableOfContents from '@/components/TableOfContents.vue'
 import RelatedPosts from '@/components/RelatedPosts.vue'
 import { socialApi } from '@/api/social'
+import { usePageMeta } from '@/composables/usePageMeta'
 
 const props = defineProps<{ id: number }>()
 
@@ -35,11 +36,29 @@ const auth     = useAuthStore()
 const router   = useRouter()
 const toasts   = useToastStore()
 const live     = useMessagesStore()
+const { setPageMeta } = usePageMeta()
 
 const isOwner = computed(() => auth.isAuthed && post.value?.author?.id === auth.user!.id)
 
 const bodyHtml = computed(() =>
   post.value?.content_html ? sanitizePostHtml(post.value.content_html) : '')
+
+function descriptionFrom(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[`#>*_~()[\]!-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
+}
+
+watch(post, (value) => {
+  if (!value) return
+  setPageMeta({
+    title: value.title,
+    description: descriptionFrom(value.content),
+  })
+})
 
 // The rendered article element, handed to the table of contents so it can
 // find the headings — they only exist after v-html has run.

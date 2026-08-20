@@ -8,6 +8,7 @@ import type { User } from '@/api/auth'
 import PostCard from '@/components/PostCard.vue'
 import PostCardSkeleton from '@/components/PostCardSkeleton.vue'
 import FollowButton from '@/components/FollowButton.vue'
+import { usePageMeta } from '@/composables/usePageMeta'
 
 const props = defineProps<{ id: number }>()
 
@@ -20,6 +21,15 @@ const uploading = ref(false)
 
 const auth = useAuthStore()
 const toasts = useToastStore()
+const { setPageMeta } = usePageMeta()
+
+watch(user, (value) => {
+  if (!value) return
+  setPageMeta({
+    title: value.username,
+    description: value.bio?.trim() || undefined,
+  })
+})
 
 const isMe = computed(() => auth.isAuthed && auth.user!.id === props.id)
 const editing = ref(false)

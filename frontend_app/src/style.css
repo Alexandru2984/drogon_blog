@@ -705,6 +705,9 @@ input[type="checkbox"], input[type="radio"] {
 }
 
 .logo {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
   font-weight: 700;
   font-size: var(--step-1);
   color: var(--text) !important;
@@ -716,12 +719,15 @@ input[type="checkbox"], input[type="radio"] {
 .nav-search { flex: 1 1 auto; min-width: 0; max-width: 22rem; }
 .nav-search input {
   background: var(--bg-elev2);
-  min-height: 2.25rem;
+  min-height: 2.75rem;
   padding-block: 0.35em;
 }
 
 .nav-links { display: flex; gap: var(--sp-1); align-items: center; margin-left: auto; }
 .nav-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
   color: var(--text-dim);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius);
@@ -753,6 +759,11 @@ input[type="checkbox"], input[type="radio"] {
    announced twice. */
 .nav-toggle { display: none; }
 
+.nav-icon-control {
+  min-width: 2.75rem !important;
+  min-height: 2.75rem !important;
+}
+
 .drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -777,6 +788,26 @@ input[type="checkbox"], input[type="radio"] {
   box-shadow: var(--shadow-lg);
   animation: slide-in var(--dur) var(--ease);
   overflow-y: auto;
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 2.75rem;
+  margin-bottom: var(--sp-2);
+}
+.drawer-head h2 {
+  margin: 0;
+  font-size: var(--step-2);
+}
+.drawer-head .drawer-close {
+  flex: 0 0 2.75rem;
+  width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  font-size: var(--step-2);
+  line-height: 1;
 }
 /* Direct children only. The unscoped selector also caught the theme
    toggle and locale switcher sitting inside a .row at the bottom of the
@@ -997,7 +1028,7 @@ footer {
 /* Phones and small tablets: the desktop nav is replaced by the hamburger,
    and a bottom tab bar carries the primary destinations within thumb
    reach. */
-@media (max-width: 48rem) {
+@media (max-width: 70rem) {
   .nav-links { display: none; }
   .nav-search { display: none; }
   .nav-toggle {
@@ -1006,7 +1037,8 @@ footer {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text);
-    min-height: 2.5rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
     padding-inline: var(--sp-3);
   }
 
@@ -1024,7 +1056,7 @@ footer {
 
 .tabbar { display: none; }
 
-@media (max-width: 48rem) {
+@media (max-width: 70rem) {
   .tabbar {
     position: fixed;
     inset-inline: 0;

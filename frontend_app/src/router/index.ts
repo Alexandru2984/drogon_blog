@@ -2,33 +2,33 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
-  { path: '/',                  name: 'home',          component: () => import('@/views/HomeView.vue') },
-  { path: '/login',             name: 'login',         component: () => import('@/views/LoginView.vue') },
-  { path: '/register',          name: 'register',      component: () => import('@/views/RegisterView.vue') },
-  { path: '/forgot-password',   name: 'forgot',        component: () => import('@/views/ForgotPasswordView.vue') },
-  { path: '/reset-password',    name: 'reset',         component: () => import('@/views/ResetPasswordView.vue') },
-  { path: '/verify-email',      name: 'verify',        component: () => import('@/views/VerifyEmailView.vue') },
+  { path: '/',                  name: 'home',          component: () => import('@/views/HomeView.vue'), meta: { titleKey: 'feed.heading' } },
+  { path: '/login',             name: 'login',         component: () => import('@/views/LoginView.vue'), meta: { titleKey: 'auth.login_heading' } },
+  { path: '/register',          name: 'register',      component: () => import('@/views/RegisterView.vue'), meta: { titleKey: 'auth.register_heading' } },
+  { path: '/forgot-password',   name: 'forgot',        component: () => import('@/views/ForgotPasswordView.vue'), meta: { titleKey: 'auth.forgot_heading' } },
+  { path: '/reset-password',    name: 'reset',         component: () => import('@/views/ResetPasswordView.vue'), meta: { titleKey: 'pages.reset_password' } },
+  { path: '/verify-email',      name: 'verify',        component: () => import('@/views/VerifyEmailView.vue'), meta: { titleKey: 'pages.verify_email' } },
   // `wide` widens the main container to --wide-width: the editor puts the
   // markdown and its preview side by side above 900 px, and two panes do not
   // fit in the 44rem reading measure the rest of the app uses.
-  { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true, wide: true } },
-  { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue') },
-  { path: '/tags',              name: 'tags',          component: () => import('@/views/TagsView.vue') },
-  { path: '/tags/:slug',        name: 'tag',           component: () => import('@/views/TagView.vue'), props: true },
+  { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true, wide: true, titleKey: 'nav.new_post' } },
+  { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue'), meta: { titleKey: 'pages.search' } },
+  { path: '/tags',              name: 'tags',          component: () => import('@/views/TagsView.vue'), meta: { titleKey: 'nav.tags' } },
+  { path: '/tags/:slug',        name: 'tag',           component: () => import('@/views/TagView.vue'), props: true, meta: { titleKey: 'pages.tag' } },
   // Drafts are the author's own; the auth guard is what keeps the route
   // from rendering an empty list to a signed-out visitor.
-  { path: '/drafts',            name: 'drafts',        component: () => import('@/views/DraftsView.vue'), meta: { auth: true } },
-  { path: '/bookmarks',         name: 'bookmarks',     component: () => import('@/views/BookmarksView.vue'), meta: { auth: true } },
-  { path: '/notifications',     name: 'notifications', component: () => import('@/views/NotificationsView.vue'), meta: { auth: true } },
-  { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true } },
-  { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }) },
-  { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }) },
-  { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue') },
-  { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true } },
-  { path: '/account/data',      name: 'account-data',  component: () => import('@/views/AccountDataView.vue'), meta: { auth: true } },
+  { path: '/drafts',            name: 'drafts',        component: () => import('@/views/DraftsView.vue'), meta: { auth: true, titleKey: 'nav.drafts' } },
+  { path: '/bookmarks',         name: 'bookmarks',     component: () => import('@/views/BookmarksView.vue'), meta: { auth: true, titleKey: 'nav.saved' } },
+  { path: '/notifications',     name: 'notifications', component: () => import('@/views/NotificationsView.vue'), meta: { auth: true, titleKey: 'nav.notifications' } },
+  { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true, titleKey: 'nav.messages' } },
+  { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'pages.post' } },
+  { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'nav.profile' } },
+  { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue'), meta: { titleKey: 'pages.verify_2fa' } },
+  { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true, titleKey: 'pages.account_security' } },
+  { path: '/account/data',      name: 'account-data',  component: () => import('@/views/AccountDataView.vue'), meta: { auth: true, titleKey: 'nav.your_data' } },
   // A real 404 rather than a redirect to '/'. Silently landing a bad link on
   // the feed makes a broken URL indistinguishable from a working one.
-  { path: '/:catchAll(.*)',     name: 'not-found',     component: () => import('@/views/NotFoundView.vue') },
+  { path: '/:catchAll(.*)',     name: 'not-found',     component: () => import('@/views/NotFoundView.vue'), meta: { titleKey: 'pages.not_found' } },
 ]
 
 export const router = createRouter({

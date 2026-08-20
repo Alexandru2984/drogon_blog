@@ -31,7 +31,7 @@ function onChange(e: Event) {
   appearance: none;
   -webkit-appearance: none;
   padding: 0 1.9rem 0 0.65rem;
-  height: 2.25rem;
+  height: 2.75rem;
   min-height: 0;
   width: auto;
   border: 1px solid var(--border);
