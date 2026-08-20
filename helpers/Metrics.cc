@@ -1,5 +1,6 @@
 #include "Metrics.h"
 #include "EmailHelper.h"
+#include "Security.h"
 #include "Workers.h"
 #include "../controllers/MessageWebSocket.h"
 
@@ -164,7 +165,27 @@ std::string renderPrometheus()
 
     out << "# HELP blog_ws_connections Open WebSocket connections (live message subscribers).\n"
         << "# TYPE blog_ws_connections gauge\n"
-        << "blog_ws_connections " << MessageWebSocket::connectionCount() << '\n';
+        << "blog_ws_connections " << MessageWebSocket::connectionCount() << '\n'
+        << "# HELP blog_ws_connection_rejected_total WebSocket opens refused by per-session/account limits.\n"
+        << "# TYPE blog_ws_connection_rejected_total counter\n"
+        << "blog_ws_connection_rejected_total "
+        << MessageWebSocket::rejectedConnectionCount() << '\n'
+        << "# HELP blog_ws_policy_closure_total WebSockets closed for oversized or excessive control frames.\n"
+        << "# TYPE blog_ws_policy_closure_total counter\n"
+        << "blog_ws_policy_closure_total "
+        << MessageWebSocket::policyClosureCount() << '\n';
+
+    const auto limiter = security::rateLimitStats();
+    out << "# HELP blog_rate_limit_buckets In-memory token buckets currently retained.\n"
+        << "# TYPE blog_rate_limit_buckets gauge\n"
+        << "blog_rate_limit_buckets " << limiter.buckets << '\n'
+        << "# HELP blog_rate_limit_bucket_capacity Hard cap on retained token buckets.\n"
+        << "# TYPE blog_rate_limit_bucket_capacity gauge\n"
+        << "blog_rate_limit_bucket_capacity " << limiter.capacity << '\n'
+        << "# HELP blog_rate_limit_capacity_evictions_total LRU buckets evicted at the hard cardinality cap.\n"
+        << "# TYPE blog_rate_limit_capacity_evictions_total counter\n"
+        << "blog_rate_limit_capacity_evictions_total "
+        << limiter.capacityEvictions << '\n';
 
     out << "# HELP blog_http_requests_in_flight Requests currently being processed.\n"
         << "# TYPE blog_http_requests_in_flight gauge\n"

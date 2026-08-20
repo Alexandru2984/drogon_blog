@@ -3,6 +3,8 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -124,10 +126,21 @@ struct RateLimitDecision {
     double resetSeconds;      // seconds until the bucket is full again
 };
 
+struct RateLimitStats {
+    std::size_t   buckets;
+    std::size_t   capacity;
+    std::uint64_t capacityEvictions;
+};
+
 RateLimitDecision rateLimitTake(const std::string& bucketName,
                                 const std::string& key,
                                 double capacity,
                                 double refillPerSecond);
+
+// Bounded-cache telemetry. Capacity evictions should be essentially zero at
+// normal blog traffic; a rising counter means high-cardinality limiter churn
+// (botnet / IPv6 rotation / a caller feeding attacker-controlled keys).
+RateLimitStats rateLimitStats();
 
 // Convenience for inline use inside authenticated mutating handlers: takes one
 // token from the (bucketName,key) bucket and, when the bucket is empty, returns

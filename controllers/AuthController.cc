@@ -239,6 +239,16 @@ void AuthController::loginUser(const HttpRequestPtr &req,
                            "Username and password are required"));
         return;
     }
+    // Reject impossible credentials before they become retained limiter
+    // keys, database parameters, worker-queue entries, or Argon2 inputs.
+    // Registration has enforced these ceilings from day one, so no valid
+    // account can rely on a longer value here.
+    if (username.size() > kMaxUsernameLen ||
+        password.size() > kMaxPasswordLen)
+    {
+        callback(jsonError(k400BadRequest, "Field too long"));
+        return;
+    }
 
     // Per-username rate limit (independent of the per-IP limit applied in the
     // SyncAdvice). Defeats credential stuffing where an attacker rotates IPs

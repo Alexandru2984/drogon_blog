@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -120,10 +122,25 @@ bool constTimeEq(const std::string& a, const std::string& b)
 struct Bucket {
     double tokens;
     std::chrono::steady_clock::time_point lastRefill;
+    std::list<std::string>::iterator       lruPosition;
 };
+
+constexpr std::size_t kMaxRateLimitBuckets = 16384;
+constexpr std::size_t kMaxBucketKeyBytes   = 256;
 
 std::mutex                              g_mu;
 std::unordered_map<std::string, Bucket> g_buckets;
+std::list<std::string>                  g_bucketLru;
+std::uint64_t                           g_capacityEvictions = 0;
+
+std::string boundedBucketComponent(const std::string& value)
+{
+    if (value.size() <= kMaxBucketKeyBytes) return value;
+    // Request-derived usernames/header values must not turn one cache entry
+    // into a multi-megabyte allocation. Hashing preserves stable bucketing
+    // while fixing the retained size.
+    return "sha256:" + sha256Hex(value);
+}
 
 } // namespace
 
@@ -261,26 +278,15 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
                                 double capacity,
                                 double refillPerSecond)
 {
-    const std::string composite = bucketName + "|" + key;
+    const std::string boundedName = boundedBucketComponent(bucketName);
+    const std::string boundedKey  = boundedBucketComponent(key);
+    // Length-prefix the namespace so embedded delimiters can never alias two
+    // distinct (rule,key) pairs into the same security budget.
+    const std::string composite = std::to_string(boundedName.size()) + ":" +
+                                  boundedName + boundedKey;
     auto now = std::chrono::steady_clock::now();
 
     std::lock_guard<std::mutex> lk(g_mu);
-
-    // Opportunistic GC. Without this, every distinct (rule, ip) tuple
-    // we ever see is retained for the lifetime of the process — a
-    // long-running prod (or an attacker rotating IPs) grows g_buckets
-    // monotonically. We sweep when the map crosses a threshold and
-    // drop anything that hasn't been touched in the last hour; even
-    // the slowest bucket we have refills well within that window, so
-    // an evicted entry is equivalent to a fresh one.
-    constexpr std::size_t kGcThreshold = 4096;
-    if (g_buckets.size() >= kGcThreshold) {
-        const auto cutoff = now - std::chrono::hours(1);
-        for (auto bit = g_buckets.begin(); bit != g_buckets.end(); ) {
-            if (bit->second.lastRefill < cutoff) bit = g_buckets.erase(bit);
-            else                                 ++bit;
-        }
-    }
 
     auto makeDecision = [&](bool allowed, double tokensAfter, double retryAfter) {
         RateLimitDecision d{};
@@ -298,8 +304,38 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
 
     auto it = g_buckets.find(composite);
     if (it == g_buckets.end()) {
+        // LRU order matches lastRefill order. Expiring from the front is
+        // amortized O(1): every stale entry is visited exactly once, unlike
+        // the previous full-map sweep on every insertion after 4096 entries.
+        const auto cutoff = now - std::chrono::hours(1);
+        while (!g_bucketLru.empty()) {
+            auto oldest = g_buckets.find(g_bucketLru.front());
+            if (oldest == g_buckets.end()) {
+                g_bucketLru.pop_front();
+                continue;
+            }
+            if (oldest->second.lastRefill >= cutoff) break;
+            g_buckets.erase(oldest);
+            g_bucketLru.pop_front();
+        }
+
+        // A botnet can keep every entry younger than the TTL. Retention still
+        // needs a hard ceiling; evicting the least-recently-used bucket keeps
+        // the service available to new clients instead of turning saturation
+        // into a global 429 switch.
+        if (g_buckets.size() >= kMaxRateLimitBuckets &&
+            !g_bucketLru.empty())
+        {
+            g_buckets.erase(g_bucketLru.front());
+            g_bucketLru.pop_front();
+            ++g_capacityEvictions;
+        }
+
         const double tokensAfter = capacity - 1.0;
-        g_buckets.emplace(composite, Bucket{tokensAfter, now});
+        g_bucketLru.push_back(composite);
+        const auto lruPosition = std::prev(g_bucketLru.end());
+        g_buckets.emplace(composite,
+                          Bucket{tokensAfter, now, lruPosition});
         return makeDecision(true, tokensAfter, 0.0);
     }
 
@@ -307,12 +343,20 @@ RateLimitDecision rateLimitTake(const std::string& bucketName,
     double elapsed = std::chrono::duration<double>(now - b.lastRefill).count();
     b.tokens = std::min(capacity, b.tokens + elapsed * refillPerSecond);
     b.lastRefill = now;
+    g_bucketLru.splice(g_bucketLru.end(), g_bucketLru, b.lruPosition);
 
     if (b.tokens >= 1.0) {
         b.tokens -= 1.0;
         return makeDecision(true, b.tokens, 0.0);
     }
     return makeDecision(false, b.tokens, (1.0 - b.tokens) / refillPerSecond);
+}
+
+RateLimitStats rateLimitStats()
+{
+    std::lock_guard<std::mutex> lk(g_mu);
+    return RateLimitStats{g_buckets.size(), kMaxRateLimitBuckets,
+                          g_capacityEvictions};
 }
 
 drogon::HttpResponsePtr rateLimitOr429(const std::string& bucketName,

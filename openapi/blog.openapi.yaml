@@ -508,7 +508,8 @@ paths:
       summary: Remove every enrolled 2FA factor
       description: |
         Requires both the current password and a fresh TOTP code. Removes
-        TOTP, passkeys, and recovery codes as one atomic operation.
+        TOTP, passkeys, and recovery codes as one atomic operation. Attempts
+        are limited to five per account per ten minutes.
       requestBody:
         required: true
         content:
@@ -532,6 +533,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /auth/2fa/recovery-codes/regenerate:
@@ -540,7 +542,9 @@ paths:
       summary: Issue a fresh batch of one-time recovery codes
       description: |
         Requires the current password. The previous batch is invalidated only
-        if all ten replacement hashes can be committed atomically.
+        if all ten replacement hashes can be committed atomically. Because a
+        batch costs eleven Argon2 operations, rotations are limited to three
+        per account per ten minutes.
       requestBody:
         required: true
         content:
@@ -565,6 +569,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /auth/2fa/webauthn/register/begin:

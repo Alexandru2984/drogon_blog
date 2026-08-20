@@ -359,7 +359,7 @@ The private-message endpoints — plus live comments on the post page — have a
 
 The C++ side is `helpers/PgListener` — a single background thread that owns a dedicated libpq connection, runs `select()` on its socket, and dispatches each notification's JSON payload to a callback. The callback in `main.cc` parses `kind` and routes to either `MessageWebSocket::pushNewMessage` (one-to-one delivery, keyed by `receiver_id`) or `MessageWebSocket::pushNewComment` (broadcast to anyone who sent `{"type":"subscribe_post","post_id":X}` over the WS).
 
-Frontend (`stores/messages.ts`) auto-connects on login, reconnects with exponential backoff (1 s → 30 s cap), keeps a per-peer conversation map plus an aggregate unread counter shown as a navbar badge, and exposes `subscribePost`/`unsubscribePost` so `PostView` can stream live comments while the user is reading. Live subscribers are exposed in Prometheus metrics as `blog_ws_connections`.
+Frontend (`stores/messages.ts`) auto-connects on login, reconnects with exponential backoff (1 s → 30 s cap), keeps a per-peer conversation map plus an aggregate unread counter shown as a navbar badge, and exposes `subscribePost`/`unsubscribePost` so `PostView` can stream live comments while the user is reading. The backend caps sockets at 8 per session / 16 per account, limits tiny control frames independently of REST content, and exports live/rejected/policy-closed counts to Prometheus.
 
 ## Observability
 

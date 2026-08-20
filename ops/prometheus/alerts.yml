@@ -134,6 +134,33 @@ groups:
             uploads) or an attacker tying up workers with slowloris-style
             traffic.
 
+      - alert: BlogRateLimiterCardinalityChurn
+        expr: increase(blog_rate_limit_capacity_evictions_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rate-limit cache reached its cardinality ceiling
+          description: |
+            New limiter keys are evicting old ones. This is abnormal for the
+            blog's traffic and usually means IP/username rotation intended to
+            consume memory or reset per-key budgets. Inspect access-log source
+            diversity and Cloudflare events before raising the fixed ceiling.
+
+      - alert: BlogWebSocketPolicyAbuse
+        expr: |
+          increase(blog_ws_connection_rejected_total[10m])
+          + increase(blog_ws_policy_closure_total[10m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: WebSocket resource limits are rejecting clients
+          description: |
+            More than ten sockets were refused or policy-closed in ten
+            minutes. Check whether one account/session is opening excessive
+            tabs or sending oversized/high-rate control frames.
+
   - name: blog-resources
     interval: 1m
     rules:

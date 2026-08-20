@@ -127,6 +127,72 @@ DROGON_TEST(Security_ClientIpOnlyTrustsProxiesAndOneHeader)
     CHECK(security::clientIpHeader() == "X-Real-IP");
 }
 
+// Limiter keys contain attacker-controlled IPs/usernames. Cardinality must be
+// a hard bound, not merely a stale-entry sweep: a botnet can keep every key
+// younger than the TTL and otherwise grow the process until OOM. The final
+// key is taken twice to also prove LRU churn leaves normal bucket semantics
+// intact.
+DROGON_TEST(Security_RateLimitCacheHasAHardCardinalityBound)
+{
+    const auto before = security::rateLimitStats();
+    const std::string namespaceKey = "cardinality_" + uniqueSuffix();
+
+    bool everyFreshKeyWasAllowed = true;
+    for (std::size_t i = 0; i < before.capacity + 512; ++i) {
+        const auto decision = security::rateLimitTake(
+            namespaceKey, "attacker-key-" + std::to_string(i),
+            1.0, 1.0 / 3600.0);
+        everyFreshKeyWasAllowed = everyFreshKeyWasAllowed && decision.allowed;
+    }
+    CHECK(everyFreshKeyWasAllowed);
+
+    const auto after = security::rateLimitStats();
+    CHECK(after.buckets <= after.capacity);
+    CHECK(after.capacity == before.capacity);
+    CHECK(after.capacityEvictions > before.capacityEvictions);
+
+    const auto repeated = security::rateLimitTake(
+        namespaceKey,
+        "attacker-key-" + std::to_string(before.capacity + 511),
+        1.0, 1.0 / 3600.0);
+    CHECK(!repeated.allowed);
+
+    // A huge request-derived key is represented by a fixed-size digest and
+    // remains stable across requests; it cannot become a retained 1 MiB map
+    // allocation per entry.
+    const std::string hugeKey(1024 * 1024, 'x');
+    CHECK(security::rateLimitTake(
+              "large_key", hugeKey, 1.0, 1.0 / 3600.0).allowed);
+    CHECK(!security::rateLimitTake(
+               "large_key", hugeKey, 1.0, 1.0 / 3600.0).allowed);
+    CHECK(security::rateLimitStats().buckets <= after.capacity);
+}
+
+// Registration never permits credentials beyond these limits, so accepting
+// larger login fields can only waste a worker slot / DB parameter / Argon2
+// input on attacker data. Both checks must happen synchronously before that
+// expensive path.
+DROGON_TEST(Security_LoginRejectsImpossibleCredentialSizesEarly)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+
+    Json::Value longUsername;
+    longUsername["username"] = std::string(33, 'u');
+    longUsername["password"] = "valid-length-password";
+    client->sendRequest(jsonPost("/auth/login", longUsername),
+        [TEST_CTX, client](ReqResult, const HttpResponsePtr& first) {
+            REQUIRE(first->getStatusCode() == k400BadRequest);
+
+            Json::Value longPassword;
+            longPassword["username"] = "bounded-user";
+            longPassword["password"] = std::string(257, 'p');
+            client->sendRequest(jsonPost("/auth/login", longPassword),
+                [TEST_CTX](ReqResult, const HttpResponsePtr& second) {
+                    CHECK(second->getStatusCode() == k400BadRequest);
+                });
+        });
+}
+
 // Email-collision masking on register: a second registration with a
 // different username but the existing email gets a 201 (not 409).
 DROGON_TEST(Security_DuplicateEmailIsMasked)

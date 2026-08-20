@@ -5,6 +5,10 @@
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -53,6 +57,22 @@ std::unordered_map<int, std::unordered_set<WebSocketConnectionPtr>>             
 // One sid can hold several sockets (a second tab reuses the session cookie).
 std::unordered_map<std::string, std::unordered_set<WebSocketConnectionPtr>>      g_bySid;
 
+// One authenticated browser session normally owns one socket; several tabs
+// are legitimate, thousands are not. Without these limits a single account
+// could consume Drogon's process-wide 20k connection budget and every file
+// descriptor behind it.
+constexpr std::size_t kMaxConnectionsPerSession = 8;
+constexpr std::size_t kMaxConnectionsPerUser    = 16;
+
+// The protocol only accepts tiny subscription controls and the literal
+// "ping". Keep both per-frame work and sustained JSON parsing bounded.
+constexpr std::size_t kMaxControlMessageBytes = 2048;
+constexpr double      kControlMessageBurst    = 30.0;
+constexpr double      kControlMessagesPerSec  = 10.0;
+
+std::atomic<std::uint64_t> g_rejectedConnections{0};
+std::atomic<std::uint64_t> g_policyClosures{0};
+
 struct ConnCtx {
     // cppcheck-suppress unusedStructMember  // read via ctx->userId after shared_ptr deref
     int                          userId;
@@ -61,14 +81,41 @@ struct ConnCtx {
     // cppcheck-suppress unusedStructMember  // read via ctx->sid after shared_ptr deref
     std::string                  sid;
     std::unordered_set<int>      subscribedPosts;   // protected by g_mu
+    double                       controlTokens{kControlMessageBurst};
+    std::chrono::steady_clock::time_point controlLastRefill{
+        std::chrono::steady_clock::now()};
 };
 
-void registerConnection(int userId, const std::string& sid,
-                        const WebSocketConnectionPtr& conn)
+enum class RegistrationResult {
+    Accepted,
+    SessionLimit,
+    UserLimit,
+};
+
+RegistrationResult registerConnection(int userId, const std::string& sid,
+                                      const WebSocketConnectionPtr& conn)
 {
     std::lock_guard<std::mutex> lk(g_mu);
+
+    const auto userIt = g_byUser.find(userId);
+    if (userIt != g_byUser.end() &&
+        userIt->second.size() >= kMaxConnectionsPerUser)
+    {
+        return RegistrationResult::UserLimit;
+    }
+
+    if (!sid.empty()) {
+        const auto sidIt = g_bySid.find(sid);
+        if (sidIt != g_bySid.end() &&
+            sidIt->second.size() >= kMaxConnectionsPerSession)
+        {
+            return RegistrationResult::SessionLimit;
+        }
+    }
+
     g_byUser[userId].insert(conn);
     if (!sid.empty()) g_bySid[sid].insert(conn);
+    return RegistrationResult::Accepted;
 }
 
 void unregisterConnection(const WebSocketConnectionPtr& conn)
@@ -129,6 +176,38 @@ void unsubscribeFromPost(const WebSocketConnectionPtr& conn, int postId)
             if (it->second.empty()) g_byPost.erase(it);
         }
     }
+}
+
+bool takeControlMessageToken(const WebSocketConnectionPtr& conn)
+{
+    auto ctx = conn->getContext<ConnCtx>();
+    if (!ctx) return false;
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(g_mu);
+    const double elapsed = std::chrono::duration<double>(
+        now - ctx->controlLastRefill).count();
+    ctx->controlTokens = std::min(
+        kControlMessageBurst,
+        ctx->controlTokens + elapsed * kControlMessagesPerSec);
+    ctx->controlLastRefill = now;
+    if (ctx->controlTokens < 1.0) return false;
+    ctx->controlTokens -= 1.0;
+    return true;
+}
+
+void recordPolicyClosure(const WebSocketConnectionPtr& conn,
+                         const char* reason)
+{
+    const auto total = g_policyClosures.fetch_add(
+        1, std::memory_order_relaxed) + 1;
+    // Logarithmic sampling prevents the defence itself becoming a log-volume
+    // DoS while still leaving an immediate and progressively visible signal.
+    if ((total & (total - 1)) == 0) {
+        LOG_WARN << "websocket policy closures reached " << total
+                 << "; latest reason=" << reason;
+    }
+    conn->shutdown(CloseCode::kViolation, reason);
 }
 
 // Snapshot the live conns for a key so we can send outside the lock.
@@ -200,7 +279,22 @@ void MessageWebSocket::handleNewConnection(const HttpRequestPtr& req,
 
     conn->setContext(std::make_shared<ConnCtx>(
         ConnCtx{userIdOpt.value(), sid, {}}));
-    registerConnection(userIdOpt.value(), sid, conn);
+    const auto registered = registerConnection(
+        userIdOpt.value(), sid, conn);
+    if (registered != RegistrationResult::Accepted) {
+        const auto total = g_rejectedConnections.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+        if ((total & (total - 1)) == 0) {
+            LOG_WARN << "websocket connection-limit rejections reached "
+                     << total;
+        }
+        conn->shutdown(
+            CloseCode::kViolation,
+            registered == RegistrationResult::SessionLimit
+                ? "session connection limit"
+                : "account connection limit");
+        return;
+    }
     presence::markOnline(userIdOpt.value());
 
     Json::Value hello;
@@ -214,6 +308,28 @@ void MessageWebSocket::handleNewMessage(const WebSocketConnectionPtr& conn,
                                         const WebSocketMessageType& type)
 {
     if (type == WebSocketMessageType::Pong) return;
+    // Ping is a valid WebSocket control frame. Drogon handles the protocol
+    // response; we only budget how often the application is interrupted so
+    // a standards-compliant heartbeat is accepted without becoming a CPU
+    // bypass around the per-connection message rate.
+    if (type == WebSocketMessageType::Ping) {
+        if (!takeControlMessageToken(conn)) {
+            recordPolicyClosure(conn, "control message rate exceeded");
+        }
+        return;
+    }
+    if (type != WebSocketMessageType::Text) {
+        recordPolicyClosure(conn, "text frames only");
+        return;
+    }
+    if (msg.size() > kMaxControlMessageBytes) {
+        recordPolicyClosure(conn, "control message too large");
+        return;
+    }
+    if (!takeControlMessageToken(conn)) {
+        recordPolicyClosure(conn, "control message rate exceeded");
+        return;
+    }
     if (msg == "ping") {
         conn->send("pong", WebSocketMessageType::Text);
         return;
@@ -231,12 +347,14 @@ void MessageWebSocket::handleNewMessage(const WebSocketConnectionPtr& conn,
     if (typ == "subscribe_post" && root.isMember("post_id") &&
         root["post_id"].isInt())
     {
-        subscribeToPost(conn, root["post_id"].asInt());
+        const int postId = root["post_id"].asInt();
+        if (postId > 0) subscribeToPost(conn, postId);
     }
     else if (typ == "unsubscribe_post" && root.isMember("post_id") &&
              root["post_id"].isInt())
     {
-        unsubscribeFromPost(conn, root["post_id"].asInt());
+        const int postId = root["post_id"].asInt();
+        if (postId > 0) unsubscribeFromPost(conn, postId);
     }
 }
 
@@ -329,6 +447,16 @@ std::size_t MessageWebSocket::connectionCount()
     std::size_t total = 0;
     for (const auto& entry : g_byUser) total += entry.second.size();
     return total;
+}
+
+std::uint64_t MessageWebSocket::rejectedConnectionCount()
+{
+    return g_rejectedConnections.load(std::memory_order_relaxed);
+}
+
+std::uint64_t MessageWebSocket::policyClosureCount()
+{
+    return g_policyClosures.load(std::memory_order_relaxed);
 }
 
 void MessageWebSocket::shutdownAll()

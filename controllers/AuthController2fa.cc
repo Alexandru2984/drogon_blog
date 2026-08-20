@@ -18,7 +18,9 @@
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -108,6 +110,14 @@ bool hasEnrollmentAuthorization(const HttpRequestPtr& req,
 bool validPasswordInput(const std::string& password)
 {
     return !password.empty() && password.size() <= kMaxPasswordLen;
+}
+
+bool validTotpInput(const std::string& code)
+{
+    return code.size() == 6 &&
+           std::all_of(code.begin(), code.end(), [](unsigned char c) {
+               return std::isdigit(c) != 0;
+           });
 }
 
 HttpResponsePtr noStoreJson(const Json::Value& body)
@@ -583,14 +593,27 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
+    const std::string password = (*json)["password"].asString();
+    const std::string totpCode = (*json).get("totp_code", "").asString();
+    if (!validPasswordInput(password) || !validTotpInput(totpCode)) {
+        callback(jsonError(k400BadRequest,
+                           "Current password and 6-digit factor are required"));
+        return;
+    }
+    if (auto rl = security::rateLimitOr429(
+            "2fa_disable", "uid:" + std::to_string(*userIdOpt),
+            5.0, 5.0 / 600.0))
+    {
+        callback(rl);
+        return;
+    }
+
     // verifyCurrentPassword() is an Argon2id verify (~158 ms) plus a
     // synchronous query; factor lookup and the atomic delete also block.
     workers::offload(workers::Pool::Auth, callback,
-        [req, callback, userIdOpt, json] {
+        [req, callback, userIdOpt, password, totpCode] {
             try {
-                const std::string password = (*json)["password"].asString();
-                if (password.empty() ||
-                    !verifyCurrentPassword(*userIdOpt, password))
+                if (!verifyCurrentPassword(*userIdOpt, password))
                 {
                     callback(jsonError(k403Forbidden, "Password check failed"));
                     return;
@@ -600,18 +623,15 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
                 // cannot rip every factor back off.
                 auto db = drogon::app().getDbClient();
                 bool factorOk = false;
-                if (json->isMember("totp_code")) {
-                    const std::string code = (*json)["totp_code"].asString();
-                    auto r = db->execSqlSync(
-                        "SELECT secret_b32 FROM user_totp_secrets "
-                        "WHERE user_id = $1 AND enabled = TRUE",
-                        *userIdOpt);
-                    if (!r.empty() &&
-                        totp::verify(security::unwrapTotpSecret(
-                            r[0]["secret_b32"].as<std::string>()), code))
-                    {
-                        factorOk = true;
-                    }
+                auto r = db->execSqlSync(
+                    "SELECT secret_b32 FROM user_totp_secrets "
+                    "WHERE user_id = $1 AND enabled = TRUE",
+                    *userIdOpt);
+                if (!r.empty() &&
+                    totp::verify(security::unwrapTotpSecret(
+                        r[0]["secret_b32"].as<std::string>()), totpCode))
+                {
+                    factorOk = true;
                 }
                 if (!factorOk) {
                     callback(jsonError(k403Forbidden, "2FA factor required"));
@@ -667,15 +687,29 @@ void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string password = (*json)["password"].asString();
+    if (!validPasswordInput(password)) {
+        callback(jsonError(k400BadRequest, "Current password is required"));
+        return;
+    }
+    // This path performs one password verify plus ten Argon2id hashes. Three
+    // rotations per ten minutes is generous for recovery-code hygiene and
+    // prevents one compromised session from monopolising the auth pool.
+    if (auto rl = security::rateLimitOr429(
+            "2fa_recovery_regenerate",
+            "uid:" + std::to_string(*userIdOpt),
+            3.0, 3.0 / 600.0))
+    {
+        callback(rl);
+        return;
+    }
     // One Argon2id verify for the password re-auth plus ten more to hash
     // the fresh batch: roughly 1.9 s of CPU that must not run on an IO
     // loop.
     workers::offload(workers::Pool::Auth, callback,
-        [req, callback, userIdOpt, json] {
+        [req, callback, userIdOpt, password] {
             try {
-                const std::string password = (*json)["password"].asString();
-                if (password.empty() ||
-                    !verifyCurrentPassword(*userIdOpt, password))
+                if (!verifyCurrentPassword(*userIdOpt, password))
                 {
                     callback(jsonError(k403Forbidden, "Password check failed"));
                     return;

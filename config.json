@@ -292,8 +292,10 @@
         //Setting it to "" means no limit.
         "client_max_memory_body_size": "64K",
         //client_max_websocket_message_size: Set the maximum size of messages sent by WebSocket client. The default value is "128K".
-        //One can set it to "1024", "1k", "10M", "1G", etc. Setting it to "" means no limit.
-        "client_max_websocket_message_size": "128K",
+        // This app's WS protocol carries only tiny subscription controls and
+        // text pings; chat/comment bodies travel through bounded REST routes.
+        // Reject oversized frames at the transport before JSON parsing.
+        "client_max_websocket_message_size": "4K",
         //reuse_port: Defaults to false, users can run multiple processes listening on the same port at the same time.
         "reuse_port": false,
         // enabled_compressed_request: Defaults to false. If true the server will automatically decompress compressed request bodies.

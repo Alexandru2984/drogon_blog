@@ -105,3 +105,78 @@ test('Bob\'s reply (sent via the UI) reaches Alice\'s open /messages tab',
       await bobCtx.close()
     }
   })
+
+test('one session cannot exhaust websocket connections or parse oversized controls',
+  async ({ page }) => {
+    await registerAndLogin(page, uniqueUser())
+    await page.goto('/#/')
+
+    const oversized = await page.evaluate(async () => {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws/messages`)
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(
+          () => reject(new Error('websocket did not open')), 3_000)
+        ws.addEventListener('open', () => {
+          window.clearTimeout(timeout)
+          resolve()
+        }, { once: true })
+        ws.addEventListener('error', () => {
+          window.clearTimeout(timeout)
+          reject(new Error('websocket failed before opening'))
+        }, { once: true })
+      })
+
+      const closed = new Promise<{ code: number; reason: string }>((resolve, reject) => {
+        const timeout = window.setTimeout(
+          () => reject(new Error('oversized control was not closed')), 3_000)
+        ws.addEventListener('close', event => {
+          window.clearTimeout(timeout)
+          resolve({ code: event.code, reason: event.reason })
+        }, { once: true })
+      })
+      ws.send('x'.repeat(2049))
+      return closed
+    })
+    expect(oversized.code).toBe(1008)
+    expect(oversized.reason).toContain('too large')
+
+    const connectionFlood = await page.evaluate(async () => {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const sockets: WebSocket[] = []
+      const closed: Array<{ code: number; reason: string }> = []
+
+      const handshakes: Promise<void>[] = []
+      for (let i = 0; i < 20; ++i) {
+        const ws = new WebSocket(`${proto}//${window.location.host}/ws/messages`)
+        sockets.push(ws)
+        handshakes.push(new Promise(resolve => {
+          let settled = false
+          const settle = () => {
+            if (settled) return
+            settled = true
+            resolve()
+          }
+          ws.addEventListener('open', settle, { once: true })
+          ws.addEventListener('close', event => {
+            closed.push({ code: event.code, reason: event.reason })
+            settle()
+          }, { once: true })
+          ws.addEventListener('error', settle, { once: true })
+        }))
+      }
+
+      await Promise.all(handshakes)
+      await new Promise(resolve => window.setTimeout(resolve, 500))
+      const open = sockets.filter(ws => ws.readyState === WebSocket.OPEN).length
+      const rejected = closed.filter(event =>
+        event.code === 1008 && event.reason.includes('connection limit')).length
+      for (const ws of sockets) ws.close()
+      return { open, rejected }
+    })
+
+    // The SPA itself may already own one of the session's eight slots.
+    expect(connectionFlood.open).toBeGreaterThan(0)
+    expect(connectionFlood.open).toBeLessThanOrEqual(8)
+    expect(connectionFlood.rejected).toBeGreaterThanOrEqual(12)
+  })

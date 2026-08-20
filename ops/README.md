@@ -45,6 +45,11 @@ docker compose -f docker-compose.observability.yml up -d
 | `blog_http_requests_in_flight`               | gauge      | Currently-processing requests; saturation signal         |
 | `blog_email_queue_depth`                     | gauge      | Outstanding outbound mail jobs                           |
 | `blog_ws_connections`                        | gauge      | Open WebSocket subscribers                               |
+| `blog_ws_connection_rejected_total`          | counter    | Sockets refused by per-session/account caps              |
+| `blog_ws_policy_closure_total`                | counter    | Sockets closed for oversized/excessive controls          |
+| `blog_rate_limit_buckets`                     | gauge      | Currently retained in-memory limiter keys                |
+| `blog_rate_limit_bucket_capacity`             | gauge      | Hard limiter-key cardinality ceiling                     |
+| `blog_rate_limit_capacity_evictions_total`    | counter    | LRU churn at the limiter ceiling                         |
 | `blog_process_resident_memory_bytes`         | gauge      | RSS for leak / OOM watching                              |
 | `blog_uptime_seconds`                        | gauge      | Time since process start                                 |
 | `blog_build_info{version, git_rev}`          | gauge (1)  | Static metadata; annotate dashboards by version          |

@@ -3,6 +3,10 @@
 #include <drogon/WebSocketController.h>
 #include <json/json.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
 class MessageWebSocket
     : public drogon::WebSocketController<MessageWebSocket>
 {
@@ -42,6 +46,12 @@ public:
 
     // Number of currently-connected sockets (for /metrics). Cheap mutex-only.
     static std::size_t connectionCount();
+
+    // Monotonic abuse counters surfaced through /metrics. Connection
+    // rejections mean the per-session/user cap was hit; policy closures mean
+    // a client exceeded the frame-size/rate protocol budget.
+    static std::uint64_t rejectedConnectionCount();
+    static std::uint64_t policyClosureCount();
 
     // Hang up every socket opened under `sid`, with close code 1008.
     //
