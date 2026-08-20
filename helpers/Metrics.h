@@ -17,6 +17,12 @@ void observeRequest(const std::string& routePattern,
 void incInFlight();
 void decInFlight();
 
+// Records an observability field that was replaced with a bounded digest (or
+// an invalid/unmatched route that was collapsed to the shared label). A rise
+// is usually hostile high-cardinality input or an operator-supplied value far
+// outside its documented size.
+void noteObservabilityInputTruncated();
+
 // Renders the current process-wide metric values in the Prometheus text
 // exposition format. Safe to call concurrently with observeRequest().
 std::string renderPrometheus();

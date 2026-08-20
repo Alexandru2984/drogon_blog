@@ -161,6 +161,18 @@ groups:
             minutes. Check whether one account/session is opening excessive
             tabs or sending oversized/high-rate control frames.
 
+      - alert: BlogObservabilityInputAbuse
+        expr: increase(blog_observability_input_truncated_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Oversized or high-cardinality observability input detected
+          description: |
+            A log/trace/Sentry field was replaced with a bounded digest, or
+            an unsafe route was collapsed to /__unmatched__. Inspect access
+            logs and Cloudflare events for long random paths or headers.
+
   - name: blog-resources
     interval: 1m
     rules:

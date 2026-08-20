@@ -1,4 +1,5 @@
 #include "AccessLog.h"
+#include "LogSafety.h"
 #include "Metrics.h"
 #include "Security.h"
 #include "Sentry.h"
@@ -8,8 +9,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <ctime>
-#include <mutex>
 #include <string>
 #include <unistd.h>
 #include <unordered_set>
@@ -30,47 +29,6 @@ const std::unordered_set<std::string>& mutedPaths()
         "/healthz", "/readyz", "/metrics",
     };
     return s;
-}
-
-std::string nowIsoUtc()
-{
-    using namespace std::chrono;
-    const auto now  = system_clock::now();
-    const auto secs = time_point_cast<seconds>(now);
-    const auto ms   = duration_cast<milliseconds>(now - secs).count();
-
-    std::time_t t = system_clock::to_time_t(secs);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    char buf[40];
-    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<long>(ms));
-    return buf;
-}
-
-std::string jsonEscape(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out.push_back(c);
-                }
-        }
-    }
-    return out;
 }
 
 const char* methodName(drogon::HttpMethod m)
@@ -156,10 +114,11 @@ void install()
             const int  status        = static_cast<int>(resp->getStatusCode());
             const auto bytes         = resp->getBody().size();
 
-            // Prefer the matched route pattern so metrics labels don't explode
-            // on path parameters; fall back to the raw path otherwise.
+            // Prefer the matched route pattern so metrics labels don't
+            // explode on path parameters. Every unmatched URL shares one
+            // sentinel; the raw path remains available in the bounded log.
             std::string route{req->getMatchedPathPattern()};
-            if (route.empty()) route = path;
+            if (route.empty()) route = "/__unmatched__";
 
             metrics::observeRequest(route, method, status, latencySec);
 
@@ -169,37 +128,65 @@ void install()
             const std::string traceId = tracing::traceIdOf(req);
             const std::string spanId  = tracing::spanIdOf(req);
 
-            char line[1280];
-            int n = std::snprintf(
-                line, sizeof(line),
-                "{\"ts\":\"%s\",\"req_id\":\"%s\",\"trace_id\":\"%s\",\"span_id\":\"%s\","
-                "\"method\":\"%s\",\"path\":\"%s\",\"route\":\"%s\",\"status\":%d,"
-                "\"latency_ms\":%.3f,\"bytes\":%zu,\"ip\":\"%s\"}\n",
-                nowIsoUtc().c_str(),
-                jsonEscape(id).c_str(),
-                traceId.c_str(),
-                spanId.c_str(),
-                method.c_str(),
-                jsonEscape(path).c_str(),
-                jsonEscape(route).c_str(),
-                status,
-                latencyMs,
-                bytes,
-                jsonEscape(ip).c_str());
+            const auto safeId    = log_safety::escapeJsonField(id, 128);
+            const auto safePath  = log_safety::escapeJsonField(path, 512);
+            const auto safeRoute = log_safety::escapeJsonField(route, 512);
+            const auto safeIp    = log_safety::escapeJsonField(ip, 128);
+            if (safeId.abbreviated || safePath.abbreviated ||
+                safeRoute.abbreviated || safeIp.abbreviated)
+            {
+                metrics::noteObservabilityInputTruncated();
+            }
+
+            char latency[64];
+            const int latencyLength =
+                std::snprintf(latency, sizeof(latency), "%.3f", latencyMs);
+            const std::string safeLatency =
+                latencyLength > 0 &&
+                static_cast<std::size_t>(latencyLength) < sizeof(latency)
+                    ? std::string(latency,
+                                  static_cast<std::size_t>(latencyLength))
+                    : std::string("0.000");
+
+            std::string line;
+            line.reserve(512 + safePath.text.size() + safeRoute.text.size());
+            line += "{\"ts\":\"";
+            line += log_safety::isoUtcNow();
+            line += "\",\"req_id\":\"";
+            line += safeId.text;
+            line += "\",\"trace_id\":\"";
+            line += traceId;
+            line += "\",\"span_id\":\"";
+            line += spanId;
+            line += "\",\"method\":\"";
+            line += method;
+            line += "\",\"path\":\"";
+            line += safePath.text;
+            line += "\",\"route\":\"";
+            line += safeRoute.text;
+            line += "\",\"status\":";
+            line += std::to_string(status);
+            line += ",\"latency_ms\":";
+            line += safeLatency;
+            line += ",\"bytes\":";
+            line += std::to_string(bytes);
+            line += ",\"ip\":\"";
+            line += safeIp.text;
+            line += "\"}\n";
 
             // One write() syscall per line. journald reads STDOUT_FILENO as a
-            // stream socket; writes ≤ PIPE_BUF (4096 B) — our lines max out
-            // around 1.3 KB — land atomically in the kernel buffer, so we
+            // stream socket; writes ≤ PIPE_BUF (4096 B) — our lines stay
+            // below 2 KB — land atomically in the kernel buffer, so we
             // don't need to bracket with a mutex any more. fwrite/fflush
             // were the previous shape: two libc indirections + a separate
             // flush syscall per request, plus a global lock that serialised
             // every IO thread on the access path.
-            if (n > 0) {
-                // Return value intentionally unused: if journald disappears
-                // we drop the line rather than block the request path.
-                [[maybe_unused]] auto w =
-                    ::write(STDOUT_FILENO, line, static_cast<std::size_t>(n));
-            }
+            // Return value intentionally unused: if journald disappears we
+            // drop the line rather than block the request path. Every
+            // attacker-controlled field has an encoded budget above, keeping
+            // this below PIPE_BUF and making the single write atomic.
+            [[maybe_unused]] const auto written =
+                ::write(STDOUT_FILENO, line.data(), line.size());
 
             // Escalate server errors to Sentry. 4xx is client-driven
             // and would drown the dashboard; 5xx is on us. fire-and-

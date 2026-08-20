@@ -1,6 +1,7 @@
 #include "Sentry.h"
 
-#include "Security.h"        // for randomToken / similar; we use libsodium directly
+#include "LogSafety.h"
+#include "Metrics.h"
 #include "Tracing.h"
 
 #include <drogon/HttpClient.h>
@@ -10,7 +11,6 @@
 #include <sodium.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -87,30 +87,6 @@ std::string uuid4NoDashes()
     return out;
 }
 
-std::string isoUtcNow()
-{
-    auto now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                  now.time_since_epoch()) % 1000;
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    // 64, not 40. The format is 24 characters for any real timestamp, but
-    // the compiler reasons about the declared widths rather than the
-    // values: %04d on an int can print 11 characters, and it warned that
-    // the output could reach 78 bytes. snprintf would truncate rather than
-    // overflow, so this was never a memory-safety bug — but a truncated
-    // timestamp silently corrupts the event Sentry receives, and the
-    // warning is worth removing rather than living with.
-    char buf[64];
-    std::snprintf(buf, sizeof(buf),
-        "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ",
-        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-        tm.tm_hour, tm.tm_min, tm.tm_sec,
-        static_cast<long long>(ms.count()));
-    return buf;
-}
-
 const char* levelName(Level lvl)
 {
     switch (lvl) {
@@ -119,34 +95,6 @@ const char* levelName(Level lvl)
         case Level::Fatal:   return "fatal";
     }
     return "error";
-}
-
-// JSON-escape minimal — only the bytes that break a JSON string. The
-// access log helper has a fuller implementation; we keep this scoped
-// to the strings we feed Sentry (paths, method, ids, message). They
-// never contain control bytes beyond \n in pathological cases.
-std::string jsonEscape(std::string_view s)
-{
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (unsigned char c : s) {
-        switch (c) {
-            case '\\': out += "\\\\"; break;
-            case '"':  out += "\\\""; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    return out;
 }
 
 } // namespace
@@ -192,10 +140,10 @@ void captureRequestError(const drogon::HttpRequestPtr&  req,
     if (!g_armed.load(std::memory_order_acquire)) return;
 
     const std::string eventId = uuid4NoDashes();
-    const std::string ts      = isoUtcNow();
+    const std::string ts      = log_safety::isoUtcNow();
 
     const std::string route  = std::string(req->getMatchedPathPattern().empty()
-        ? req->getPath() : req->getMatchedPathPattern());
+        ? "/__unmatched__" : req->getMatchedPathPattern());
     const std::string method = req->getMethodString();
     const int         status = static_cast<int>(resp->getStatusCode());
 
@@ -204,6 +152,20 @@ void captureRequestError(const drogon::HttpRequestPtr&  req,
     const std::string ua    = req->getHeader("User-Agent");
     const std::string url   = req->getPath();
     const std::string trace = tracing::traceIdOf(req);
+
+    const auto safeMessage = log_safety::escapeJsonField(message, 512);
+    const auto safeRoute   = log_safety::escapeJsonField(route, 512);
+    const auto safeMethod  = log_safety::escapeJsonField(method, 32);
+    const auto safeReqId   = log_safety::escapeJsonField(reqId, 128);
+    const auto safeUrl     = log_safety::escapeJsonField(url, 512);
+    const auto safeUa      = log_safety::escapeJsonField(ua, 512);
+    const auto safeTrace   = log_safety::escapeJsonField(trace, 64);
+    if (safeMessage.abbreviated || safeRoute.abbreviated ||
+        safeMethod.abbreviated || safeReqId.abbreviated ||
+        safeUrl.abbreviated || safeUa.abbreviated || safeTrace.abbreviated)
+    {
+        metrics::noteObservabilityInputTruncated();
+    }
 
     // Build the event payload by hand. We avoid Json::Value here so a
     // failure in Sentry's parser doesn't perturb the request path; a
@@ -215,23 +177,23 @@ void captureRequestError(const drogon::HttpRequestPtr&  req,
     body += "\"platform\":\"other\",";
     body += "\"logger\":\"blog\",";
     body += "\"level\":\"";              body += levelName(level);   body += "\",";
-    body += "\"message\":{\"formatted\":\""; body += jsonEscape(message); body += "\"},";
+    body += "\"message\":{\"formatted\":\""; body += safeMessage.text; body += "\"},";
     body += "\"tags\":{";
-    body += "\"route\":\"";              body += jsonEscape(route);  body += "\",";
-    body += "\"method\":\"";             body += jsonEscape(method); body += "\",";
+    body += "\"route\":\"";              body += safeRoute.text;  body += "\",";
+    body += "\"method\":\"";             body += safeMethod.text; body += "\",";
     body += "\"status\":\"";             body += std::to_string(status); body += "\",";
-    body += "\"request_id\":\"";         body += jsonEscape(reqId);  body += "\"";
+    body += "\"request_id\":\"";         body += safeReqId.text;  body += "\"";
     body += "},";
     body += "\"request\":{";
-    body += "\"url\":\"";                body += jsonEscape(url);    body += "\",";
-    body += "\"method\":\"";             body += jsonEscape(method); body += "\",";
+    body += "\"url\":\"";                body += safeUrl.text;    body += "\",";
+    body += "\"method\":\"";             body += safeMethod.text; body += "\",";
     body += "\"headers\":{";
     if (!ua.empty()) {
-        body += "\"User-Agent\":\"";    body += jsonEscape(ua);     body += "\"";
+        body += "\"User-Agent\":\"";    body += safeUa.text;     body += "\"";
     }
     body += "}";
     body += "},";
-    body += "\"extra\":{\"trace_id\":\""; body += jsonEscape(trace); body += "\"}";
+    body += "\"extra\":{\"trace_id\":\""; body += safeTrace.text; body += "\"}";
     body += "}";
 
     // X-Sentry-Auth header — the only auth Sentry needs for the

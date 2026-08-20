@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace metrics {
 
@@ -51,6 +52,7 @@ struct CounterKeyHash {
 // one lock per request is fine at the scale this app targets.
 std::mutex                                                       g_mu;
 std::unordered_map<CounterKey, std::uint64_t, CounterKeyHash>    g_requests;
+constexpr std::size_t                                            kMaxRequestSeries = 2048;
 
 // Histogram state. Atomics so renderPrometheus() can take a stable-enough
 // snapshot without holding g_mu.
@@ -59,6 +61,7 @@ std::atomic<std::uint64_t>                                       g_inf{0};
 std::atomic<double>                                              g_sum{0.0};
 std::atomic<std::uint64_t>                                       g_count{0};
 std::atomic<std::int64_t>                                        g_inFlight{0};
+std::atomic<std::uint64_t>                                       g_observabilityTruncated{0};
 
 const auto g_started = std::chrono::steady_clock::now();
 
@@ -107,9 +110,29 @@ void observeRequest(const std::string& route,
                     int                status,
                     double             latency)
 {
+    // Callers should supply a matched route template, never the raw URL. Keep
+    // this boundary defensive: one forgotten fallback must not create an
+    // attacker-controlled Prometheus time series and retain it forever.
+    const bool unsafeRoute = route.empty() || route.size() > 256;
+    const std::string safeRoute = unsafeRoute
+        ? std::string{"/__unmatched__"}
+        : route;
+    if (unsafeRoute) noteObservabilityInputTruncated();
     {
         std::lock_guard<std::mutex> lk(g_mu);
-        ++g_requests[CounterKey{route, method, status}];
+        CounterKey key{safeRoute, method, status};
+        auto it = g_requests.find(key);
+        if (it != g_requests.end()) {
+            ++it->second;
+        } else if (g_requests.size() < kMaxRequestSeries - 1) {
+            g_requests.emplace(std::move(key), 1);
+        } else {
+            // Last-resort containment if a future caller passes short raw
+            // paths despite the API contract. Reserve one fixed series for
+            // overflow and never retain the attacker-supplied label.
+            ++g_requests[CounterKey{"/__overflow__", "OTHER", 0}];
+            noteObservabilityInputTruncated();
+        }
     }
 
     bool placed = false;
@@ -128,6 +151,10 @@ void observeRequest(const std::string& route,
 
 void incInFlight() { g_inFlight.fetch_add(1, std::memory_order_relaxed); }
 void decInFlight() { g_inFlight.fetch_sub(1, std::memory_order_relaxed); }
+void noteObservabilityInputTruncated()
+{
+    g_observabilityTruncated.fetch_add(1, std::memory_order_relaxed);
+}
 
 std::string renderPrometheus()
 {
@@ -191,6 +218,11 @@ std::string renderPrometheus()
         << "# TYPE blog_http_requests_in_flight gauge\n"
         << "blog_http_requests_in_flight "
         << g_inFlight.load(std::memory_order_relaxed) << '\n';
+
+    out << "# HELP blog_observability_input_truncated_total Log/trace fields replaced by bounded digests or routes collapsed to a safe label.\n"
+        << "# TYPE blog_observability_input_truncated_total counter\n"
+        << "blog_observability_input_truncated_total "
+        << g_observabilityTruncated.load(std::memory_order_relaxed) << '\n';
 
     // Blocking-work pools (Argon2id, libvips). These are the saturation
     // signal for the two slowest paths in the app: `queued` climbing means

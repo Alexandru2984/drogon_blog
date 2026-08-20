@@ -379,6 +379,8 @@ Request IDs are generated on entry (or honoured if the client supplied an `X-Req
 
 **Tracing.** The HTTP layer parses the W3C `traceparent` header on the way in and propagates it on the way out, generating a fresh trace + span when none is supplied. `trace_id` and `span_id` are stamped onto every access log line for log↔trace correlation. With `BLOG_TRACE_LOG=1` the service additionally emits an OTLP-shaped JSON span on stderr per sampled request — a collector like Vector or fluent-bit can convert these to OTLP/HTTP for Tempo / Jaeger / Honeycomb without any code change. Sampling rate is `BLOG_TRACE_SAMPLE_RATE` (default `1.0`).
 
+All log, trace, and Sentry strings have encoded-size budgets. Over-budget input is represented by a stable SHA-256 marker (preserving correlation without retaining or exporting the payload), and unmatched URLs share the `/__unmatched__` Prometheus route label so random 404 paths cannot create unbounded time series.
+
 **Metrics** include per-route request counters (`blog_http_requests_total{route,method,status}`), a latency histogram (`blog_http_request_duration_seconds`), an in-flight gauge (`blog_http_requests_in_flight`), the outbound email queue depth, open WebSocket subscribers, resident memory, process uptime, and a `blog_build_info{version,git_rev}` info gauge.
 
 By default `/metrics` is reachable only from the loopback interface; set `METRICS_TOKEN=<secret>` to require `Authorization: Bearer <secret>` instead, which is what production deployments behind nginx should use.

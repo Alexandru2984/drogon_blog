@@ -8,6 +8,7 @@ set(TEST_SOURCES
     test_password_hashing.cc
     test_search.cc
     test_security.cc
+    test_log_safety.cc
     test_image_pipeline.cc
     test_markdown.cc
     test_2fa.cc

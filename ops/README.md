@@ -50,6 +50,7 @@ docker compose -f docker-compose.observability.yml up -d
 | `blog_rate_limit_buckets`                     | gauge      | Currently retained in-memory limiter keys                |
 | `blog_rate_limit_bucket_capacity`             | gauge      | Hard limiter-key cardinality ceiling                     |
 | `blog_rate_limit_capacity_evictions_total`    | counter    | LRU churn at the limiter ceiling                         |
+| `blog_observability_input_truncated_total`    | counter    | Oversized log/trace fields or collapsed unsafe routes    |
 | `blog_process_resident_memory_bytes`         | gauge      | RSS for leak / OOM watching                              |
 | `blog_uptime_seconds`                        | gauge      | Time since process start                                 |
 | `blog_build_info{version, git_rev}`          | gauge (1)  | Static metadata; annotate dashboards by version          |
@@ -80,10 +81,15 @@ The starter rules in `prometheus/alerts.yml`:
 | Alert                  | Fires when                                       | Severity  |
 |------------------------|--------------------------------------------------|-----------|
 | `BlogDown`             | `up{job="blog"} == 0` for 1m                     | critical  |
+| `BlogRestartLoop`      | More than 3 uptime resets in 30m                  | critical  |
 | `BlogHighErrorRate`    | 5xx ratio > 1% for 5m                            | warning   |
 | `BlogHighP99Latency`   | p99 > 1s for 10m                                 | warning   |
 | `BlogEmailQueueBackup` | `blog_email_queue_depth > 100` for 5m            | warning   |
+| `BlogWorkerPoolShedding` | Auth/media jobs are refused                    | warning   |
 | `BlogHighInFlight`     | `blog_http_requests_in_flight > 100` for 2m      | warning   |
+| `BlogRateLimiterCardinalityChurn` | Limiter LRU reaches its hard ceiling | warning   |
+| `BlogWebSocketPolicyAbuse` | Realtime limits reject abusive clients       | warning   |
+| `BlogObservabilityInputAbuse` | Log/metric inputs exceed safe budgets       | warning   |
 | `BlogMemoryGrowth`     | RSS > 1.5 GiB for 15m                            | warning   |
 
 Tune thresholds per environment — these defaults are sized for a single

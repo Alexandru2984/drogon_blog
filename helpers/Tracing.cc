@@ -1,5 +1,8 @@
 #include "Tracing.h"
 
+#include "LogSafety.h"
+#include "Metrics.h"
+
 #include <sodium.h>
 
 #include <algorithm>
@@ -145,30 +148,6 @@ const char* methodName(drogon::HttpMethod m)
     }
 }
 
-std::string jsonEscape(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out.push_back(c);
-                }
-        }
-    }
-    return out;
-}
-
 std::mutex g_stderrMu;
 
 } // namespace
@@ -214,48 +193,52 @@ void finishServerSpan(const drogon::HttpRequestPtr&  req,
         endNanos - static_cast<std::uint64_t>(durationSeconds * 1e9);
 
     std::string route{req->getMatchedPathPattern()};
-    if (route.empty()) route = req->getPath();
+    if (route.empty()) route = "/__unmatched__";
     const char* method = methodName(req->getMethod());
     const int   status = static_cast<int>(resp->getStatusCode());
 
     // OTLP/HTTP-JSON span shape: a single `spans[]` entry with kind=SERVER (2).
     // Keep it on one line — collectors expect newline-delimited JSON for log
     // ingestion, and our access log already follows that convention.
-    char buf[1024];
-    int n = std::snprintf(
-        buf, sizeof(buf),
-        "{\"kind\":\"otlp_span\","
-        "\"resource\":{\"service.name\":\"%s\"},"
-        "\"trace_id\":\"%s\","
-        "\"span_id\":\"%s\","
-        "\"parent_span_id\":\"%s\","
-        "\"name\":\"HTTP %s %s\","
-        "\"span_kind\":\"SERVER\","
-        "\"start_time_unix_nano\":%llu,"
-        "\"end_time_unix_nano\":%llu,"
-        "\"attributes\":{"
-            "\"http.request.method\":\"%s\","
-            "\"http.route\":\"%s\","
-            "\"http.response.status_code\":%d,"
-            "\"http.response.body.size\":%zu"
-        "},"
-        "\"status\":{\"code\":%d}}\n",
-        jsonEscape(serviceName()).c_str(),
-        ctx.trace_id.c_str(),
-        ctx.span_id.c_str(),
-        ctx.parent_id.c_str(),
-        method, jsonEscape(route).c_str(),
-        static_cast<unsigned long long>(startNanos),
-        static_cast<unsigned long long>(endNanos),
-        method,
-        jsonEscape(route).c_str(),
-        status,
-        resp->getBody().size(),
-        status >= 500 ? 2 /* ERROR */ : 1 /* OK */);
+    const auto safeService =
+        log_safety::escapeJsonField(serviceName(), 128);
+    const auto safeRoute = log_safety::escapeJsonField(route, 512);
+    if (safeService.abbreviated || safeRoute.abbreviated) {
+        metrics::noteObservabilityInputTruncated();
+    }
 
-    if (n <= 0) return;
+    std::string line;
+    line.reserve(768 + safeRoute.text.size() * 2);
+    line += "{\"kind\":\"otlp_span\",\"resource\":{\"service.name\":\"";
+    line += safeService.text;
+    line += "\"},\"trace_id\":\"";
+    line += ctx.trace_id;
+    line += "\",\"span_id\":\"";
+    line += ctx.span_id;
+    line += "\",\"parent_span_id\":\"";
+    line += ctx.parent_id;
+    line += "\",\"name\":\"HTTP ";
+    line += method;
+    line += ' ';
+    line += safeRoute.text;
+    line += "\",\"span_kind\":\"SERVER\",\"start_time_unix_nano\":";
+    line += std::to_string(startNanos);
+    line += ",\"end_time_unix_nano\":";
+    line += std::to_string(endNanos);
+    line += ",\"attributes\":{\"http.request.method\":\"";
+    line += method;
+    line += "\",\"http.route\":\"";
+    line += safeRoute.text;
+    line += "\",\"http.response.status_code\":";
+    line += std::to_string(status);
+    line += ",\"http.response.body.size\":";
+    line += std::to_string(resp->getBody().size());
+    line += "},\"status\":{\"code\":";
+    line += status >= 500 ? "2" : "1";
+    line += "}}\n";
+
     std::lock_guard<std::mutex> lk(g_stderrMu);
-    std::fwrite(buf, 1, static_cast<std::size_t>(n), stderr);
+    std::fwrite(line.data(), 1, line.size(), stderr);
     std::fflush(stderr);
 }
 
