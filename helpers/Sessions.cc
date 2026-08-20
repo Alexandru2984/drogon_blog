@@ -8,6 +8,7 @@
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -158,17 +159,30 @@ void install()
         });
 }
 
-std::string begin(const drogon::HttpRequestPtr& req, int userId)
+bool begin(const drogon::HttpRequestPtr& req, int userId)
 {
-    // Not const: it is returned by value at the end of the function, and a
-    // const local cannot be moved out — it would be copied instead.
-    std::string sid = security::randomToken(18);
-
     auto session = req->session();
-    if (session) session->insert(kSidKey, sid);
+    if (!session) {
+        LOG_ERROR << "cannot record session: request has no session object";
+        return false;
+    }
+
+    const std::string sid = security::randomToken(18);
 
     try {
+#if defined(BLOG_TEST_BUILD)
+        // Compiled only into blog_test. It exercises the same catch/fail-closed
+        // path as a real INSERT failure without changing the shared test DB or
+        // exposing a production request header that affects authentication.
+        if (req->getHeader("X-Test-Fail-Session-Registry") == "1") {
+            throw std::runtime_error("forced session-registry test failure");
+        }
+#endif
         auto db = drogon::app().getDbClient();
+        if (!db) {
+            LOG_ERROR << "cannot record session: no database client";
+            return false;
+        }
         // User-Agent is stored to make the session list legible ("Firefox on
         // Linux"), and truncated because it is attacker-controlled text that
         // ends up rendered in that list.
@@ -180,12 +194,15 @@ std::string begin(const drogon::HttpRequestPtr& req, int userId)
             "VALUES ($1, $2, $3, $4)",
             sid, userId, security::clientIp(req), ua);
     } catch (const std::exception& e) {
-        // The session itself is already valid at this point; failing the
-        // login because bookkeeping failed would be the worse outcome. The
-        // cost is one session missing from the list.
         LOG_ERROR << "could not record session: " << e.what();
+        return false;
     }
-    return sid;
+
+    // Publish the sid into the authenticated session only after the durable
+    // registry row exists. That invariant is what makes every live session
+    // visible to password-reset, ban, and user-initiated revocation paths.
+    session->insert(kSidKey, sid);
+    return true;
 }
 
 std::optional<std::string> currentSid(const drogon::HttpRequestPtr& req)

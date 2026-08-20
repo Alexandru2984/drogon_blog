@@ -3,9 +3,13 @@
 #include <drogon/HttpClient.h>
 
 #include "../helpers/Security.h"
+#include "../helpers/Totp.h"
 
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <string>
 
 using namespace drogon;
@@ -153,6 +157,165 @@ DROGON_TEST(Sessions_RevokingOneSessionInvalidatesIt)
                                                 });
                                         });
                                 });
+                        });
+                });
+        });
+}
+
+// A session that is missing from user_sessions cannot be revoked later. A
+// registry outage at exactly the wrong moment must therefore fail the login,
+// not create an invisible long-lived session. The injected header is compiled
+// into blog_test only (BLOG_TEST_BUILD) and exercises Sessions::begin's real
+// exception path.
+DROGON_TEST(Sessions_RegistryFailureRejectsAuthentication)
+{
+    const std::string suffix = uniqueSuffix();
+    const std::string user   = "registry_fail_" + suffix;
+    const std::string pass   = "registry-failure-password-1";
+    auto client = std::make_shared<Client>(testBaseUrl());
+
+    Json::Value reg;
+    reg["username"] = user;
+    reg["email"]    = user + "@example.test";
+    reg["password"] = pass;
+
+    Json::Value login;
+    login["username"] = user;
+    login["password"] = pass;
+
+    client->http->sendRequest(jsonPost("/auth/register", reg),
+        [TEST_CTX, client, login, user]
+        (ReqResult, const HttpResponsePtr& registered) {
+            REQUIRE(registered->getStatusCode() == k201Created);
+
+            auto loginReq = jsonPost("/auth/login", login);
+            loginReq->addHeader("X-Test-Fail-Session-Registry", "1");
+            client->http->sendRequest(loginReq,
+                [TEST_CTX, client, user]
+                (ReqResult, const HttpResponsePtr& rejected) {
+                    REQUIRE(rejected->getStatusCode() ==
+                            k503ServiceUnavailable);
+                    CHECK(rejected->getHeader("Retry-After") == "5");
+                    client->absorb(rejected);
+
+                    auto db = app().getDbClient();
+                    db->execSqlAsync(
+                        "SELECT count(*) AS n FROM user_sessions s "
+                        "JOIN users u ON u.id = s.user_id "
+                        "WHERE u.username = $1 AND s.revoked_at IS NULL",
+                        [TEST_CTX, client](const orm::Result& rows) {
+                            CHECK(rows[0]["n"].as<int>() == 0);
+
+                            auto me = HttpRequest::newHttpRequest();
+                            me->setMethod(Get);
+                            me->setPath("/auth/me");
+                            if (!client->sessionCookie.empty()) {
+                                me->addCookie("JSESSIONID",
+                                              client->sessionCookie);
+                            }
+                            client->http->sendRequest(me,
+                                [TEST_CTX]
+                                (ReqResult, const HttpResponsePtr& meResp) {
+                                    CHECK(meResp->getStatusCode() ==
+                                          k401Unauthorized);
+                                });
+                        },
+                        [TEST_CTX](const orm::DrogonDbException& e) {
+                            FAIL(std::string("session registry query failed: ") +
+                                 e.base().what());
+                        },
+                        user);
+                });
+        });
+}
+
+DROGON_TEST(Sessions_RegistryFailureRejectsTwoFactorCompletion)
+{
+    const std::string suffix = uniqueSuffix();
+    const std::string user   = "reg2fa_" + suffix;
+    const std::string pass   = "Horizon-Copper-9274";
+    const std::string secret = totp::generateSecret();
+    auto client = std::make_shared<Client>(testBaseUrl());
+
+    Json::Value reg;
+    reg["username"] = user;
+    reg["email"]    = user + "@example.test";
+    reg["password"] = pass;
+
+    Json::Value login;
+    login["username"] = user;
+    login["password"] = pass;
+
+    client->http->sendRequest(jsonPost("/auth/register", reg),
+        [TEST_CTX, client, login, user, secret]
+        (ReqResult, const HttpResponsePtr& registered) {
+            REQUIRE(registered->getStatusCode() == k201Created);
+
+            auto db = app().getDbClient();
+            db->execSqlSync(
+                "INSERT INTO user_totp_secrets "
+                "(user_id, secret_b32, enabled, confirmed_at) "
+                "SELECT id, $2, TRUE, NOW() FROM users WHERE username = $1",
+                user, security::wrapTotpSecret(secret));
+
+            client->http->sendRequest(jsonPost("/auth/login", login),
+                [TEST_CTX, client, user, secret]
+                (ReqResult, const HttpResponsePtr& pending) {
+                    REQUIRE(pending->getStatusCode() == k200OK);
+                    auto body = pending->getJsonObject();
+                    REQUIRE(body);
+                    REQUIRE((*body)["requires_2fa"].asBool());
+                    client->absorb(pending);
+                    REQUIRE(!client->sessionCookie.empty());
+
+                    const auto code = totp::generateCode(
+                        secret, static_cast<std::uint64_t>(std::time(nullptr)));
+                    char codeText[7];
+                    std::snprintf(codeText, sizeof(codeText), "%06u", code);
+                    Json::Value verify;
+                    verify["code"] = codeText;
+                    auto verifyReq = jsonPost("/auth/login/verify-totp", verify);
+                    client->apply(verifyReq);
+                    verifyReq->addHeader("X-Test-Fail-Session-Registry", "1");
+
+                    client->http->sendRequest(verifyReq,
+                        [TEST_CTX, client, user]
+                        (ReqResult, const HttpResponsePtr& rejected) {
+                            REQUIRE(rejected->getStatusCode() ==
+                                    k503ServiceUnavailable);
+                            CHECK(rejected->getHeader("Retry-After") == "5");
+                            client->absorb(rejected);
+
+                            auto db = app().getDbClient();
+                            db->execSqlAsync(
+                                "SELECT count(*) AS n FROM user_sessions s "
+                                "JOIN users u ON u.id = s.user_id "
+                                "WHERE u.username = $1 "
+                                "AND s.revoked_at IS NULL",
+                                [TEST_CTX, client](const orm::Result& rows) {
+                                    CHECK(rows[0]["n"].as<int>() == 0);
+
+                                    auto me = HttpRequest::newHttpRequest();
+                                    me->setMethod(Get);
+                                    me->setPath("/auth/me");
+                                    if (!client->sessionCookie.empty()) {
+                                        me->addCookie("JSESSIONID",
+                                                      client->sessionCookie);
+                                    }
+                                    client->http->sendRequest(me,
+                                        [TEST_CTX]
+                                        (ReqResult,
+                                         const HttpResponsePtr& meResp) {
+                                            CHECK(meResp->getStatusCode() ==
+                                                  k401Unauthorized);
+                                        });
+                                },
+                                [TEST_CTX](const orm::DrogonDbException& e) {
+                                    FAIL(std::string(
+                                             "session registry query failed: ") +
+                                         e.base().what());
+                                },
+                                user);
                         });
                 });
         });

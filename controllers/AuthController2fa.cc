@@ -217,7 +217,24 @@ void completeTwoStepLogin(const HttpRequestPtr& req,
     // Register the session so it shows up in the user's device list and can
     // be revoked. Both login paths must do this; a 2FA-completed login that
     // skipped it would be invisible to "sign out everywhere".
-    sessions::begin(req, userId);
+    if (!sessions::begin(req, userId)) {
+        session->clear();
+        session->changeSessionIdToClient();
+        audit_log::record(req, {"login.session_registry_fail", userId,
+                                std::nullopt, std::nullopt,
+                                Json::objectValue});
+        auto resp = jsonError(k503ServiceUnavailable,
+                              "Login temporarily unavailable");
+        resp->addHeader("Retry-After", "5");
+        callback(resp);
+        return;
+    }
+
+    // Record success only after the session has a durable registry row. A
+    // registry outage rejects the login above and must never produce a
+    // contradictory login.ok event.
+    audit_log::record(req, {"login.ok", userId,
+                            std::nullopt, std::nullopt, Json::objectValue});
 
     Json::Value ret;
     ret["message"]          = "Login successful";
@@ -896,8 +913,6 @@ void AuthController::verifyLoginTotp(const HttpRequestPtr& req,
         return;
     }
 
-    audit_log::record(req, {"login.ok", pendingOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
     completeTwoStepLogin(req, callback, *pendingOpt);
 }
 
@@ -972,8 +987,6 @@ void AuthController::verifyLoginRecovery(const HttpRequestPtr& req,
     audit_log::record(req, {"2fa.verify.recovery.used", pendingOpt,
                             std::string{"recovery_code"}, matchedId,
                             Json::objectValue});
-    audit_log::record(req, {"login.ok", pendingOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
     completeTwoStepLogin(req, callback, *pendingOpt);
 
         });
@@ -1110,7 +1123,5 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     audit_log::record(req, {"2fa.verify.webauthn.ok", pendingOpt,
                             std::string{"webauthn_credential"}, credRowId,
                             Json::objectValue});
-    audit_log::record(req, {"login.ok", pendingOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
     completeTwoStepLogin(req, callback, *pendingOpt);
 }

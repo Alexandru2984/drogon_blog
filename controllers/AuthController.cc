@@ -416,7 +416,21 @@ void AuthController::loginUser(const HttpRequestPtr &req,
 
         session->insert("user_id",  userId);
         session->insert("username", user.getValueOfUsername());
-        sessions::begin(req, userId);
+        if (!sessions::begin(req, userId)) {
+            // Never leave a fully authenticated but unregistered session in
+            // memory: it would be invisible to password reset, bans, and the
+            // user's device-revocation controls.
+            session->clear();
+            session->changeSessionIdToClient();
+            audit_log::record(req, {"login.session_registry_fail", userId,
+                                    std::nullopt, std::nullopt,
+                                    Json::objectValue});
+            auto resp = jsonError(k503ServiceUnavailable,
+                                  "Login temporarily unavailable");
+            resp->addHeader("Retry-After", "5");
+            callback(resp);
+            return;
+        }
 
         audit_log::record(req, {"login.ok", userId,
                                 std::nullopt, std::nullopt, Json::objectValue});

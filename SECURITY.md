@@ -63,6 +63,7 @@ Regression coverage lives beside the affected subsystem.
 | 22| **High** | **A malformed TOTP encryption key silently downgraded new 2FA seeds to plaintext.** The parser returned the same `nullopt` for “unset” and “invalid,” so one typo in `BLOG_TOTP_KEY` disabled encryption without stopping startup. The Helm chart did not expose the key at all. | Invalid keys now throw at the parser and write boundary; startup validates before accepting traffic, and TLS/production mode refuses a missing key. The chart accepts an external Secret (preferred), validates inline key shape, injects `BLOG_TOTP_KEY`, and refuses a TLS render without it. Encryption round-trip and invalid-key regressions live in `test/test_2fa.cc`. |
 | 23| **High** | **A stolen authenticated session could add an attacker's passkey or TOTP seed.** Factor enrolment and passkey removal trusted the session alone, turning a transient session theft into durable account access. Provisioning secrets and recovery codes were also returned without an explicit no-store policy. | TOTP setup, WebAuthn registration begin, and passkey removal now require the current password, verified off the IO loop. Setup creates a session-bound, one-shot authorization that expires after ten minutes and is required by TOTP confirmation / WebAuthn finish. Sensitive 2FA status, credential, provisioning, and recovery-code responses emit `Cache-Control: private, no-store`, `Pragma: no-cache`, and `Vary: Cookie`. Failed re-authentication is audited, and the enrolment/removal paths have per-account rate limits. Integration and browser regressions cover the flows. |
 | 24| **High** | **The Helm chart defaulted to two app replicas despite process-local sessions.** Requests load-balanced to a different pod lost authentication, and every pod startup globally retired the session-registry rows belonging to still-running peers. The optional HPA amplified both failures and multiplied every in-memory security rate-limit budget. | The chart now defaults to one replica and fails template rendering for `replicaCount != 1` or `autoscaling.enabled=true`. The dormant HPA manifest was removed, chart documentation no longer advertises horizontal application scaling, and CI asserts both unsafe configurations are rejected. Multi-pod support is blocked until sessions and rate limits have distributed stores. |
+| 25| **High** | **Session-registry writes failed open.** Login remained successful when inserting the new `sid` into `user_sessions` failed, creating an authenticated 14-day session invisible to device lists, password-reset revocation, bans, and “sign out everywhere.” | The registry row is now a prerequisite for publishing the `sid` into either a password-only or 2FA-completed session. Failure clears and rotates the session, returns `503` with `Retry-After`, and emits `login.session_registry_fail`; `login.ok` is emitted only after the durable row exists. Test-only fault injection proves both login paths fail closed and leave no active row or authenticated cookie. |
 
 ### Vectors verified clean
 
@@ -200,7 +201,9 @@ requests with the same code cannot both succeed.
 `2fa.verify.recovery.used`, `2fa.verify.recovery.fail`,
 `2fa.verify.webauthn.ok`, `2fa.verify.webauthn.fail`, and `login.password_ok`
 for the in-between state where the password was correct but 2FA still
-needs to complete.
+needs to complete. `login.session_registry_fail` identifies a rejected login
+whose revocation record could not be made durable; it must be alerted on as an
+authentication-dependency failure, not counted as a successful login.
 
 ## Reporting a vulnerability
 

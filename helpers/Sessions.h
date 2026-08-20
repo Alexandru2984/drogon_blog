@@ -40,10 +40,12 @@ namespace sessions {
 // used and users would "revoke" ghosts.
 void install();
 
-// Mints a sid for a freshly authenticated session, records it, and returns
-// it. Call after session->changeSessionIdToClient() on every path that
-// completes a login (password-only and two-step alike).
-std::string begin(const drogon::HttpRequestPtr& req, int userId);
+// Mints and records a sid for a freshly authenticated session. Returns false
+// without authenticating the session if the registry write fails: an
+// unregistered session could not be listed or revoked later. Call after
+// session->changeSessionIdToClient() on every path that completes a login
+// (password-only and two-step alike).
+[[nodiscard]] bool begin(const drogon::HttpRequestPtr& req, int userId);
 
 // The sid of the request's session, if it has one.
 std::optional<std::string> currentSid(const drogon::HttpRequestPtr& req);

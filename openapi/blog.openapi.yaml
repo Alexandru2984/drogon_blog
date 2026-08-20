@@ -130,10 +130,12 @@ paths:
       tags: [Auth]
       summary: Sign in with username + password
       description: |
-        On success, sets the session cookie and the CSRF cookie. If the
-        account has 2FA enrolled, the response carries `two_step` and a
-        short-lived `challenge_id` — the client must then complete one
-        of `/auth/login/verify-{totp,recovery,webauthn}`.
+        A fully authenticated success sets the session cookie and the CSRF
+        cookie. If the account has 2FA enrolled, the intermediate response
+        carries `requires_2fa` and the available methods. Pending login state
+        is bound to the rotated, HttpOnly session cookie; the client must then
+        complete one of `/auth/login/verify-{totp,recovery,webauthn}` with the
+        same cookie.
       security: []
       requestBody:
         required: true
@@ -153,6 +155,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/AuthDependencyUnavailable' }
 
   /auth/logout:
     post:
@@ -688,10 +691,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [challenge_id, code]
+              required: [code]
               properties:
-                challenge_id: { type: string }
-                code:         { type: string, pattern: '^[0-9]{6}$' }
+                code: { type: string, pattern: '^[0-9]{6}$' }
       responses:
         '200':
           description: Authenticated.
@@ -700,6 +702,8 @@ paths:
               schema: { $ref: '#/components/schemas/LoginSuccess' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/AuthDependencyUnavailable' }
 
   /auth/login/verify-recovery:
     post:
@@ -712,10 +716,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [challenge_id, code]
+              required: [code]
               properties:
-                challenge_id: { type: string }
-                code:         { type: string, description: One-time recovery code shown at enrolment. }
+                code: { type: string, description: One-time recovery code shown at enrolment. }
       responses:
         '200':
           description: Authenticated.
@@ -724,21 +727,14 @@ paths:
               schema: { $ref: '#/components/schemas/LoginSuccess' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/AuthDependencyUnavailable' }
 
   /auth/login/verify-webauthn/begin:
     post:
       tags: [2FA login challenges]
       summary: Start a WebAuthn assertion for the current login challenge
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [challenge_id]
-              properties:
-                challenge_id: { type: string }
       responses:
         '200':
           description: PublicKeyCredentialRequestOptions.
@@ -746,6 +742,7 @@ paths:
             application/json:
               schema: { type: object }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/login/verify-webauthn/finish:
     post:
@@ -758,14 +755,22 @@ paths:
           application/json:
             schema:
               type: object
-              description: AuthenticatorAssertionResponse + challenge_id.
+              required: [credentialId, clientDataJSON, authenticatorData, signature]
+              properties:
+                credentialId:      { type: string, description: Base64url credential identifier. }
+                clientDataJSON:    { type: string, description: Base64url authenticator client data. }
+                authenticatorData: { type: string, description: Base64url authenticator data. }
+                signature:         { type: string, description: Base64url assertion signature. }
       responses:
         '200':
           description: Authenticated.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LoginSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/AuthDependencyUnavailable' }
 
   # ---------------------------------------------------------------- Posts
   /posts:
@@ -2247,6 +2252,16 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    AuthDependencyUnavailable:
+      description: |
+        A critical authentication dependency is unavailable. No authenticated
+        session was issued; the client may retry after the indicated delay.
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1, example: 5 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
     SessionEntry:
@@ -2309,12 +2324,12 @@ components:
 
     TwoStepChallenge:
       type: object
-      required: [two_step, challenge_id, methods]
+      required: [requires_2fa, methods]
       properties:
-        two_step:     { type: boolean, const: true }
-        challenge_id: { type: string }
+        requires_2fa: { type: boolean, const: true }
         methods:
           type: array
+          minItems: 1
           items: { type: string, enum: [totp, recovery, webauthn] }
 
     TwoFactorStatus:
