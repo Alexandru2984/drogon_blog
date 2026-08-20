@@ -2,6 +2,7 @@
 #include <drogon/drogon_test.h>
 #include <drogon/HttpClient.h>
 
+#include "../helpers/Security.h"
 #include "../helpers/Totp.h"
 
 #include <chrono>
@@ -79,6 +80,34 @@ bool isNoStore(const HttpResponsePtr& response)
            response->getHeader("Vary").find("Cookie") != std::string::npos;
 }
 
+std::string currentTotpCode(const std::string& secret)
+{
+    const auto code = totp::generateCode(
+        secret, static_cast<std::uint64_t>(std::time(nullptr)));
+    char text[7];
+    std::snprintf(text, sizeof(text), "%06u", code);
+    return text;
+}
+
+orm::Result factorState(const std::string& username)
+{
+    return app().getDbClient()->execSqlSync(
+        "SELECT "
+        " COALESCE((SELECT enabled FROM user_totp_secrets "
+        "   WHERE user_id = u.id), FALSE) AS totp_enabled, "
+        " (SELECT count(*) FROM user_totp_secrets "
+        "   WHERE user_id = u.id) AS totp, "
+        " (SELECT count(*) FROM user_recovery_codes "
+        "   WHERE user_id = u.id) AS codes, "
+        " (SELECT count(*) FROM user_webauthn_credentials "
+        "   WHERE user_id = u.id) AS passkeys, "
+        " COALESCE((SELECT string_agg(code_hash, ',' ORDER BY code_hash) "
+        "   FROM user_recovery_codes "
+        "   WHERE user_id = u.id), '') AS hashes "
+        "FROM users u WHERE username = $1",
+        username);
+}
+
 } // namespace
 
 DROGON_TEST(TwoFactor_TotpEnrollmentRequiresPasswordAndProtectsSecrets)
@@ -133,7 +162,7 @@ DROGON_TEST(TwoFactor_TotpEnrollmentRequiresPasswordAndProtectsSecrets)
                                         "FROM user_totp_secrets s "
                                         "JOIN users u ON u.id = s.user_id "
                                         "WHERE u.username = $1",
-                                        [TEST_CTX, client, pass]
+                                        [TEST_CTX, client, pass, user]
                                         (const orm::Result& rows) {
                                             REQUIRE(rows[0]["n"].as<int>() == 0);
 
@@ -143,7 +172,7 @@ DROGON_TEST(TwoFactor_TotpEnrollmentRequiresPasswordAndProtectsSecrets)
                                                 "/auth/2fa/totp/setup", correct);
                                             client->apply(setupReq);
                                             client->http->sendRequest(setupReq,
-                                                [TEST_CTX, client]
+                                                [TEST_CTX, client, user]
                                                 (ReqResult,
                                                  const HttpResponsePtr& setupResp) {
                                                     REQUIRE(setupResp->getStatusCode() == k200OK);
@@ -164,21 +193,44 @@ DROGON_TEST(TwoFactor_TotpEnrollmentRequiresPasswordAndProtectsSecrets)
                                                                   "%06u", code);
                                                     Json::Value confirmation;
                                                     confirmation["code"] = codeText;
-                                                    auto confirmReq = jsonPost(
+                                                    auto forcedFailure = jsonPost(
                                                         "/auth/2fa/totp/confirm",
                                                         confirmation);
-                                                    client->apply(confirmReq);
+                                                    forcedFailure->addHeader(
+                                                        "X-Test-Fail-2FA-Transaction",
+                                                        "recovery-codes");
+                                                    client->apply(forcedFailure);
                                                     client->http->sendRequest(
-                                                        confirmReq,
-                                                        [TEST_CTX]
+                                                        forcedFailure,
+                                                        [TEST_CTX, client, user,
+                                                         confirmation]
                                                         (ReqResult,
-                                                         const HttpResponsePtr& confirmResp) {
-                                                            REQUIRE(confirmResp->getStatusCode() == k200OK);
-                                                            CHECK(isNoStore(confirmResp));
-                                                            auto confirmed = confirmResp->getJsonObject();
-                                                            REQUIRE(confirmed);
-                                                            CHECK((*confirmed)["enabled"].asBool());
-                                                            CHECK((*confirmed)["recovery_codes"].size() == 10);
+                                                         const HttpResponsePtr& failed) {
+                                                            REQUIRE(failed->getStatusCode() ==
+                                                                    k500InternalServerError);
+
+                                                            const auto state =
+                                                                factorState(user);
+                                                            REQUIRE(state.size() == 1);
+                                                            CHECK(!state[0]["totp_enabled"].as<bool>());
+                                                            CHECK(state[0]["codes"].as<int>() == 0);
+
+                                                            auto retry = jsonPost(
+                                                                "/auth/2fa/totp/confirm",
+                                                                confirmation);
+                                                            client->apply(retry);
+                                                            client->http->sendRequest(
+                                                                retry,
+                                                                [TEST_CTX]
+                                                                (ReqResult,
+                                                                 const HttpResponsePtr& confirmedResp) {
+                                                                    REQUIRE(confirmedResp->getStatusCode() == k200OK);
+                                                                    CHECK(isNoStore(confirmedResp));
+                                                                    auto confirmed = confirmedResp->getJsonObject();
+                                                                    REQUIRE(confirmed);
+                                                                    CHECK((*confirmed)["enabled"].asBool());
+                                                                    CHECK((*confirmed)["recovery_codes"].size() == 10);
+                                                                });
                                                         });
                                                 });
                                         },
@@ -187,6 +239,122 @@ DROGON_TEST(TwoFactor_TotpEnrollmentRequiresPasswordAndProtectsSecrets)
                                                  e.base().what());
                                         },
                                         user);
+                                });
+                        });
+                });
+        });
+}
+
+DROGON_TEST(TwoFactor_ManagementMutationsAreAtomic)
+{
+    auto client = std::make_shared<Client>();
+    const std::string suffix = uniqueSuffix();
+    const std::string user   = "mfa_txn_" + suffix;
+    const std::string pass   = "Atomic-Cedar-9274";
+    const std::string secret = totp::generateSecret();
+
+    Json::Value registration;
+    registration["username"] = user;
+    registration["email"]    = user + "@example.test";
+    registration["password"] = pass;
+
+    Json::Value login;
+    login["username"] = user;
+    login["password"] = pass;
+
+    client->http->sendRequest(jsonPost("/auth/register", registration),
+        [TEST_CTX, client, login, user, pass, secret]
+        (ReqResult, const HttpResponsePtr& registered) {
+            REQUIRE(registered->getStatusCode() == k201Created);
+            client->http->sendRequest(jsonPost("/auth/login", login),
+                [TEST_CTX, client, user, pass, secret]
+                (ReqResult, const HttpResponsePtr& loggedIn) {
+                    REQUIRE(loggedIn->getStatusCode() == k200OK);
+                    client->absorb(loggedIn);
+
+                    auto db = app().getDbClient();
+                    db->execSqlSync(
+                        "INSERT INTO user_totp_secrets "
+                        "(user_id, secret_b32, enabled, confirmed_at) "
+                        "SELECT id, $2, TRUE, NOW() FROM users "
+                        "WHERE username = $1",
+                        user, security::wrapTotpSecret(secret));
+                    db->execSqlSync(
+                        "INSERT INTO user_recovery_codes (user_id, code_hash) "
+                        "SELECT id, fresh.code_hash FROM users "
+                        "CROSS JOIN (VALUES ('old-hash-a'), ('old-hash-b')) "
+                        "AS fresh(code_hash) WHERE username = $1",
+                        user);
+                    db->execSqlSync(
+                        "INSERT INTO user_webauthn_credentials "
+                        "(user_id, credential_id, public_key, sign_count, nickname) "
+                        "SELECT id, $2, decode('a0', 'hex'), 0, 'fixture' "
+                        "FROM users WHERE username = $1",
+                        user, "fixture-" + user);
+
+                    Json::Value regenerate;
+                    regenerate["password"] = pass;
+                    auto regenerateReq = jsonPost(
+                        "/auth/2fa/recovery-codes/regenerate", regenerate);
+                    regenerateReq->addHeader(
+                        "X-Test-Fail-2FA-Transaction", "recovery-codes");
+                    client->apply(regenerateReq);
+                    client->http->sendRequest(regenerateReq,
+                        [TEST_CTX, client, user, pass, secret]
+                        (ReqResult, const HttpResponsePtr& failedRegenerate) {
+                            REQUIRE(failedRegenerate->getStatusCode() ==
+                                    k500InternalServerError);
+
+                            const auto afterRegenerate = factorState(user);
+                            REQUIRE(afterRegenerate.size() == 1);
+                            CHECK(afterRegenerate[0]["totp"].as<int>() == 1);
+                            CHECK(afterRegenerate[0]["codes"].as<int>() == 2);
+                            CHECK(afterRegenerate[0]["passkeys"].as<int>() == 1);
+                            CHECK(afterRegenerate[0]["hashes"].as<std::string>() ==
+                                  "old-hash-a,old-hash-b");
+
+                            Json::Value disable;
+                            disable["password"]  = pass;
+                            disable["totp_code"] = currentTotpCode(secret);
+                            auto failedDisable = jsonPost(
+                                "/auth/2fa/disable", disable);
+                            failedDisable->addHeader(
+                                "X-Test-Fail-2FA-Transaction", "disable");
+                            client->apply(failedDisable);
+                            client->http->sendRequest(
+                                failedDisable,
+                                [TEST_CTX, client, user, pass, secret]
+                                (ReqResult,
+                                 const HttpResponsePtr& failedDisableResp) {
+                                    REQUIRE(failedDisableResp->getStatusCode() ==
+                                            k500InternalServerError);
+
+                                    const auto afterDisable = factorState(user);
+                                    REQUIRE(afterDisable.size() == 1);
+                                    CHECK(afterDisable[0]["totp"].as<int>() == 1);
+                                    CHECK(afterDisable[0]["codes"].as<int>() == 2);
+                                    CHECK(afterDisable[0]["passkeys"].as<int>() == 1);
+
+                                    Json::Value disable;
+                                    disable["password"]  = pass;
+                                    disable["totp_code"] = currentTotpCode(secret);
+                                    auto retry = jsonPost(
+                                        "/auth/2fa/disable", disable);
+                                    client->apply(retry);
+                                    client->http->sendRequest(
+                                        retry,
+                                        [TEST_CTX, user]
+                                        (ReqResult,
+                                         const HttpResponsePtr& disabled) {
+                                            REQUIRE(disabled->getStatusCode() ==
+                                                    k200OK);
+                                            const auto finalState =
+                                                factorState(user);
+                                            REQUIRE(finalState.size() == 1);
+                                            CHECK(finalState[0]["totp"].as<int>() == 0);
+                                            CHECK(finalState[0]["codes"].as<int>() == 0);
+                                            CHECK(finalState[0]["passkeys"].as<int>() == 0);
+                                        });
                                 });
                         });
                 });

@@ -17,11 +17,14 @@
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace drogon;
@@ -174,19 +177,116 @@ bool verifyCurrentPassword(int userId, const std::string& candidate)
     return security::verifyPassword(r[0]["password_hash"].as<std::string>(), candidate);
 }
 
-// Best-effort delete and recreate of the recovery codes batch. Called when
-// 2FA is enrolled the first time and on user-initiated regenerate.
-std::vector<std::string> issueFreshRecoveryCodes(int userId)
+struct RecoveryBatch {
+    std::vector<std::string> plaintext;
+    std::array<std::string, recovery_codes::kBatchSize> hashes;
+};
+
+// Generate and hash the complete batch before changing database state. If an
+// Argon2 allocation/hash fails, the caller's current factors and codes remain
+// untouched.
+RecoveryBatch prepareRecoveryBatch()
 {
-    auto db = drogon::app().getDbClient();
-    db->execSqlSync("DELETE FROM user_recovery_codes WHERE user_id = $1", userId);
-    auto plaintext = recovery_codes::generateBatch();
-    for (const auto& code : plaintext) {
-        db->execSqlSync(
-            "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)",
-            userId, recovery_codes::hashOne(code));
+    RecoveryBatch batch;
+    batch.plaintext = recovery_codes::generateBatch();
+    if (batch.plaintext.size() != recovery_codes::kBatchSize) {
+        throw std::runtime_error(
+            "recovery-code generator returned wrong batch size");
     }
-    return plaintext;
+    for (std::size_t i = 0; i < batch.hashes.size(); ++i) {
+        batch.hashes[i] = recovery_codes::hashOne(batch.plaintext[i]);
+    }
+    return batch;
+}
+
+bool testDatabaseFailureRequested(const HttpRequestPtr& req,
+                                  const char* stage)
+{
+#if defined(BLOG_TEST_BUILD)
+    return req->getHeader("X-Test-Fail-2FA-Transaction") == stage;
+#else
+    (void)req;
+    (void)stage;
+    return false;
+#endif
+}
+
+// Replace a user's complete batch in one PostgreSQL statement. Data-modifying
+// CTEs are one transaction: a constraint, connection, or injected test error
+// rolls the DELETE and every INSERT back together.
+void replaceRecoveryCodes(const DbClientPtr& db,
+                          int userId,
+                          const RecoveryBatch& batch,
+                          bool injectFailure)
+{
+    const auto rows = db->execSqlSync(
+        "WITH guard AS ("
+        "  SELECT 1 / CASE WHEN $12::boolean THEN 0 ELSE 1 END AS ok"
+        "), removed AS ("
+        "  DELETE FROM user_recovery_codes WHERE user_id = $1 RETURNING id"
+        "), inserted AS ("
+        "  INSERT INTO user_recovery_codes (user_id, code_hash) "
+        "  SELECT $1, fresh.code_hash "
+        "    FROM (VALUES ($2), ($3), ($4), ($5), ($6), "
+        "                 ($7), ($8), ($9), ($10), ($11)) "
+        "         AS fresh(code_hash) "
+        "   CROSS JOIN guard "
+        "   CROSS JOIN (SELECT count(*) FROM removed) AS deletion_barrier "
+        "   WHERE guard.ok = 1 "
+        "  RETURNING id"
+        ") SELECT count(*) AS inserted FROM inserted",
+        userId,
+        batch.hashes[0], batch.hashes[1], batch.hashes[2],
+        batch.hashes[3], batch.hashes[4], batch.hashes[5],
+        batch.hashes[6], batch.hashes[7], batch.hashes[8],
+        batch.hashes[9], injectFailure);
+    if (rows.empty() ||
+        rows[0]["inserted"].as<int>() != recovery_codes::kBatchSize)
+    {
+        throw std::runtime_error("recovery-code batch was not fully replaced");
+    }
+}
+
+void enableTotpWithRecoveryCodes(const DbClientPtr& db,
+                                 int userId,
+                                 const std::string& wrappedSecret,
+                                 const RecoveryBatch& batch,
+                                 bool injectFailure)
+{
+    const auto rows = db->execSqlSync(
+        "WITH guard AS ("
+        "  SELECT 1 / CASE WHEN $13::boolean THEN 0 ELSE 1 END AS ok"
+        "), enabled AS ("
+        "  UPDATE user_totp_secrets "
+        "     SET enabled = TRUE, confirmed_at = NOW() "
+        "   WHERE user_id = $1 AND secret_b32 = $2 AND enabled = FALSE "
+        "  RETURNING user_id"
+        "), removed AS ("
+        "  DELETE FROM user_recovery_codes "
+        "   WHERE user_id IN (SELECT user_id FROM enabled) RETURNING id"
+        "), inserted AS ("
+        "  INSERT INTO user_recovery_codes (user_id, code_hash) "
+        "  SELECT enabled.user_id, fresh.code_hash "
+        "    FROM enabled "
+        "   CROSS JOIN (VALUES ($3), ($4), ($5), ($6), ($7), "
+        "                      ($8), ($9), ($10), ($11), ($12)) "
+        "              AS fresh(code_hash) "
+        "   CROSS JOIN guard "
+        "   CROSS JOIN (SELECT count(*) FROM removed) AS deletion_barrier "
+        "   WHERE guard.ok = 1 "
+        "  RETURNING id"
+        ") SELECT (SELECT count(*) FROM enabled) AS enabled, "
+        "         count(*) AS inserted FROM inserted",
+        userId, wrappedSecret,
+        batch.hashes[0], batch.hashes[1], batch.hashes[2],
+        batch.hashes[3], batch.hashes[4], batch.hashes[5],
+        batch.hashes[6], batch.hashes[7], batch.hashes[8],
+        batch.hashes[9], injectFailure);
+    if (rows.empty() || rows[0]["enabled"].as<int>() != 1 ||
+        rows[0]["inserted"].as<int>() != recovery_codes::kBatchSize)
+    {
+        throw std::runtime_error("TOTP enrollment changed concurrently");
+    }
 }
 
 void completeTwoStepLogin(const HttpRequestPtr& req,
@@ -403,7 +503,7 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
         return;
     }
 
-    // issueFreshRecoveryCodes() below Argon2id-hashes ten codes in a row —
+    // prepareRecoveryBatch() below Argon2id-hashes ten codes in a row —
     // about 1.7 s of solid CPU at the measured 167 ms each. On an IO loop
     // that is 1.7 s during which every other connection Drogon assigned to
     // the same loop gets nothing.
@@ -434,15 +534,19 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
                     return;
                 }
 
+                // Hash before mutating state, then enable the seed and replace
+                // the complete recovery batch in one atomic SQL statement.
+                // A partial batch would leave a user believing they have ten
+                // escape hatches while the database has fewer (or none).
+                auto batch = prepareRecoveryBatch();
+                enableTotpWithRecoveryCodes(
+                    db, *userIdOpt,
+                    rows[0]["secret_b32"].as<std::string>(), batch,
+                    testDatabaseFailureRequested(req, "recovery-codes"));
+
                 // Do not seed last_used_step here. Confirmation and the first
                 // login commonly share a 30-second window; replay protection
                 // belongs to the login path, where each step is claimed once.
-                db->execSqlSync(
-                    "UPDATE user_totp_secrets "
-                    "SET enabled = TRUE, confirmed_at = NOW() "
-                    "WHERE user_id = $1",
-                    *userIdOpt);
-                auto codes = issueFreshRecoveryCodes(*userIdOpt);
                 clearEnrollmentAuthorization(
                     req, kTotpSetupUidKey, kTotpSetupAtKey);
 
@@ -453,7 +557,7 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
                 Json::Value ret;
                 ret["enabled"] = true;
                 Json::Value arr(Json::arrayValue);
-                for (auto& c : codes) arr.append(c);
+                for (const auto& c : batch.plaintext) arr.append(c);
                 ret["recovery_codes"] = arr;
                 callback(noStoreJson(ret));
             } catch (const std::exception& e) {
@@ -466,8 +570,8 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
 
 // =========================================================================
 // /auth/2fa/disable — remove TOTP + recovery codes + all passkeys. Requires
-// password AND a fresh TOTP / recovery / passkey factor to prove the
-// caller is genuinely the account owner.
+// the password AND a fresh TOTP code to prove the caller is genuinely the
+// account owner.
 // =========================================================================
 void AuthController::disable2fa(const HttpRequestPtr& req,
                                 std::function<void(const HttpResponsePtr&)>&& callback)
@@ -478,48 +582,74 @@ void AuthController::disable2fa(const HttpRequestPtr& req,
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
     // verifyCurrentPassword() is an Argon2id verify (~158 ms) plus a
-    // synchronous query; the deletes below add three more round-trips.
+    // synchronous query; factor lookup and the atomic delete also block.
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, json] {
+            try {
+                const std::string password = (*json)["password"].asString();
+                if (password.empty() ||
+                    !verifyCurrentPassword(*userIdOpt, password))
+                {
+                    callback(jsonError(k403Forbidden, "Password check failed"));
+                    return;
+                }
 
-    const std::string password = (*json)["password"].asString();
-    if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
-        callback(jsonError(k403Forbidden, "Password check failed"));
-        return;
-    }
+                // A current TOTP code is required so a hijacked session alone
+                // cannot rip every factor back off.
+                auto db = drogon::app().getDbClient();
+                bool factorOk = false;
+                if (json->isMember("totp_code")) {
+                    const std::string code = (*json)["totp_code"].asString();
+                    auto r = db->execSqlSync(
+                        "SELECT secret_b32 FROM user_totp_secrets "
+                        "WHERE user_id = $1 AND enabled = TRUE",
+                        *userIdOpt);
+                    if (!r.empty() &&
+                        totp::verify(security::unwrapTotpSecret(
+                            r[0]["secret_b32"].as<std::string>()), code))
+                    {
+                        factorOk = true;
+                    }
+                }
+                if (!factorOk) {
+                    callback(jsonError(k403Forbidden, "2FA factor required"));
+                    return;
+                }
 
-    // Either a current TOTP code or a recovery code is required so a
-    // hijacked session alone cannot rip 2FA back off.
-    auto db = drogon::app().getDbClient();
-    bool factorOk = false;
-    if (json->isMember("totp_code")) {
-        const std::string code = (*json)["totp_code"].asString();
-        auto r = db->execSqlSync(
-            "SELECT secret_b32 FROM user_totp_secrets WHERE user_id = $1 AND enabled = TRUE",
-            *userIdOpt);
-        if (!r.empty() &&
-            totp::verify(
-                security::unwrapTotpSecret(r[0]["secret_b32"].as<std::string>()),
-                code))
-        {
-            factorOk = true;
-        }
-    }
-    if (!factorOk) {
-        callback(jsonError(k403Forbidden, "2FA factor required"));
-        return;
-    }
+                // All factors disappear together or none do. Previously three
+                // independent DELETEs could strand a partially-disabled
+                // account, and an exception escaped the worker without ever
+                // answering the HTTP request.
+                db->execSqlSync(
+                    "WITH guard AS ("
+                    "  SELECT 1 / CASE WHEN $2::boolean THEN 0 ELSE 1 END AS ok"
+                    "), removed_totp AS ("
+                    "  DELETE FROM user_totp_secrets WHERE user_id = $1 "
+                    "  RETURNING user_id"
+                    "), removed_codes AS ("
+                    "  DELETE FROM user_recovery_codes WHERE user_id = $1 "
+                    "    AND (SELECT ok FROM guard) = 1 RETURNING user_id"
+                    "), removed_passkeys AS ("
+                    "  DELETE FROM user_webauthn_credentials WHERE user_id = $1 "
+                    "    AND (SELECT ok FROM guard) = 1 RETURNING user_id"
+                    ") SELECT (SELECT count(*) FROM removed_totp) AS totp, "
+                    "         (SELECT count(*) FROM removed_codes) AS codes, "
+                    "         (SELECT count(*) FROM removed_passkeys) AS passkeys",
+                    *userIdOpt,
+                    testDatabaseFailureRequested(req, "disable"));
 
-    db->execSqlSync("DELETE FROM user_totp_secrets        WHERE user_id = $1", *userIdOpt);
-    db->execSqlSync("DELETE FROM user_recovery_codes      WHERE user_id = $1", *userIdOpt);
-    db->execSqlSync("DELETE FROM user_webauthn_credentials WHERE user_id = $1", *userIdOpt);
+                audit_log::record(req, {"2fa.disable", userIdOpt,
+                                        std::nullopt, std::nullopt,
+                                        Json::objectValue});
 
-    audit_log::record(req, {"2fa.disable", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-
-    Json::Value ret;
-    ret["enabled"] = false;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+                Json::Value ret;
+                ret["enabled"] = false;
+                callback(HttpResponse::newHttpJsonResponse(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "2FA disable failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                    "Could not disable two-factor authentication"));
+            }
 
         });
 }
@@ -540,20 +670,32 @@ void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
     // loop.
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, json] {
+            try {
+                const std::string password = (*json)["password"].asString();
+                if (password.empty() ||
+                    !verifyCurrentPassword(*userIdOpt, password))
+                {
+                    callback(jsonError(k403Forbidden, "Password check failed"));
+                    return;
+                }
 
-    const std::string password = (*json)["password"].asString();
-    if (password.empty() || !verifyCurrentPassword(*userIdOpt, password)) {
-        callback(jsonError(k403Forbidden, "Password check failed"));
-        return;
-    }
-    auto codes = issueFreshRecoveryCodes(*userIdOpt);
-    audit_log::record(req, {"2fa.recovery.regenerate", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-    Json::Value ret;
-    Json::Value arr(Json::arrayValue);
-    for (auto& c : codes) arr.append(c);
-    ret["recovery_codes"] = arr;
-    callback(noStoreJson(ret));
+                auto batch = prepareRecoveryBatch();
+                replaceRecoveryCodes(
+                    drogon::app().getDbClient(), *userIdOpt, batch,
+                    testDatabaseFailureRequested(req, "recovery-codes"));
+                audit_log::record(req, {"2fa.recovery.regenerate", userIdOpt,
+                                        std::nullopt, std::nullopt,
+                                        Json::objectValue});
+                Json::Value ret;
+                Json::Value arr(Json::arrayValue);
+                for (const auto& c : batch.plaintext) arr.append(c);
+                ret["recovery_codes"] = arr;
+                callback(noStoreJson(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "recovery-code regeneration failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not regenerate recovery codes"));
+            }
 
         });
 }
@@ -722,14 +864,6 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
                 }
 
                 auto db = drogon::app().getDbClient();
-                db->execSqlSync(
-                    "INSERT INTO user_webauthn_credentials "
-                    "(user_id, credential_id, public_key, sign_count, nickname) "
-                    "VALUES ($1, $2, $3, $4, $5)",
-                    *userIdOpt, res->credential_id_b64u,
-                    toByteaLiteral(res->cose_public_key),
-                    static_cast<std::int64_t>(res->sign_count), nickname);
-
                 // Issue recovery codes the first time any factor is enrolled.
                 auto existingCodes = db->execSqlSync(
                     "SELECT count(*) AS n FROM user_recovery_codes "
@@ -737,7 +871,49 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
                     *userIdOpt)[0]["n"].as<int>();
                 std::vector<std::string> freshCodes;
                 if (existingCodes == 0) {
-                    freshCodes = issueFreshRecoveryCodes(*userIdOpt);
+                    auto batch = prepareRecoveryBatch();
+                    const auto inserted = db->execSqlSync(
+                        "WITH guard AS ("
+                        "  SELECT 1 / CASE WHEN $16::boolean "
+                        "                       THEN 0 ELSE 1 END AS ok"
+                        "), added AS ("
+                        "  INSERT INTO user_webauthn_credentials "
+                        "    (user_id, credential_id, public_key, "
+                        "     sign_count, nickname) "
+                        "  VALUES ($1, $2, $3, $4, $5) RETURNING user_id"
+                        "), codes AS ("
+                        "  INSERT INTO user_recovery_codes "
+                        "    (user_id, code_hash) "
+                        "  SELECT added.user_id, fresh.code_hash FROM added "
+                        "   CROSS JOIN (VALUES ($6), ($7), ($8), ($9), ($10), "
+                        "                      ($11), ($12), ($13), ($14), ($15)) "
+                        "              AS fresh(code_hash) "
+                        "   CROSS JOIN guard WHERE guard.ok = 1 RETURNING id"
+                        ") SELECT count(*) AS inserted FROM codes",
+                        *userIdOpt, res->credential_id_b64u,
+                        toByteaLiteral(res->cose_public_key),
+                        static_cast<std::int64_t>(res->sign_count), nickname,
+                        batch.hashes[0], batch.hashes[1], batch.hashes[2],
+                        batch.hashes[3], batch.hashes[4], batch.hashes[5],
+                        batch.hashes[6], batch.hashes[7], batch.hashes[8],
+                        batch.hashes[9],
+                        testDatabaseFailureRequested(req, "recovery-codes"));
+                    if (inserted.empty() ||
+                        inserted[0]["inserted"].as<int>() !=
+                            recovery_codes::kBatchSize)
+                    {
+                        throw std::runtime_error(
+                            "passkey recovery-code batch was incomplete");
+                    }
+                    freshCodes = std::move(batch.plaintext);
+                } else {
+                    db->execSqlSync(
+                        "INSERT INTO user_webauthn_credentials "
+                        "(user_id, credential_id, public_key, sign_count, nickname) "
+                        "VALUES ($1, $2, $3, $4, $5)",
+                        *userIdOpt, res->credential_id_b64u,
+                        toByteaLiteral(res->cose_public_key),
+                        static_cast<std::int64_t>(res->sign_count), nickname);
                 }
 
                 audit_log::record(req, {"2fa.webauthn.add", userIdOpt,
@@ -748,7 +924,7 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
                 ret["credential_id"] = res->credential_id_b64u;
                 if (!freshCodes.empty()) {
                     Json::Value arr(Json::arrayValue);
-                    for (auto& c : freshCodes) arr.append(c);
+                    for (const auto& c : freshCodes) arr.append(c);
                     ret["recovery_codes"] = arr;
                 }
                 callback(noStoreJson(ret));

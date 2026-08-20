@@ -64,6 +64,7 @@ Regression coverage lives beside the affected subsystem.
 | 23| **High** | **A stolen authenticated session could add an attacker's passkey or TOTP seed.** Factor enrolment and passkey removal trusted the session alone, turning a transient session theft into durable account access. Provisioning secrets and recovery codes were also returned without an explicit no-store policy. | TOTP setup, WebAuthn registration begin, and passkey removal now require the current password, verified off the IO loop. Setup creates a session-bound, one-shot authorization that expires after ten minutes and is required by TOTP confirmation / WebAuthn finish. Sensitive 2FA status, credential, provisioning, and recovery-code responses emit `Cache-Control: private, no-store`, `Pragma: no-cache`, and `Vary: Cookie`. Failed re-authentication is audited, and the enrolment/removal paths have per-account rate limits. Integration and browser regressions cover the flows. |
 | 24| **High** | **The Helm chart defaulted to two app replicas despite process-local sessions.** Requests load-balanced to a different pod lost authentication, and every pod startup globally retired the session-registry rows belonging to still-running peers. The optional HPA amplified both failures and multiplied every in-memory security rate-limit budget. | The chart now defaults to one replica and fails template rendering for `replicaCount != 1` or `autoscaling.enabled=true`. The dormant HPA manifest was removed, chart documentation no longer advertises horizontal application scaling, and CI asserts both unsafe configurations are rejected. Multi-pod support is blocked until sessions and rate limits have distributed stores. |
 | 25| **High** | **Session-registry writes failed open.** Login remained successful when inserting the new `sid` into `user_sessions` failed, creating an authenticated 14-day session invisible to device lists, password-reset revocation, bans, and “sign out everywhere.” | The registry row is now a prerequisite for publishing the `sid` into either a password-only or 2FA-completed session. Failure clears and rotates the session, returns `503` with `Retry-After`, and emits `login.session_registry_fail`; `login.ok` is emitted only after the durable row exists. Test-only fault injection proves both login paths fail closed and leave no active row or authenticated cookie. |
+| 26| **Med**  | **2FA factor changes were non-atomic.** Recovery-code rotation deleted the old batch and inserted ten replacements one by one; TOTP/passkey activation and “disable all” likewise used independent writes. A DB or Argon2 failure could leave no recovery codes, an enabled factor whose response said it failed, or only some factors removed. Exceptions in regeneration/disable escaped the worker without an HTTP response. | All ten hashes are prepared before mutation. TOTP activation + code issuance, first-passkey + code issuance, rotation, and deletion of every factor now each use one data-modifying PostgreSQL CTE, so the statement commits completely or rolls back completely. Every worker path catches failures and returns `500`. Test-only database faults prove old codes and all factors survive rollback, TOTP remains disabled after failed confirmation, retries succeed, and the final disable removes the full set. |
 
 ### Vectors verified clean
 
@@ -193,6 +194,12 @@ user has to wait — defeats brute force on the 6-digit code space.
 WHERE id = $1` on a row that already had `used_at IS NULL` filtered
 during selection serialises any concurrent attempts; two parallel
 requests with the same code cannot both succeed.
+
+**Factor-set changes are atomic.** Recovery-code hashes are all computed
+before any current code is deleted. Activation of a TOTP/passkey alongside
+first-code issuance, batch rotation, and removal of all factors each happen in
+one PostgreSQL statement. A failed write therefore leaves the previous usable
+factor set intact and returns a bounded error response rather than hanging.
 
 **Audit hooks** for 2FA events: `2fa.enroll.reauth.fail`,
 `2fa.remove.reauth.fail`, `2fa.totp.setup`, `2fa.totp.enable`,
