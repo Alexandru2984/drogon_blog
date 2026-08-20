@@ -166,6 +166,18 @@ smtp:
   existingSecretKey: "smtp_password"
 
 # ------------------------------------------------------------------
+# TOTP secret encryption
+# ------------------------------------------------------------------
+# Stable 32-byte key, encoded as exactly 64 hex characters. It encrypts TOTP
+# seeds stored in PostgreSQL. Prefer an externally-managed Secret in prod;
+# putting encryptionKey in a values file exposes it through `helm get values`.
+# Never rotate this value without first re-wrapping every existing seed.
+totp:
+  encryptionKey:    ""
+  existingSecret:   ""
+  existingSecretKey: "totp_key"
+
+# ------------------------------------------------------------------
 # Application config (BLOG_* env vars)
 # ------------------------------------------------------------------
 app:

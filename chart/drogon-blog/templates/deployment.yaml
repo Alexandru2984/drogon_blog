@@ -1,3 +1,12 @@
+{{- if and .Values.totp.encryptionKey .Values.totp.existingSecret -}}
+{{- fail "set only one of totp.encryptionKey or totp.existingSecret" -}}
+{{- end -}}
+{{- if and .Values.totp.encryptionKey (not (regexMatch "^[0-9A-Fa-f]{64}$" .Values.totp.encryptionKey)) -}}
+{{- fail "totp.encryptionKey must contain exactly 64 hexadecimal characters" -}}
+{{- end -}}
+{{- if and .Values.app.secureCookies (not (or .Values.totp.encryptionKey .Values.totp.existingSecret)) -}}
+{{- fail "totp.encryptionKey or totp.existingSecret is required when app.secureCookies=true" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -59,6 +68,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "drogon-blog.smtpSecretName" . }}
                   key:  {{ include "drogon-blog.smtpSecretKey"  . }}
+            {{- end }}
+            {{- if or .Values.totp.existingSecret .Values.totp.encryptionKey }}
+            - name: BLOG_TOTP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "drogon-blog.totpSecretName" . }}
+                  key:  {{ include "drogon-blog.totpSecretKey"  . }}
             {{- end }}
             {{- if .Values.app.metricsToken }}
             - name: METRICS_TOKEN

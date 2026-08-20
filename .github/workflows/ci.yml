@@ -323,12 +323,16 @@ jobs:
           kubeconform -v
 
       - name: helm lint
-        run: helm lint chart/drogon-blog
+        run: |
+          helm lint chart/drogon-blog \
+            --set database.password=ci-only-not-real \
+            --set-string totp.encryptionKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
       - name: Render & validate (defaults)
         run: |
           helm template ci chart/drogon-blog \
             --set database.password=ci-only-not-real \
+            --set-string totp.encryptionKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
             | kubeconform -summary -strict -ignore-missing-schemas \
                           -kubernetes-version 1.30.0
 
@@ -344,6 +348,7 @@ jobs:
         run: |
           helm template ci chart/drogon-blog \
             --set database.password=ci-only-not-real \
+            --set-string totp.encryptionKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
             --set ingress.enabled=true \
             --set autoscaling.enabled=true \
             --set app.metricsToken=ci-token \

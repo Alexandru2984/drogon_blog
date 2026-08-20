@@ -98,6 +98,27 @@ smtp_password
 {{- end -}}
 
 {{/*
+TOTP encryption-key secret picker. The key encrypts recoverable 2FA seeds at
+rest and therefore must be stable across upgrades; never auto-generate it in a
+template, because Helm would rotate it on every render and orphan old seeds.
+*/}}
+{{- define "drogon-blog.totpSecretName" -}}
+{{- if .Values.totp.existingSecret -}}
+{{- .Values.totp.existingSecret -}}
+{{- else -}}
+{{- printf "%s-totp" (include "drogon-blog.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "drogon-blog.totpSecretKey" -}}
+{{- if .Values.totp.existingSecret -}}
+{{- default "totp_key" .Values.totp.existingSecretKey -}}
+{{- else -}}
+totp_key
+{{- end -}}
+{{- end -}}
+
+{{/*
 Image reference: repository + tag (defaults to chart appVersion).
 */}}
 {{- define "drogon-blog.image" -}}

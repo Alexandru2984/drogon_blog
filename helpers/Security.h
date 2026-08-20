@@ -57,17 +57,19 @@ bool emailLooksValid(const std::string& e);
 //
 // Activation: set BLOG_TOTP_KEY to 64 hex chars (32 bytes). When the
 // var is set, wrap() emits `enc:v1:<base64(nonce || ciphertext)>`;
-// when unset, wrap() returns the input verbatim so dev / test
-// deployments don't need a key. unwrap() handles both forms
+// when unset, wrap() returns the input verbatim only for non-TLS dev / test
+// deployments. Production mode (BLOG_SECURE_COOKIES=1) requires a key.
+// unwrap() handles both forms
 // (round-trips encrypted values when the key is set, otherwise
 // expects plaintext) — which gives us a lazy migration: existing
 // rows continue to verify, new writes get encrypted, the operator
 // can rotate by re-issuing secrets on a future reroll.
 //
-// Throws std::runtime_error when the input claims to be encrypted
-// but the key is missing / the MAC doesn't verify — i.e. exactly
-// the cases where silently degrading to plaintext would be the
-// wrong default.
+// Throws std::runtime_error when the configured key is malformed, a
+// production deployment has no key, or encrypted input cannot be verified.
+// Call validateTotpKeyConfiguration() during startup so configuration errors
+// fail the process before it begins accepting traffic.
+void validateTotpKeyConfiguration();
 std::string wrapTotpSecret(const std::string& plaintext);
 std::string unwrapTotpSecret(const std::string& stored);
 

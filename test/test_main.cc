@@ -109,6 +109,7 @@ int main(int argc, char** argv)
         std::cerr << "libsodium init failed\n";
         return 1;
     }
+    security::validateTotpKeyConfiguration();
 
     // Disable per-IP rate limiting for the test suite — every test originates
     // from 127.0.0.1, so the production limits would trip mid-run.

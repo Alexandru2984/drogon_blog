@@ -157,6 +157,17 @@ int main()
         return 1;
     }
 
+    try
+    {
+        security::validateTotpKeyConfiguration();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Invalid security configuration: " << e.what()
+                  << std::endl;
+        return 1;
+    }
+
     if (!image::initLibrary())
     {
         std::cerr << "libvips init failed" << std::endl;

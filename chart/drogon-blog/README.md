@@ -98,6 +98,7 @@ helm install blog ./chart/drogon-blog \
   --set image.tag=v0.1.0 \
   --set database.host=postgres.db.svc.cluster.local \
   --set database.password=changeme-or-use-existingSecret \
+  --set-string totp.encryptionKey=$(openssl rand -hex 32) \
   --set app.siteOrigin=https://blog.example.com
 ```
 
@@ -106,8 +107,11 @@ with a Secret you manage:
 
 ```bash
 kubectl -n blog create secret generic blog-db --from-literal=password=…
+kubectl -n blog create secret generic blog-totp \
+  --from-literal=totp_key="$(openssl rand -hex 32)"
 helm upgrade --install blog ./chart/drogon-blog \
-  --set database.existingSecret=blog-db
+  --set database.existingSecret=blog-db \
+  --set totp.existingSecret=blog-totp
 ```
 
 ## Values reference
@@ -121,6 +125,8 @@ helm upgrade --install blog ./chart/drogon-blog \
 | `database.password` | `""` | required unless `database.existingSecret` is set |
 | `database.existingSecret` / `existingSecretKey` | `""` / `password` | bring-your-own Secret |
 | `smtp.*` | empty | empty `server` → emails logged and dropped |
+| `totp.encryptionKey` | `""` | 64-hex key; use only for dev/bootstrap because Helm values expose it |
+| `totp.existingSecret` / `existingSecretKey` | `""` / `totp_key` | stable externally-managed TOTP encryption key |
 | `app.siteOrigin` | `https://blog.example.com` | drives WebAuthn RP id, email links, CSRF |
 | `app.secureCookies` | `true` | sets `Secure` on JSESSIONID |
 | `app.metricsToken` | `""` | gates `/metrics` for non-loopback peers |
@@ -137,6 +143,8 @@ helm upgrade --install blog ./chart/drogon-blog \
 
 - `database.password` is `required` (helm fails with a clear message)
   unless `database.existingSecret` is set.
+- TLS-mode installs require either `totp.encryptionKey` or
+  `totp.existingSecret`; inline keys are shape-validated before rendering.
 - `metrics.serviceMonitor.enabled` is `fail`-validated against having
   *some* bearer token defined — a ServiceMonitor against a 403'd
   `/metrics` is a silent monitoring outage waiting to happen.

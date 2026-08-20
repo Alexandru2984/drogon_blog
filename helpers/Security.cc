@@ -539,15 +539,26 @@ std::string sha256Hex(const std::string& input)
 
 namespace {
 
-// Parse BLOG_TOTP_KEY as 64 hex chars. Returns std::nullopt when the
-// env is unset or malformed (caller then degrades to plaintext mode).
+// Parse BLOG_TOTP_KEY as 64 hex chars. An unset key is allowed only for
+// explicit non-TLS development; a configured-but-invalid key must never be
+// confused with an absent one, because that would silently write new TOTP
+// seeds in plaintext.
 std::optional<std::array<unsigned char, crypto_secretbox_KEYBYTES>>
 loadTotpKey()
 {
     const char* env = std::getenv("BLOG_TOTP_KEY");
-    if (!env || !*env) return std::nullopt;
+    if (!env || !*env) {
+        if (secureCookies()) {
+            throw std::runtime_error(
+                "BLOG_TOTP_KEY is required when BLOG_SECURE_COOKIES=1");
+        }
+        return std::nullopt;
+    }
     std::string_view s(env);
-    if (s.size() != crypto_secretbox_KEYBYTES * 2) return std::nullopt;
+    if (s.size() != crypto_secretbox_KEYBYTES * 2) {
+        throw std::runtime_error(
+            "BLOG_TOTP_KEY must be exactly 64 hexadecimal characters");
+    }
     std::array<unsigned char, crypto_secretbox_KEYBYTES> key{};
     auto hexVal = [](char c) -> int {
         if (c >= '0' && c <= '9') return c - '0';
@@ -558,7 +569,10 @@ loadTotpKey()
     for (std::size_t i = 0; i < crypto_secretbox_KEYBYTES; ++i) {
         const int hi = hexVal(s[2 * i]);
         const int lo = hexVal(s[2 * i + 1]);
-        if (hi < 0 || lo < 0) return std::nullopt;
+        if (hi < 0 || lo < 0) {
+            throw std::runtime_error(
+                "BLOG_TOTP_KEY must be exactly 64 hexadecimal characters");
+        }
         key[i] = static_cast<unsigned char>((hi << 4) | lo);
     }
     return key;
@@ -623,6 +637,14 @@ constexpr const char* kEncPrefix = "enc:v1:";
 
 } // namespace
 
+void validateTotpKeyConfiguration()
+{
+    // Parsing is the validation. Keeping this as a startup hook means a typo
+    // fails the deployment immediately instead of waiting until the first
+    // user enrols or verifies 2FA.
+    (void)loadTotpKey();
+}
+
 std::string wrapTotpSecret(const std::string& plaintext)
 {
     auto keyOpt = loadTotpKey();
@@ -653,11 +675,13 @@ std::string wrapTotpSecret(const std::string& plaintext)
 
 std::string unwrapTotpSecret(const std::string& stored)
 {
+    // Validate first even for legacy plaintext rows. Production must not keep
+    // accepting those merely because the operator omitted the encryption key.
+    auto keyOpt = loadTotpKey();
     if (stored.rfind(kEncPrefix, 0) != 0) {
         // Plaintext (legacy or running without a key) — pass through.
         return stored;
     }
-    auto keyOpt = loadTotpKey();
     if (!keyOpt) {
         throw std::runtime_error(
             "TOTP secret is encrypted but BLOG_TOTP_KEY is not set");
