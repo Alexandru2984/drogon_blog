@@ -79,11 +79,18 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 # exact service implementation that ships, instead of testing a SQL
 # look-alike.
 if (BLOG_GRPC_AVAILABLE)
+    set(TEST_GRPC_GENERATED_SOURCES
+        ${CMAKE_BINARY_DIR}/proto/blog.pb.cc
+        ${CMAKE_BINARY_DIR}/proto/blog.grpc.pb.cc)
+    # GENERATED was directory-scoped before CMake 3.20, so repeat the property
+    # here where the test target consumes the parent's custom-command outputs.
+    set_source_files_properties(${TEST_GRPC_GENERATED_SOURCES}
+        PROPERTIES GENERATED TRUE)
     target_sources(${PROJECT_NAME} PRIVATE
         test_grpc.cc
-        ${CMAKE_BINARY_DIR}/proto/blog.pb.cc
-        ${CMAKE_BINARY_DIR}/proto/blog.grpc.pb.cc
+        ${TEST_GRPC_GENERATED_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/grpc/BlogReaderService.cc)
+    add_dependencies(${PROJECT_NAME} blog_grpc_codegen)
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_BINARY_DIR}/proto
         ${GRPCPP_INCLUDE_DIRS}

@@ -79,14 +79,15 @@ jobs:
         if: failure()
         # A stack from the core turns a heisenbug into an ordinary bug. Runs
         # only on failure, so it costs nothing on the normal path.
+        shell: bash
         run: |
-          sudo apt-get install -y -qq gdb
           shopt -s nullglob
           cores=(/tmp/core.*)
           if [ ${#cores[@]} -eq 0 ]; then
             echo "No core file — the failure was not a crash."
             exit 0
           fi
+          sudo apt-get install -y -qq gdb
           for c in "${cores[@]}"; do
             echo "::group::backtrace from $c"
             gdb -batch -q \
@@ -274,6 +275,7 @@ jobs:
 
       - name: Restore
         # There must be exactly one dump in this isolated CI directory.
+        shell: bash
         run: |
           shopt -s nullglob
           dumps=(/tmp/dr/blog-*.dump)

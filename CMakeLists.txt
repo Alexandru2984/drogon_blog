@@ -141,6 +141,7 @@ if (BLOG_GRPC_AVAILABLE)
                 ${_proto_in}
         DEPENDS ${_proto_in}
         COMMENT "protoc + grpc_cpp_plugin -> blog.{pb,grpc.pb}.cc")
+    add_custom_target(blog_grpc_codegen DEPENDS ${_gen_files})
     aux_source_directory(controllers/grpc GRPC_SVC_SRC)
     list(APPEND BLOG_GRPC_SRC
         ${_proto_out}/blog.pb.cc
