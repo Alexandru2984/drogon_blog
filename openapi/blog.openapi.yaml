@@ -431,12 +431,22 @@ paths:
   /auth/2fa/totp/setup:
     post:
       tags: [2FA]
-      summary: Generate a fresh TOTP secret + QR
+      summary: Generate a fresh TOTP secret after password re-authentication
       description: |
         The secret is wrapped at rest via libsodium `crypto_secretbox`
-        (key from `BLOG_TOTP_KEY`). The response includes a
-        `otpauth://` URI for QR rendering; confirm with
-        `/auth/2fa/totp/confirm` to activate.
+        (key from `BLOG_TOTP_KEY`). The response includes an `otpauth://`
+        URI which the client can render as a QR code. Confirm within ten
+        minutes via `/auth/2fa/totp/confirm` to activate. Provisioning
+        material is returned with `Cache-Control: private, no-store`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password, maxLength: 256 }
       responses:
         '200':
           description: Provisioning material.
@@ -444,21 +454,23 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [secret, otpauth_url, qr_svg]
+                required: [secret, otpauth_url]
                 properties:
                   secret:       { type: string, description: Base32 TOTP secret (do not store client-side beyond the setup flow). }
                   otpauth_url:  { type: string, format: uri }
-                  qr_svg:       { type: string, description: Inline SVG for the QR code. }
-                  recovery_codes:
-                    type: array
-                    items: { type: string }
-                    description: One-time use codes shown only once at first 2FA activation.
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/2fa/totp/confirm:
     post:
       tags: [2FA]
       summary: Confirm and activate the pending TOTP secret
+      description: |
+        Requires the fresh, session-bound password authorization created by
+        `/auth/2fa/totp/setup`. The authorization expires after ten minutes
+        and is consumed after successful confirmation. Recovery codes are
+        returned once with `Cache-Control: private, no-store`.
       requestBody:
         required: true
         content:
@@ -473,15 +485,54 @@ paths:
           description: TOTP enrolled.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Message' }
+              schema:
+                type: object
+                required: [enabled, recovery_codes]
+                properties:
+                  enabled: { type: boolean, const: true }
+                  recovery_codes:
+                    type: array
+                    items: { type: string }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/2fa/disable:
     post:
       tags: [2FA]
-      summary: Remove TOTP and recovery codes
-      description: Requires the user's current password as a re-auth step.
+      summary: Remove every enrolled 2FA factor
+      description: |
+        Requires both the current password and a fresh TOTP code. Removes
+        TOTP, passkeys, and recovery codes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, totp_code]
+              properties:
+                password:  { type: string, format: password, maxLength: 256 }
+                totp_code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: 2FA disabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean, const: false }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /auth/2fa/recovery-codes/regenerate:
+    post:
+      tags: [2FA]
+      summary: Issue a fresh batch of one-time recovery codes
+      description: Requires the current password and invalidates the previous batch.
       requestBody:
         required: true
         content:
@@ -490,20 +541,7 @@ paths:
               type: object
               required: [password]
               properties:
-                password: { type: string, format: password }
-      responses:
-        '200':
-          description: 2FA disabled.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Message' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-
-  /auth/2fa/recovery-codes/regenerate:
-    post:
-      tags: [2FA]
-      summary: Issue a fresh batch of one-time recovery codes
-      description: Invalidates the previous batch atomically.
+                password: { type: string, format: password, maxLength: 256 }
       responses:
         '200':
           description: New codes.
@@ -516,7 +554,9 @@ paths:
                   recovery_codes:
                     type: array
                     items: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/2fa/webauthn/register/begin:
     post:
@@ -525,7 +565,17 @@ paths:
       description: |
         Returns the PublicKeyCredentialCreationOptions the browser
         passes to `navigator.credentials.create()`. The challenge is
-        bound to the session.
+        bound to the session and to a password re-authentication valid for
+        ten minutes. The response is not cacheable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password, maxLength: 256 }
       responses:
         '200':
           description: Creation options.
@@ -534,12 +584,17 @@ paths:
               schema:
                 type: object
                 description: PublicKeyCredentialCreationOptions per WebAuthn Level 2.
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/2fa/webauthn/register/finish:
     post:
       tags: [2FA]
       summary: Persist a new WebAuthn credential
+      description: |
+        Consumes the one-shot challenge and fresh password authorization
+        created by the begin endpoint. Ceremony fields are capped at 128 KiB.
       requestBody:
         required: true
         content:
@@ -547,16 +602,28 @@ paths:
             schema:
               type: object
               description: AuthenticatorAttestationResponse + optional nickname (≤128 chars).
+              required: [clientDataJSON, attestationObject]
               properties:
+                clientDataJSON:    { type: string, maxLength: 131072 }
+                attestationObject: { type: string, maxLength: 131072 }
                 nickname: { type: string, maxLength: 128 }
       responses:
         '200':
           description: Credential registered.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Message' }
+              schema:
+                type: object
+                required: [credential_id]
+                properties:
+                  credential_id: { type: string }
+                  recovery_codes:
+                    type: array
+                    items: { type: string }
+                    description: Present only when this is the account's first factor.
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/2fa/webauthn/list:
     get:
@@ -585,13 +652,28 @@ paths:
           name: credentialId
           required: true
           schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password, maxLength: 256 }
       responses:
         '200':
           description: Removed.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Message' }
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed: { type: boolean, const: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ---------------------------------------------------------------- 2FA login challenges

@@ -4,6 +4,7 @@
 #include <drogon/HttpResponse.h>
 #include <chrono>
 #include <string>
+#include <string_view>
 
 namespace security {
 
@@ -69,6 +70,7 @@ bool emailLooksValid(const std::string& e);
 // production deployment has no key, or encrypted input cannot be verified.
 // Call validateTotpKeyConfiguration() during startup so configuration errors
 // fail the process before it begins accepting traffic.
+bool validTotpKeyEncoding(std::string_view encoded);
 void validateTotpKeyConfiguration();
 std::string wrapTotpSecret(const std::string& plaintext);
 std::string unwrapTotpSecret(const std::string& stored);

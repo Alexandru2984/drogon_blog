@@ -31,7 +31,10 @@ export interface Passkey {
 export const twoFactorApi = {
   status() { return api.get<Status2fa>('/auth/2fa/status').then(r => r.data) },
 
-  totpSetup()         { return api.post<SetupTotpResponse>('/auth/2fa/totp/setup').then(r => r.data) },
+  totpSetup(password: string) {
+    return api.post<SetupTotpResponse>(
+      '/auth/2fa/totp/setup', { password }).then(r => r.data)
+  },
   totpConfirm(code: string) {
     return api.post<ConfirmTotpResponse>('/auth/2fa/totp/confirm', { code }).then(r => r.data)
   },
@@ -43,8 +46,9 @@ export const twoFactorApi = {
       '/auth/2fa/recovery-codes/regenerate', { password }).then(r => r.data)
   },
 
-  webauthnRegisterBegin() {
-    return api.post('/auth/2fa/webauthn/register/begin').then(r => r.data)
+  webauthnRegisterBegin(password: string) {
+    return api.post(
+      '/auth/2fa/webauthn/register/begin', { password }).then(r => r.data)
   },
   webauthnRegisterFinish(payload: {
     clientDataJSON:    string
@@ -56,8 +60,8 @@ export const twoFactorApi = {
   webauthnList() {
     return api.get<{ credentials: Passkey[] }>('/auth/2fa/webauthn/list').then(r => r.data)
   },
-  webauthnRemove(id: number) {
-    return api.post(`/auth/2fa/webauthn/remove/${id}`).then(r => r.data)
+  webauthnRemove(id: number, password: string) {
+    return api.post(`/auth/2fa/webauthn/remove/${id}`, { password }).then(r => r.data)
   },
 
   // ---- Two-step login completion ----
@@ -122,8 +126,10 @@ interface ServerAssertOptions {
   allowCredentials: ServerCredDescriptor[]
 }
 
-export async function webauthnRegister(nickname: string) {
-  const opts = (await twoFactorApi.webauthnRegisterBegin()) as ServerRegisterOptions
+export async function webauthnRegister(nickname: string, password: string) {
+  const opts = (
+    await twoFactorApi.webauthnRegisterBegin(password)
+  ) as ServerRegisterOptions
 
   const publicKey: PublicKeyCredentialCreationOptions = {
     challenge:        b64u.decode(opts.challenge),

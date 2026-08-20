@@ -5,38 +5,8 @@
 #include "../helpers/Totp.h"
 #include "../helpers/WebAuthn.h"
 
-#include <cstdlib>
-#include <stdexcept>
 #include <string>
 #include <vector>
-
-namespace {
-
-class ScopedTotpKey
-{
-  public:
-    ScopedTotpKey()
-    {
-        const char* value = std::getenv("BLOG_TOTP_KEY");
-        hadValue_ = value != nullptr;
-        if (hadValue_) value_ = value;
-    }
-
-    ~ScopedTotpKey()
-    {
-        if (hadValue_) setenv("BLOG_TOTP_KEY", value_.c_str(), 1);
-        else unsetenv("BLOG_TOTP_KEY");
-    }
-
-    ScopedTotpKey(const ScopedTotpKey&) = delete;
-    ScopedTotpKey& operator=(const ScopedTotpKey&) = delete;
-
-  private:
-    bool        hadValue_ = false;
-    std::string value_;
-};
-
-} // namespace
 
 // ============================================================================
 // TOTP — RFC 6238 Appendix B reference test vectors (HMAC-SHA1, 30s step,
@@ -121,31 +91,16 @@ DROGON_TEST(TotpVerifyAcceptsCurrentCodeAndRejectsOthers)
 
 DROGON_TEST(TotpEncryptionConfigurationFailsClosed)
 {
-    ScopedTotpKey restore;
+    CHECK(!security::validTotpKeyEncoding("configured-but-not-a-valid-key"));
+    CHECK(!security::validTotpKeyEncoding(
+        "0123456789abcdef0123456789abcdef"
+        "0123456789abcdef0123456789abcdeg"));
+    CHECK(security::validTotpKeyEncoding(
+        "0123456789abcdef0123456789abcdef"
+        "0123456789abcdef0123456789abcdef"));
 
-    setenv("BLOG_TOTP_KEY", "configured-but-not-a-valid-key", 1);
-    bool rejected = false;
-    try {
-        security::validateTotpKeyConfiguration();
-    } catch (const std::runtime_error&) {
-        rejected = true;
-    }
-    CHECK(rejected);
-
-    // A malformed configured value must also fail at the write boundary even
-    // if a future entry point forgets to call the startup validator.
-    rejected = false;
-    try {
-        (void)security::wrapTotpSecret("JBSWY3DPEHPK3PXP");
-    } catch (const std::runtime_error&) {
-        rejected = true;
-    }
-    CHECK(rejected);
-
-    setenv("BLOG_TOTP_KEY",
-           "0123456789abcdef0123456789abcdef"
-           "0123456789abcdef0123456789abcdef",
-           1);
+    // test_main installs this valid process-wide key before worker threads
+    // start; keeping it immutable makes parallel HTTP tests deterministic.
     security::validateTotpKeyConfiguration();
     const std::string secret = "JBSWY3DPEHPK3PXP";
     const auto wrapped = security::wrapTotpSecret(secret);

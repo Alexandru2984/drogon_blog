@@ -17,6 +17,8 @@
 #include <drogon/orm/Mapper.h>
 #include <trantor/utils/Logger.h>
 
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -26,6 +28,16 @@ using namespace drogon;
 using namespace drogon::orm;
 
 namespace {
+
+constexpr std::size_t  kMaxPasswordLen       = 256;
+constexpr std::int64_t kEnrollmentAuthTtlSec = 10 * 60;
+
+constexpr const char* kTotpSetupUidKey = "pending_totp_setup_uid";
+constexpr const char* kTotpSetupAtKey  = "pending_totp_setup_at";
+constexpr const char* kWebauthnRegisterUidKey =
+    "pending_webauthn_register_uid";
+constexpr const char* kWebauthnRegisterAtKey =
+    "pending_webauthn_register_at";
 
 drogon::HttpResponsePtr jsonError(drogon::HttpStatusCode code,
                                   const std::string&    message)
@@ -45,6 +57,60 @@ std::optional<int> currentUserId(const HttpRequestPtr& req)
 std::optional<int> pendingUserId(const HttpRequestPtr& req)
 {
     return req->session()->getOptional<int>("pending_user_id");
+}
+
+std::int64_t unixSeconds()
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void rememberEnrollmentAuthorization(const HttpRequestPtr& req,
+                                     int userId,
+                                     const char* userKey,
+                                     const char* timeKey)
+{
+    auto session = req->session();
+    session->insert(userKey, userId);
+    session->insert(timeKey, unixSeconds());
+}
+
+void clearEnrollmentAuthorization(const HttpRequestPtr& req,
+                                  const char* userKey,
+                                  const char* timeKey)
+{
+    auto session = req->session();
+    session->erase(userKey);
+    session->erase(timeKey);
+}
+
+bool hasEnrollmentAuthorization(const HttpRequestPtr& req,
+                                int userId,
+                                const char* userKey,
+                                const char* timeKey)
+{
+    auto session = req->session();
+    auto authorizedUser = session->getOptional<int>(userKey);
+    auto authorizedAt   = session->getOptional<std::int64_t>(timeKey);
+    if (!authorizedUser || !authorizedAt || *authorizedUser != userId) {
+        return false;
+    }
+    const auto now = unixSeconds();
+    return *authorizedAt <= now && now - *authorizedAt <= kEnrollmentAuthTtlSec;
+}
+
+bool validPasswordInput(const std::string& password)
+{
+    return !password.empty() && password.size() <= kMaxPasswordLen;
+}
+
+HttpResponsePtr noStoreJson(const Json::Value& body)
+{
+    auto resp = HttpResponse::newHttpJsonResponse(body);
+    resp->addHeader("Cache-Control", "private, no-store");
+    resp->addHeader("Pragma", "no-cache");
+    resp->addHeader("Vary", "Cookie");
+    return resp;
 }
 
 std::string envOr(const char* name, const char* fallback)
@@ -200,7 +266,7 @@ void AuthController::status2fa(const HttpRequestPtr& req,
     ret["totp_enabled"]       = totpEnabled;
     ret["passkeys_count"]     = passkeys;
     ret["recovery_codes_left"]= recoveryLeft;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    callback(noStoreJson(ret));
 }
 
 // =========================================================================
@@ -212,6 +278,14 @@ void AuthController::setupTotp(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string password = (*json)["password"].asString();
+    if (!validPasswordInput(password)) {
+        callback(jsonError(k400BadRequest, "Current password is required"));
+        return;
+    }
+
     // 3 burst, 3/10min: rotating the secret repeatedly is never legitimate.
     if (auto rl = security::rateLimitOr429(
             "totp_setup", "uid:" + std::to_string(*userIdOpt), 3.0, 3.0 / 600.0)) {
@@ -219,38 +293,63 @@ void AuthController::setupTotp(const HttpRequestPtr& req,
         return;
     }
 
-    auto db = drogon::app().getDbClient();
-    auto rows = db->execSqlSync(
-        "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
-    if (!rows.empty() && rows[0]["enabled"].as<bool>()) {
-        callback(jsonError(k409Conflict, "TOTP already enabled"));
-        return;
-    }
+    // Password verification is Argon2id and must not block an IO loop. More
+    // importantly, a session cookie by itself is not enough authority to add
+    // a new login factor to the account.
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, password] {
+            try {
+                if (!verifyCurrentPassword(*userIdOpt, password)) {
+                    audit_log::record(req, {"2fa.enroll.reauth.fail", userIdOpt,
+                                            std::nullopt, std::nullopt,
+                                            Json::objectValue});
+                    callback(jsonError(k403Forbidden,
+                                       "Current password is incorrect"));
+                    return;
+                }
 
-    // Fresh secret on every setup — re-running the flow rotates the seed
-    // so an abandoned half-enrolment can't be reactivated by a stranger.
-    // We store the secret wrapped: when BLOG_TOTP_KEY is set the value
-    // on disk is encrypted (libsodium secretbox); the column still holds
-    // a text string so legacy plaintext rows keep working. See
-    // helpers/Security.cc::wrapTotpSecret for the format.
-    const std::string secret = totp::generateSecret();
-    db->execSqlSync(
-        "INSERT INTO user_totp_secrets (user_id, secret_b32, enabled) "
-        "VALUES ($1, $2, FALSE) "
-        "ON CONFLICT (user_id) DO UPDATE "
-        "  SET secret_b32 = EXCLUDED.secret_b32, enabled = FALSE, confirmed_at = NULL",
-        *userIdOpt, security::wrapTotpSecret(secret));
+                auto db = drogon::app().getDbClient();
+                auto rows = db->execSqlSync(
+                    "SELECT enabled FROM user_totp_secrets WHERE user_id = $1",
+                    *userIdOpt);
+                if (!rows.empty() && rows[0]["enabled"].as<bool>()) {
+                    callback(jsonError(k409Conflict, "TOTP already enabled"));
+                    return;
+                }
 
-    const auto username =
-        db->execSqlSync("SELECT username FROM users WHERE id = $1", *userIdOpt)
-          [0]["username"].as<std::string>();
+                // Fresh secret on every setup — re-running the flow rotates
+                // the seed so an abandoned half-enrolment cannot be revived.
+                const std::string secret = totp::generateSecret();
+                db->execSqlSync(
+                    "INSERT INTO user_totp_secrets "
+                    "       (user_id, secret_b32, enabled) "
+                    "VALUES ($1, $2, FALSE) "
+                    "ON CONFLICT (user_id) DO UPDATE "
+                    "  SET secret_b32 = EXCLUDED.secret_b32, "
+                    "      enabled = FALSE, confirmed_at = NULL",
+                    *userIdOpt, security::wrapTotpSecret(secret));
 
-    Json::Value ret;
-    ret["secret"]       = secret;
-    ret["otpauth_url"]  = totp::otpAuthUrl(secret, username, rpName());
-    audit_log::record(req, {"2fa.totp.setup", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-    callback(HttpResponse::newHttpJsonResponse(ret));
+                const auto username = db->execSqlSync(
+                    "SELECT username FROM users WHERE id = $1", *userIdOpt)
+                    [0]["username"].as<std::string>();
+
+                rememberEnrollmentAuthorization(
+                    req, *userIdOpt, kTotpSetupUidKey, kTotpSetupAtKey);
+
+                Json::Value ret;
+                ret["secret"]      = secret;
+                ret["otpauth_url"] =
+                    totp::otpAuthUrl(secret, username, rpName());
+                audit_log::record(req, {"2fa.totp.setup", userIdOpt,
+                                        std::nullopt, std::nullopt,
+                                        Json::objectValue});
+                callback(noStoreJson(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "TOTP setup failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not start TOTP setup"));
+            }
+        });
 }
 
 // =========================================================================
@@ -263,6 +362,15 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
+    if (!hasEnrollmentAuthorization(
+            req, *userIdOpt, kTotpSetupUidKey, kTotpSetupAtKey))
+    {
+        clearEnrollmentAuthorization(req, kTotpSetupUidKey, kTotpSetupAtKey);
+        callback(jsonError(k403Forbidden,
+                           "Restart setup and confirm your password"));
+        return;
+    }
+
     // 5 burst, 5/min: caps brute-force of the 6-digit confirmation code.
     if (auto rl = security::rateLimitOr429(
             "totp_confirm", "uid:" + std::to_string(*userIdOpt), 5.0, 5.0 / 60.0)) {
@@ -273,6 +381,10 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
     const std::string code = (*json)["code"].asString();
+    if (code.size() != 6) {
+        callback(jsonError(k400BadRequest, "Invalid code format"));
+        return;
+    }
 
     // issueFreshRecoveryCodes() below Argon2id-hashes ten codes in a row —
     // about 1.7 s of solid CPU at the measured 167 ms each. On an IO loop
@@ -280,48 +392,58 @@ void AuthController::confirmTotp(const HttpRequestPtr& req,
     // the same loop gets nothing.
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt, code] {
+            try {
+                auto db = drogon::app().getDbClient();
+                auto rows = db->execSqlSync(
+                    "SELECT secret_b32, enabled FROM user_totp_secrets "
+                    "WHERE user_id = $1",
+                    *userIdOpt);
+                if (rows.empty()) {
+                    callback(jsonError(k400BadRequest,
+                                       "No pending TOTP setup"));
+                    return;
+                }
+                if (rows[0]["enabled"].as<bool>()) {
+                    callback(jsonError(k409Conflict, "TOTP already enabled"));
+                    return;
+                }
+                const auto secret = security::unwrapTotpSecret(
+                    rows[0]["secret_b32"].as<std::string>());
+                if (!totp::verify(secret, code)) {
+                    audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
+                                            std::nullopt, std::nullopt,
+                                            Json::objectValue});
+                    callback(jsonError(k400BadRequest, "Invalid code"));
+                    return;
+                }
 
-    auto db = drogon::app().getDbClient();
-    auto rows = db->execSqlSync(
-        "SELECT secret_b32, enabled FROM user_totp_secrets WHERE user_id = $1",
-        *userIdOpt);
-    if (rows.empty()) {
-        callback(jsonError(k400BadRequest, "No pending TOTP setup")); return;
-    }
-    if (rows[0]["enabled"].as<bool>()) {
-        callback(jsonError(k409Conflict, "TOTP already enabled")); return;
-    }
-    const auto secret =
-        security::unwrapTotpSecret(rows[0]["secret_b32"].as<std::string>());
-    if (!totp::verify(secret, code)) {
-        audit_log::record(req, {"2fa.totp.confirm.fail", userIdOpt,
-                                std::nullopt, std::nullopt, Json::objectValue});
-        callback(jsonError(k400BadRequest, "Invalid code")); return;
-    }
+                // Do not seed last_used_step here. Confirmation and the first
+                // login commonly share a 30-second window; replay protection
+                // belongs to the login path, where each step is claimed once.
+                db->execSqlSync(
+                    "UPDATE user_totp_secrets "
+                    "SET enabled = TRUE, confirmed_at = NOW() "
+                    "WHERE user_id = $1",
+                    *userIdOpt);
+                auto codes = issueFreshRecoveryCodes(*userIdOpt);
+                clearEnrollmentAuthorization(
+                    req, kTotpSetupUidKey, kTotpSetupAtKey);
 
-    // NB: we deliberately do NOT seed last_used_step here. Enrolment commonly
-    // happens seconds before the first login, often inside the same 30 s TOTP
-    // window, so the confirmation code and the first login code are the same
-    // value at the same step. Burning the step at confirm time would make that
-    // first legitimate login look like a replay and reject it. Replay
-    // protection is enforced only on the login path — that's where a captured
-    // login code would be reused — and last_used_step stays 0 until the first
-    // successful login verifies and claims a step.
-    db->execSqlSync(
-        "UPDATE user_totp_secrets SET enabled = TRUE, confirmed_at = NOW() "
-        "WHERE user_id = $1", *userIdOpt);
-    auto codes = issueFreshRecoveryCodes(*userIdOpt);
+                audit_log::record(req, {"2fa.totp.enable", userIdOpt,
+                                        std::nullopt, std::nullopt,
+                                        Json::objectValue});
 
-    audit_log::record(req, {"2fa.totp.enable", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-
-    Json::Value ret;
-    ret["enabled"] = true;
-    Json::Value arr(Json::arrayValue);
-    for (auto& c : codes) arr.append(c);
-    ret["recovery_codes"] = arr;
-    callback(HttpResponse::newHttpJsonResponse(ret));
-
+                Json::Value ret;
+                ret["enabled"] = true;
+                Json::Value arr(Json::arrayValue);
+                for (auto& c : codes) arr.append(c);
+                ret["recovery_codes"] = arr;
+                callback(noStoreJson(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "TOTP confirmation failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not confirm TOTP setup"));
+            }
         });
 }
 
@@ -414,7 +536,7 @@ void AuthController::regenerateRecoveryCodes(const HttpRequestPtr& req,
     Json::Value arr(Json::arrayValue);
     for (auto& c : codes) arr.append(c);
     ret["recovery_codes"] = arr;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    callback(noStoreJson(ret));
 
         });
 }
@@ -428,44 +550,89 @@ void AuthController::webauthnRegisterBegin(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
-    auto db = drogon::app().getDbClient();
-    auto rows = db->execSqlSync(
-        "SELECT username FROM users WHERE id = $1", *userIdOpt);
-    if (rows.empty()) { callback(jsonError(k404NotFound, "User not found")); return; }
-    const auto username = rows[0]["username"].as<std::string>();
-
-    const std::string challenge = webauthn::makeChallenge();
-    req->session()->insert("pending_webauthn_register_challenge", challenge);
-
-    Json::Value ret;
-    ret["challenge"]       = challenge;
-    ret["rp"]["id"]        = rpId();
-    ret["rp"]["name"]      = rpName();
-    ret["user"]["id"]      = webauthn::base64UrlEncode(
-        reinterpret_cast<const unsigned char*>(&*userIdOpt), sizeof(int));
-    ret["user"]["name"]    = username;
-    ret["user"]["displayName"] = username;
-    Json::Value algs(Json::arrayValue);
-    Json::Value a1; a1["type"] = "public-key"; a1["alg"] = -7; algs.append(a1);
-    Json::Value a2; a2["type"] = "public-key"; a2["alg"] = -8; algs.append(a2);
-    ret["pubKeyCredParams"] = algs;
-    ret["attestation"]      = "none";
-
-    // List existing credentials so the browser can refuse to enrol the
-    // same authenticator twice on this account.
-    auto existing = db->execSqlSync(
-        "SELECT credential_id FROM user_webauthn_credentials WHERE user_id = $1",
-        *userIdOpt);
-    Json::Value exclude(Json::arrayValue);
-    for (const auto& row : existing) {
-        Json::Value e;
-        e["type"] = "public-key";
-        e["id"]   = row["credential_id"].as<std::string>();
-        exclude.append(e);
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string password = (*json)["password"].asString();
+    if (!validPasswordInput(password)) {
+        callback(jsonError(k400BadRequest, "Current password is required"));
+        return;
     }
-    ret["excludeCredentials"] = exclude;
+    if (auto rl = security::rateLimitOr429(
+            "webauthn_enroll", "uid:" + std::to_string(*userIdOpt),
+            5.0, 5.0 / 600.0))
+    {
+        callback(rl);
+        return;
+    }
 
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, password] {
+            try {
+                if (!verifyCurrentPassword(*userIdOpt, password)) {
+                    audit_log::record(req, {"2fa.enroll.reauth.fail", userIdOpt,
+                                            std::nullopt, std::nullopt,
+                                            Json::objectValue});
+                    callback(jsonError(k403Forbidden,
+                                       "Current password is incorrect"));
+                    return;
+                }
+
+                auto db = drogon::app().getDbClient();
+                auto rows = db->execSqlSync(
+                    "SELECT username FROM users WHERE id = $1", *userIdOpt);
+                if (rows.empty()) {
+                    callback(jsonError(k404NotFound, "User not found"));
+                    return;
+                }
+                const auto username = rows[0]["username"].as<std::string>();
+                const std::string challenge = webauthn::makeChallenge();
+                req->session()->insert(
+                    "pending_webauthn_register_challenge", challenge);
+                rememberEnrollmentAuthorization(
+                    req, *userIdOpt,
+                    kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
+
+                Json::Value ret;
+                ret["challenge"]  = challenge;
+                ret["rp"]["id"]   = rpId();
+                ret["rp"]["name"] = rpName();
+                ret["user"]["id"] = webauthn::base64UrlEncode(
+                    reinterpret_cast<const unsigned char*>(&*userIdOpt),
+                    sizeof(int));
+                ret["user"]["name"]        = username;
+                ret["user"]["displayName"] = username;
+                Json::Value algs(Json::arrayValue);
+                Json::Value a1;
+                a1["type"] = "public-key";
+                a1["alg"]  = -7;
+                algs.append(a1);
+                Json::Value a2;
+                a2["type"] = "public-key";
+                a2["alg"]  = -8;
+                algs.append(a2);
+                ret["pubKeyCredParams"] = algs;
+                ret["attestation"]      = "none";
+
+                // Tell the browser not to enrol the same authenticator twice.
+                auto existing = db->execSqlSync(
+                    "SELECT credential_id "
+                    "FROM user_webauthn_credentials WHERE user_id = $1",
+                    *userIdOpt);
+                Json::Value exclude(Json::arrayValue);
+                for (const auto& row : existing) {
+                    Json::Value e;
+                    e["type"] = "public-key";
+                    e["id"]   = row["credential_id"].as<std::string>();
+                    exclude.append(e);
+                }
+                ret["excludeCredentials"] = exclude;
+                callback(noStoreJson(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "WebAuthn registration begin failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not start passkey registration"));
+            }
+        });
 }
 
 // =========================================================================
@@ -480,56 +647,100 @@ void AuthController::webauthnRegisterFinish(const HttpRequestPtr& req,
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
-    auto chalOpt = req->session()->getOptional<std::string>("pending_webauthn_register_challenge");
-    if (!chalOpt) { callback(jsonError(k400BadRequest, "No pending challenge")); return; }
-
-    const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
-    const std::string attestationObj = (*json)["attestationObject"].asString();
-    std::string nickname             = (*json).get("nickname", "").asString();
-    // The nickname is plain UI text — cap it so an authenticated client
-    // can't grow user_webauthn_credentials.nickname into a multi-megabyte
-    // DB-bloat surface by looping passkey enrolments with huge labels.
-    if (nickname.size() > 128) nickname.resize(128);
-
-    std::string err;
-    auto res = webauthn::finishRegistration(
-        clientDataJSON, attestationObj, *chalOpt, rpId(), siteOrigin(), err);
-    req->session()->erase("pending_webauthn_register_challenge");
-    if (!res) {
-        LOG_INFO << "webauthn register rejected: " << err;
-        callback(jsonError(k400BadRequest, "Registration failed: " + err));
+    auto session = req->session();
+    auto chalOpt = session->getOptional<std::string>(
+        "pending_webauthn_register_challenge");
+    if (!chalOpt || !hasEnrollmentAuthorization(
+            req, *userIdOpt,
+            kWebauthnRegisterUidKey, kWebauthnRegisterAtKey))
+    {
+        session->erase("pending_webauthn_register_challenge");
+        clearEnrollmentAuthorization(
+            req, kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
+        callback(jsonError(k403Forbidden,
+                           "Restart registration and confirm your password"));
         return;
     }
 
-    auto db = drogon::app().getDbClient();
-
-    // Issue recovery codes the first time the user enrols any 2FA factor.
-    auto existingCodes = db->execSqlSync(
-        "SELECT count(*) AS n FROM user_recovery_codes WHERE user_id = $1",
-        *userIdOpt)[0]["n"].as<int>();
-    std::vector<std::string> freshCodes;
-    if (existingCodes == 0) freshCodes = issueFreshRecoveryCodes(*userIdOpt);
-
-    db->execSqlSync(
-        "INSERT INTO user_webauthn_credentials "
-        "(user_id, credential_id, public_key, sign_count, nickname) "
-        "VALUES ($1, $2, $3, $4, $5)",
-        *userIdOpt, res->credential_id_b64u,
-        toByteaLiteral(res->cose_public_key),
-        static_cast<std::int64_t>(res->sign_count),
-        nickname);
-
-    audit_log::record(req, {"2fa.webauthn.add", userIdOpt,
-                            std::nullopt, std::nullopt, Json::objectValue});
-
-    Json::Value ret;
-    ret["credential_id"] = res->credential_id_b64u;
-    if (!freshCodes.empty()) {
-        Json::Value arr(Json::arrayValue);
-        for (auto& c : freshCodes) arr.append(c);
-        ret["recovery_codes"] = arr;
+    const std::string clientDataJSON = (*json)["clientDataJSON"].asString();
+    const std::string attestationObj = (*json)["attestationObject"].asString();
+    const std::string nickname = (*json).get("nickname", "").asString();
+    constexpr std::size_t kMaxCeremonyField = 128 * 1024;
+    if (clientDataJSON.empty() || attestationObj.empty() ||
+        clientDataJSON.size() > kMaxCeremonyField ||
+        attestationObj.size() > kMaxCeremonyField || nickname.size() > 128)
+    {
+        callback(jsonError(k400BadRequest, "Invalid registration payload"));
+        return;
     }
-    callback(HttpResponse::newHttpJsonResponse(ret));
+
+    if (auto rl = security::rateLimitOr429(
+            "webauthn_enroll_finish", "uid:" + std::to_string(*userIdOpt),
+            5.0, 5.0 / 60.0))
+    {
+        callback(rl);
+        return;
+    }
+
+    // Claim the challenge before expensive parsing/hashing. It is a one-shot
+    // authorization, including for authenticators whose sign counter is zero.
+    const std::string challenge = *chalOpt;
+    session->erase("pending_webauthn_register_challenge");
+    clearEnrollmentAuthorization(
+        req, kWebauthnRegisterUidKey, kWebauthnRegisterAtKey);
+
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, clientDataJSON, attestationObj,
+         nickname, challenge] {
+            try {
+                std::string err;
+                auto res = webauthn::finishRegistration(
+                    clientDataJSON, attestationObj, challenge,
+                    rpId(), siteOrigin(), err);
+                if (!res) {
+                    LOG_INFO << "webauthn register rejected: " << err;
+                    callback(jsonError(k400BadRequest,
+                                       "Registration failed"));
+                    return;
+                }
+
+                auto db = drogon::app().getDbClient();
+                db->execSqlSync(
+                    "INSERT INTO user_webauthn_credentials "
+                    "(user_id, credential_id, public_key, sign_count, nickname) "
+                    "VALUES ($1, $2, $3, $4, $5)",
+                    *userIdOpt, res->credential_id_b64u,
+                    toByteaLiteral(res->cose_public_key),
+                    static_cast<std::int64_t>(res->sign_count), nickname);
+
+                // Issue recovery codes the first time any factor is enrolled.
+                auto existingCodes = db->execSqlSync(
+                    "SELECT count(*) AS n FROM user_recovery_codes "
+                    "WHERE user_id = $1",
+                    *userIdOpt)[0]["n"].as<int>();
+                std::vector<std::string> freshCodes;
+                if (existingCodes == 0) {
+                    freshCodes = issueFreshRecoveryCodes(*userIdOpt);
+                }
+
+                audit_log::record(req, {"2fa.webauthn.add", userIdOpt,
+                                        std::nullopt, std::nullopt,
+                                        Json::objectValue});
+
+                Json::Value ret;
+                ret["credential_id"] = res->credential_id_b64u;
+                if (!freshCodes.empty()) {
+                    Json::Value arr(Json::arrayValue);
+                    for (auto& c : freshCodes) arr.append(c);
+                    ret["recovery_codes"] = arr;
+                }
+                callback(noStoreJson(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "WebAuthn registration finish failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not register passkey"));
+            }
+        });
 }
 
 // =========================================================================
@@ -560,7 +771,7 @@ void AuthController::webauthnList(const HttpRequestPtr& req,
     }
     Json::Value ret;
     ret["credentials"] = list;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    callback(noStoreJson(ret));
 }
 
 // =========================================================================
@@ -572,19 +783,56 @@ void AuthController::webauthnRemove(const HttpRequestPtr& req,
 {
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
-    auto db = drogon::app().getDbClient();
-    auto r = db->execSqlSync(
-        "DELETE FROM user_webauthn_credentials "
-        "WHERE id = $1 AND user_id = $2 RETURNING id",
-        credentialId, *userIdOpt);
-    if (r.empty()) { callback(jsonError(k404NotFound, "Passkey not found")); return; }
 
-    audit_log::record(req, {"2fa.webauthn.remove", userIdOpt,
-                            std::string{"webauthn_credential"}, credentialId,
-                            Json::objectValue});
-    Json::Value ret;
-    ret["removed"] = true;
-    callback(HttpResponse::newHttpJsonResponse(ret));
+    auto json = req->getJsonObject();
+    if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
+    const std::string password = (*json)["password"].asString();
+    if (!validPasswordInput(password)) {
+        callback(jsonError(k400BadRequest, "Current password is required"));
+        return;
+    }
+    if (auto rl = security::rateLimitOr429(
+            "webauthn_remove", "uid:" + std::to_string(*userIdOpt),
+            5.0, 5.0 / 600.0))
+    {
+        callback(rl);
+        return;
+    }
+
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt, password, credentialId] {
+            try {
+                if (!verifyCurrentPassword(*userIdOpt, password)) {
+                    audit_log::record(req, {"2fa.remove.reauth.fail", userIdOpt,
+                                            std::string{"webauthn_credential"},
+                                            credentialId, Json::objectValue});
+                    callback(jsonError(k403Forbidden,
+                                       "Current password is incorrect"));
+                    return;
+                }
+
+                auto db = drogon::app().getDbClient();
+                auto r = db->execSqlSync(
+                    "DELETE FROM user_webauthn_credentials "
+                    "WHERE id = $1 AND user_id = $2 RETURNING id",
+                    credentialId, *userIdOpt);
+                if (r.empty()) {
+                    callback(jsonError(k404NotFound, "Passkey not found"));
+                    return;
+                }
+
+                audit_log::record(req, {"2fa.webauthn.remove", userIdOpt,
+                                        std::string{"webauthn_credential"},
+                                        credentialId, Json::objectValue});
+                Json::Value ret;
+                ret["removed"] = true;
+                callback(HttpResponse::newHttpJsonResponse(ret));
+            } catch (const std::exception& e) {
+                LOG_ERROR << "WebAuthn removal failed: " << e.what();
+                callback(jsonError(k500InternalServerError,
+                                   "Could not remove passkey"));
+            }
+        });
 }
 
 // =========================================================================

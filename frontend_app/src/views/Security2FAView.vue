@@ -17,6 +17,7 @@ const setupCode   = ref('')
 const newCodes    = ref<string[]>([])
 const acceptCodes = ref(false)
 const passkeyNick = ref('')
+const managementPw = ref('')
 const disablePw   = ref('')
 const disableCode = ref('')
 const regenPw     = ref('')
@@ -147,8 +148,13 @@ function formatWhen(ts: string): string {
 
 async function startTotp() {
   error.value = ''
+  if (!managementPw.value) {
+    error.value = 'Confirm your current password first'
+    return
+  }
   try {
-    const r = await twoFactorApi.totpSetup()
+    const r = await twoFactorApi.totpSetup(managementPw.value)
+    managementPw.value = ''
     setupSecret.value = r.secret
     setupUrl.value    = r.otpauth_url
     setupQrSrc.value  = await QRCode.toDataURL(r.otpauth_url, { margin: 1, width: 220 })
@@ -172,9 +178,16 @@ async function confirmTotp() {
 
 async function addPasskey() {
   error.value = ''; loading.value = true
+  if (!managementPw.value) {
+    error.value = 'Confirm your current password first'
+    loading.value = false
+    return
+  }
   try {
-    const r = await webauthnRegister(passkeyNick.value || 'Passkey')
+    const r = await webauthnRegister(
+      passkeyNick.value || 'Passkey', managementPw.value)
     passkeyNick.value = ''
+    managementPw.value = ''
     if (Array.isArray(r.recovery_codes) && r.recovery_codes.length) {
       newCodes.value = r.recovery_codes
     }
@@ -186,9 +199,14 @@ async function addPasskey() {
 }
 
 async function removePasskey(id: number) {
+  if (!managementPw.value) {
+    toasts.push('Confirm your current password first', 'error')
+    return
+  }
   if (!confirm('Remove this passkey? You will need another method to sign in.')) return
   try {
-    await twoFactorApi.webauthnRemove(id)
+    await twoFactorApi.webauthnRemove(id, managementPw.value)
+    managementPw.value = ''
     await refresh()
   } catch (e: any) {
     toasts.push(e?.response?.data?.error ?? 'Could not remove passkey', 'error')
@@ -306,6 +324,17 @@ function copyCodes() {
       account. With it, they additionally need a code from your phone or a hardware key.
     </p>
 
+    <div class="card stack-card identity-check">
+      <h3>Confirm your identity</h3>
+      <p class="muted">
+        Enter your current password before adding or removing a sign-in factor.
+        It is used only for the next action and is never persisted.
+      </p>
+      <label for="factor-management-pw">Current password for 2FA changes</label>
+      <input id="factor-management-pw" v-model="managementPw" type="password"
+             autocomplete="current-password" maxlength="256" />
+    </div>
+
     <div v-if="status" class="card stack-card">
       <h3>Status</h3>
       <ul>
@@ -342,7 +371,9 @@ function copyCodes() {
     <div v-if="status && !status.totp_enabled" class="card stack-card">
       <h3>Set up authenticator app</h3>
       <p class="muted">Works with Google Authenticator, 1Password, Authy, Bitwarden, …</p>
-      <button v-if="!setupSecret" @click="startTotp">Begin setup</button>
+      <button v-if="!setupSecret" :disabled="!managementPw" @click="startTotp">
+        Begin setup
+      </button>
       <div v-if="setupSecret">
         <p>Scan with your authenticator app, or enter the secret manually:</p>
         <img v-if="setupQrSrc" :src="setupQrSrc" alt="QR code for enrolling this account in an authenticator app"
@@ -372,7 +403,7 @@ function copyCodes() {
           <label for="passkey-nick">Nickname (optional)</label>
           <input id="passkey-nick" v-model="passkeyNick" placeholder="MacBook Touch ID" />
         </div>
-        <button :disabled="loading">Add passkey</button>
+        <button :disabled="loading || !managementPw">Add passkey</button>
       </form>
       <ul v-if="passkeys.length" class="session-list" style="margin-top: var(--sp-4);">
         <li v-for="p in passkeys" :key="p.id" class="session-row">
@@ -380,7 +411,8 @@ function copyCodes() {
             <strong>{{ p.nickname || 'Unnamed passkey' }}</strong>
             <div class="muted">added {{ new Date(p.created_at).toLocaleDateString() }}</div>
           </div>
-          <button @click="removePasskey(p.id)" class="ghost sm danger-text">Remove</button>
+          <button :disabled="!managementPw" @click="removePasskey(p.id)"
+                  class="ghost sm danger-text">Remove</button>
         </li>
       </ul>
     </div>

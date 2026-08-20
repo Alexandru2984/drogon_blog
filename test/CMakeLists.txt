@@ -11,6 +11,7 @@ set(TEST_SOURCES
     test_image_pipeline.cc
     test_markdown.cc
     test_2fa.cc
+    test_2fa_management.cc
     test_caching.cc
     test_workers.cc
     test_sessions.cc

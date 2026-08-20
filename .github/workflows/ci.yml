@@ -392,6 +392,8 @@ jobs:
               environment:
                 BLOG_DISABLE_RATE_LIMIT: "1"
                 BLOG_SITE_ORIGIN:        "http://localhost:8092"
+                BLOG_SECURE_COOKIES:     "0"
+                BLOG_TOTP_KEY:           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             db:
               ports:
                 - "55432:5432"
@@ -457,6 +459,8 @@ jobs:
               environment:
                 BLOG_DISABLE_RATE_LIMIT: "1"
                 BLOG_SITE_ORIGIN:        "http://127.0.0.1:8092"
+                BLOG_SECURE_COOKIES:     "0"
+                BLOG_TOTP_KEY:           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           EOF
           DB_PASSWORD=perf_db_password \
             docker compose -f docker-compose.yml -f docker-compose.perf.yml \

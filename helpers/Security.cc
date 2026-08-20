@@ -537,6 +537,18 @@ std::string sha256Hex(const std::string& input)
 
 // ---- Encryption-at-rest for opaque secrets (TOTP shared keys) ----
 
+bool validTotpKeyEncoding(std::string_view encoded)
+{
+    if (encoded.size() != crypto_secretbox_KEYBYTES * 2) return false;
+    for (const char c : encoded) {
+        const bool decimal = c >= '0' && c <= '9';
+        const bool lower   = c >= 'a' && c <= 'f';
+        const bool upper   = c >= 'A' && c <= 'F';
+        if (!decimal && !lower && !upper) return false;
+    }
+    return true;
+}
+
 namespace {
 
 // Parse BLOG_TOTP_KEY as 64 hex chars. An unset key is allowed only for
@@ -555,7 +567,7 @@ loadTotpKey()
         return std::nullopt;
     }
     std::string_view s(env);
-    if (s.size() != crypto_secretbox_KEYBYTES * 2) {
+    if (!validTotpKeyEncoding(s)) {
         throw std::runtime_error(
             "BLOG_TOTP_KEY must be exactly 64 hexadecimal characters");
     }
@@ -569,10 +581,6 @@ loadTotpKey()
     for (std::size_t i = 0; i < crypto_secretbox_KEYBYTES; ++i) {
         const int hi = hexVal(s[2 * i]);
         const int lo = hexVal(s[2 * i + 1]);
-        if (hi < 0 || lo < 0) {
-            throw std::runtime_error(
-                "BLOG_TOTP_KEY must be exactly 64 hexadecimal characters");
-        }
         key[i] = static_cast<unsigned char>((hi << 4) | lo);
     }
     return key;

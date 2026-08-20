@@ -109,6 +109,14 @@ int main(int argc, char** argv)
         std::cerr << "libsodium init failed\n";
         return 1;
     }
+
+    // Install one immutable process-wide key before Drogon starts its worker
+    // threads. Individual tests must not mutate the environment concurrently
+    // while HTTP handlers are encrypting or decrypting TOTP secrets.
+    setenv("BLOG_TOTP_KEY",
+           "0123456789abcdef0123456789abcdef"
+           "0123456789abcdef0123456789abcdef",
+           0);
     security::validateTotpKeyConfiguration();
 
     // Disable per-IP rate limiting for the test suite — every test originates

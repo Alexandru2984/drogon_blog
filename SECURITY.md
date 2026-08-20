@@ -61,6 +61,7 @@ Regression coverage lives beside the affected subsystem.
 | 20| **Med**  | **Nothing stopped a password that was already public, and the per-account login limit did not survive a restart.** The only password rule was a length floor, so `password123` and a user's own username were both accepted. Separately, the per-account bucket that catches credential stuffing from rotating IPs lived in process memory — and this application deploys often enough that waiting for a restart was a practical way to reset it. | `helpers/PasswordPolicy` follows NIST SP 800-63B: length is the control, composition rules are deliberately *not* imposed (they push people to predictable mutations — `Password1!` clears every checkbox and sits in every dictionary), and the checks that matter are a blocklist of the passwords that dominate leaked corpora, a context check against the account's own username / email, and an optional Have I Been Pwned lookup. HIBP uses k-anonymity: only the first five hex characters of the SHA-1 leave the process, and it fails open so a third-party outage cannot stop signups. Enforced on register, reset and change. `helpers/LoginThrottle` (migration 0011) persists the consecutive-failure count on `users`; crossing the threshold pauses sign-ins for a **capped** 15 minutes and emails the owner — the cap and the notification are what keep account-scoped throttling from becoming a quiet way to lock a victim out. Tests in `test/test_password_policy.cc`; verified live, including a real HIBP rejection. |
 | 21| **Med**  | **No privilege model and no way to deal with abuse.** Every account was equal: there was no moderator role, no way to take down abusive content short of editing the database by hand, and no way for a reader to report anything at all. For a public site accepting user-submitted posts, comments and direct messages, that is a gap that eventually closes itself the unpleasant way. | Migration 0012 adds `users.role` (constrained to `user`/`moderator`/`admin`), reversible hide columns on posts and comments, ban columns, and a `reports` table with a partial unique index that stops one reporter flooding the queue with the same complaint. `helpers/Roles` is the single gate: privileged routes answer **404, not 403**, to an authenticated caller without the role, so the moderation surface is not discoverable by probing. Hidden content is filtered from *every* read path — feed, single post, search, profile listing, comments, Atom feed, share preview and the gRPC reader — because a predicate missing from any one of them makes hiding cosmetic. Bans are enforced by a central pre-routing advice rather than per-handler, since fifteen mutating endpoints exist today and a new one would otherwise be silently exempt; the check reads an in-memory set kept current by a `user_ban_changed` event on `blog_event`, so it costs no query. Banning also revokes the account's sessions, and staff accounts cannot be banned through the endpoint — otherwise one compromised moderator could lock out every other moderator and the admins. Roles are granted out of band via `scripts/grant-role.sh`; there is no escalation endpoint. Tests in `test/test_moderation.cc`. |
 | 22| **High** | **A malformed TOTP encryption key silently downgraded new 2FA seeds to plaintext.** The parser returned the same `nullopt` for “unset” and “invalid,” so one typo in `BLOG_TOTP_KEY` disabled encryption without stopping startup. The Helm chart did not expose the key at all. | Invalid keys now throw at the parser and write boundary; startup validates before accepting traffic, and TLS/production mode refuses a missing key. The chart accepts an external Secret (preferred), validates inline key shape, injects `BLOG_TOTP_KEY`, and refuses a TLS render without it. Encryption round-trip and invalid-key regressions live in `test/test_2fa.cc`. |
+| 23| **High** | **A stolen authenticated session could add an attacker's passkey or TOTP seed.** Factor enrolment and passkey removal trusted the session alone, turning a transient session theft into durable account access. Provisioning secrets and recovery codes were also returned without an explicit no-store policy. | TOTP setup, WebAuthn registration begin, and passkey removal now require the current password, verified off the IO loop. Setup creates a session-bound, one-shot authorization that expires after ten minutes and is required by TOTP confirmation / WebAuthn finish. Sensitive 2FA status, credential, provisioning, and recovery-code responses emit `Cache-Control: private, no-store`, `Pragma: no-cache`, and `Vary: Cookie`. Failed re-authentication is audited, and the enrolment/removal paths have per-account rate limits. Integration and browser regressions cover the flows. |
 
 ### Vectors verified clean
 
@@ -174,6 +175,13 @@ by the password step), so an off-origin attacker cannot bootstrap one.
 current password and a fresh TOTP code so a hijacked session by itself
 cannot turn 2FA off.
 
+**Factor management requires a step-up.** Starting TOTP or passkey
+enrolment and removing a passkey requires the current password. TOTP
+confirmation and WebAuthn registration finish additionally require the
+same session's one-shot enrolment authorization, which expires after ten
+minutes. A session cookie alone therefore cannot plant a durable attacker
+factor. Provisioning material and recovery codes are explicitly non-cacheable.
+
 **Per-account rate limit on verify endpoints.** Each `/auth/login/verify-*`
 takes a 5-burst / 5-per-minute bucket keyed on the pending user ID,
 independent of the per-IP bucket on `/auth/login`. After 5 fails the
@@ -184,7 +192,8 @@ WHERE id = $1` on a row that already had `used_at IS NULL` filtered
 during selection serialises any concurrent attempts; two parallel
 requests with the same code cannot both succeed.
 
-**Audit hooks** for 2FA events: `2fa.totp.setup`, `2fa.totp.enable`,
+**Audit hooks** for 2FA events: `2fa.enroll.reauth.fail`,
+`2fa.remove.reauth.fail`, `2fa.totp.setup`, `2fa.totp.enable`,
 `2fa.totp.confirm.fail`, `2fa.disable`, `2fa.recovery.regenerate`,
 `2fa.webauthn.add`, `2fa.webauthn.remove`, `2fa.verify.totp.fail`,
 `2fa.verify.recovery.used`, `2fa.verify.recovery.fail`,

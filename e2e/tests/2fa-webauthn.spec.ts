@@ -20,6 +20,7 @@ test('add a passkey, then sign in with it', async ({ page }) => {
   await attachVirtualAuthenticator(page)
 
   await page.goto('/#/account/security')
+  await page.getByLabel(/current password for 2fa changes/i).fill(user.password)
   await page.getByPlaceholder(/macbook touch id/i).fill('Virtual Test Key')
   await page.getByRole('button', { name: /add passkey/i }).click()
 
@@ -46,10 +47,11 @@ test('add a passkey, then sign in with it', async ({ page }) => {
 })
 
 test('the security page lists registered passkeys after a fresh reload', async ({ page }) => {
-  await registerAndLogin(page)
+  const user = await registerAndLogin(page)
   await attachVirtualAuthenticator(page)
 
   await page.goto('/#/account/security')
+  await page.getByLabel(/current password for 2fa changes/i).fill(user.password)
   await page.getByPlaceholder(/macbook touch id/i).fill('Key A')
   await page.getByRole('button', { name: /add passkey/i }).click()
   await expect(page.locator('ul li').filter({ hasText: 'Key A' })).toBeVisible()

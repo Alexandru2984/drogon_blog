@@ -11,7 +11,7 @@ test('enroll TOTP, then log in via the TOTP challenge', async ({ page }) => {
   const user = await registerAndLogin(page)
 
   // Enrol — produces a shared secret + a batch of recovery codes.
-  const { secret } = await enrollTotp(page)
+  const { secret } = await enrollTotp(page, user.password)
 
   // Status panel should now reflect "enabled".
   await expect(page.locator('.card').filter({ hasText: 'Status' }))
@@ -30,7 +30,7 @@ test('enroll TOTP, then log in via the TOTP challenge', async ({ page }) => {
 
 test('a stale TOTP code is rejected', async ({ page }) => {
   const user = await registerAndLogin(page)
-  await enrollTotp(page)
+  await enrollTotp(page, user.password)
   await logout(page)
   await startLoginExpecting2fa(page, user)
 
@@ -46,7 +46,7 @@ test('a stale TOTP code is rejected', async ({ page }) => {
 
 test('log in with a recovery code instead of TOTP', async ({ page }) => {
   const user = await registerAndLogin(page)
-  const { recoveryCodes } = await enrollTotp(page)
+  const { recoveryCodes } = await enrollTotp(page, user.password)
   expect(recoveryCodes.length).toBeGreaterThan(1)
 
   await logout(page)
@@ -62,7 +62,7 @@ test('log in with a recovery code instead of TOTP', async ({ page }) => {
 
 test('the same recovery code cannot be used twice', async ({ page }) => {
   const user = await registerAndLogin(page)
-  const { recoveryCodes } = await enrollTotp(page)
+  const { recoveryCodes } = await enrollTotp(page, user.password)
   const oneShotCode = recoveryCodes[0]
 
   // First use — succeeds.

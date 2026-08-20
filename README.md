@@ -197,14 +197,14 @@ drogon_blog/
 | POST   | `/auth/login/verify-webauthn/begin` | pending  | Returns challenge + allow-credentials list                                       |
 | POST   | `/auth/login/verify-webauthn/finish`| pending  | Verifies the assertion; completes the session                                    |
 | GET    | `/auth/2fa/status`                  | ✓        | What's enrolled (TOTP / passkeys / recovery codes remaining)                     |
-| POST   | `/auth/2fa/totp/setup`              | ✓        | Returns `{ secret, otpauth_url }` for QR rendering                               |
-| POST   | `/auth/2fa/totp/confirm`            | ✓        | Body `{ code }`; on success returns 10 recovery codes (one-time view)            |
+| POST   | `/auth/2fa/totp/setup`              | ✓        | Body `{ password }`; returns `{ secret, otpauth_url }` for QR rendering           |
+| POST   | `/auth/2fa/totp/confirm`            | ✓        | Body `{ code }`; requires setup within 10 min; returns 10 one-time recovery codes |
 | POST   | `/auth/2fa/disable`                 | ✓        | Body `{ password, totp_code }`; wipes TOTP + passkeys + recovery codes           |
 | POST   | `/auth/2fa/recovery-codes/regenerate`| ✓       | Body `{ password }`; invalidates the previous batch                              |
-| POST   | `/auth/2fa/webauthn/register/begin` | ✓        | Challenge for `navigator.credentials.create`                                     |
-| POST   | `/auth/2fa/webauthn/register/finish`| ✓        | Verifies attestation, stores the credential                                      |
+| POST   | `/auth/2fa/webauthn/register/begin` | ✓        | Body `{ password }`; challenge for `navigator.credentials.create`                 |
+| POST   | `/auth/2fa/webauthn/register/finish`| ✓        | Consumes the 10-minute re-auth and challenge, then stores the credential          |
 | GET    | `/auth/2fa/webauthn/list`           | ✓        | The user's passkeys                                                              |
-| POST   | `/auth/2fa/webauthn/remove/{id}`    | ✓        | Delete one passkey                                                               |
+| POST   | `/auth/2fa/webauthn/remove/{id}`    | ✓        | Body `{ password }`; delete one passkey                                           |
 
 ### Posts — `/posts`
 

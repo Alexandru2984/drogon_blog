@@ -137,11 +137,12 @@ export async function openAccountMenu(page: Page): Promise<'desktop' | 'drawer'>
 // signed-in user. Returns the shared secret (so the test can compute
 // matching codes for subsequent challenges) plus the one-time recovery
 // codes shown immediately after enrolment.
-export async function enrollTotp(page: Page): Promise<{
+export async function enrollTotp(page: Page, password: string): Promise<{
   secret: string
   recoveryCodes: string[]
 }> {
   await page.goto('/#/account/security')
+  await page.getByLabel(/current password for 2fa changes/i).fill(password)
   await page.getByRole('button', { name: /begin setup/i }).click()
 
   // The secret sits in .totp-secret. It used to be an inline <code>, but a
