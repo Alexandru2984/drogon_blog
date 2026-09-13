@@ -19,6 +19,12 @@
 
 set -euo pipefail
 
+# comm/sort below assume byte-order sorting; under a locale with different
+# collation (e.g. one that sorts '-' and '_' differently from plain byte
+# order), `comm` rejects the input as "not in sorted order" even though
+# every sort call succeeded on its own terms.
+export LC_ALL=C
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 assets="${root}/public/assets"
 index="${root}/public/index.html"
