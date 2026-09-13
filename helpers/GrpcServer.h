@@ -7,7 +7,15 @@
 //                          50051). When unset, install() is a no-op
 //                          and the binary runs HTTP-only as before.
 //
-// Listens on 0.0.0.0:<port>, plaintext (no TLS). Production should
+// Binds to BLOG_GRPC_ADDR, falling back to BLOG_LISTEN_ADDR, falling
+// back to 127.0.0.1 — i.e. it defaults to whatever interface the HTTP
+// listener uses, not to every interface. This surface has no
+// authentication (see docs/adr/0009-readonly-grpc.md), so exposing it
+// beyond loopback needs an explicit BLOG_GRPC_ADDR and a network layer
+// (VPN, mTLS sidecar, firewalled service-to-service link) in front of
+// it — ufw alone is not that layer.
+//
+// Plaintext (no TLS) regardless of bind address. Production should
 // front this with a sidecar / envoy / nginx-stream proxy if TLS is
 // required; baking TLS into this server would duplicate the cert
 // rotation logic that already lives in nginx upstream.

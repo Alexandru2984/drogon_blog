@@ -71,7 +71,13 @@ bool install()
         LOG_ERROR << "grpc: out-of-range BLOG_GRPC_PORT=" << port;
         return false;
     }
-    const std::string bindAddr = "0.0.0.0:" + std::to_string(port);
+    // Bind gRPC where the HTTP listener already binds. BLOG_LISTEN_ADDR is
+    // 127.0.0.1 in production; hardcoding 0.0.0.0 here left the gRPC port
+    // reachable on every interface with only ufw in front of it.
+    const char* addrEnv = std::getenv("BLOG_GRPC_ADDR");
+    if (addrEnv == nullptr || *addrEnv == '\0') addrEnv = std::getenv("BLOG_LISTEN_ADDR");
+    if (addrEnv == nullptr || *addrEnv == '\0') addrEnv = "127.0.0.1";
+    const std::string bindAddr = std::string(addrEnv) + ":" + std::to_string(port);
     g_running.store(true, std::memory_order_release);
     g_thread = std::thread([bindAddr] { serve(bindAddr); });
     return true;
