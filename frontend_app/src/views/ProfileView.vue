@@ -8,6 +8,7 @@ import type { User } from '@/api/auth'
 import PostCard from '@/components/PostCard.vue'
 import PostCardSkeleton from '@/components/PostCardSkeleton.vue'
 import FollowButton from '@/components/FollowButton.vue'
+import ReportButton from '@/components/ReportButton.vue'
 import { usePageMeta } from '@/composables/usePageMeta'
 
 const props = defineProps<{ id: number }>()
@@ -151,8 +152,9 @@ async function onFileChange(ev: Event) {
       <button v-if="isMe && !editing" class="ghost" @click="startEditing">Edit profile</button>
     </header>
 
-    <div class="card">
+    <div class="card row" style="justify-content: space-between; align-items: center;">
       <FollowButton :user-id="id" />
+      <ReportButton v-if="!isMe && auth.isAuthed" target-type="user" :target-id="id" />
     </div>
 
     <section v-if="editing" class="card">

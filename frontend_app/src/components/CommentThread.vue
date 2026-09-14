@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Comment } from '@/api/comments'
+import { useAuthStore } from '@/stores/auth'
+import ReportButton from '@/components/ReportButton.vue'
+
+const auth = useAuthStore()
 
 // Nesting is built here rather than sent by the server: the API returns a
 // flat list with parent_id, which keeps its ETag a function of the contents
@@ -106,12 +110,17 @@ function iso(s: string) {
 
       <p class="post-content comment-body">{{ c.content }}</p>
 
-      <div v-if="canReply" class="row tight">
+      <div v-if="canReply || (auth.isAuthed && c.author && c.author.id !== auth.user!.id)" class="row tight">
         <button
-          v-if="replyingTo !== c.id"
+          v-if="canReply && replyingTo !== c.id"
           class="quiet sm"
           @click="startReply(c.id)"
         >Reply</button>
+        <ReportButton
+          v-if="auth.isAuthed && c.author && c.author.id !== auth.user!.id"
+          target-type="comment"
+          :target-id="c.id"
+        />
       </div>
 
       <form v-if="replyingTo === c.id" class="reply-form" @submit.prevent="send(c.id)">

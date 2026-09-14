@@ -2383,6 +2383,15 @@ components:
         email:    { type: string, format: email }
         bio:      { type: string }
         profile_image: { type: string }
+        role:
+          type: string
+          enum: [user, moderator, admin]
+          description: |
+            The caller's own role, read fresh from the database on each
+            request. Clients use it only to decide whether to show the
+            moderation UI; every `/admin/*` endpoint re-checks the role
+            server-side and answers 404 to non-staff. Omitted only if the
+            role lookup itself failed.
 
     PublicUser:
       type: object

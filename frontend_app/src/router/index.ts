@@ -26,6 +26,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue'), meta: { titleKey: 'pages.verify_2fa' } },
   { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true, titleKey: 'pages.account_security' } },
   { path: '/account/data',      name: 'account-data',  component: () => import('@/views/AccountDataView.vue'), meta: { auth: true, titleKey: 'nav.your_data' } },
+  // No role check in the guard: the backend answers 404 to non-staff (see
+  // helpers/Roles.h), and ModerationView renders that as its own "not for
+  // you" state. The nav link is hidden for non-staff, but the route itself
+  // relies on the server, not the client, to keep the surface private.
+  { path: '/moderation',        name: 'moderation',    component: () => import('@/views/ModerationView.vue'), meta: { auth: true, titleKey: 'nav.moderation' } },
   // A real 404 rather than a redirect to '/'. Silently landing a bad link on
   // the feed makes a broken URL indistinguishable from a working one.
   { path: '/:catchAll(.*)',     name: 'not-found',     component: () => import('@/views/NotFoundView.vue'), meta: { titleKey: 'pages.not_found' } },

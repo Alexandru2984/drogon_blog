@@ -12,6 +12,7 @@ import PostMeta from '@/components/PostMeta.vue'
 import CommentThread from '@/components/CommentThread.vue'
 import TableOfContents from '@/components/TableOfContents.vue'
 import RelatedPosts from '@/components/RelatedPosts.vue'
+import ReportButton from '@/components/ReportButton.vue'
 import { socialApi } from '@/api/social'
 import { usePageMeta } from '@/composables/usePageMeta'
 
@@ -340,6 +341,8 @@ async function deletePost() {
           {{ bookmarked ? 'Saved' : 'Save' }}
         </button>
         <span class="muted">{{ likes }} like{{ likes === 1 ? '' : 's' }}</span>
+        <span class="spacer"></span>
+        <ReportButton v-if="auth.isAuthed && !isOwner" target-type="post" :target-id="post.id" />
       </div>
     </article>
 

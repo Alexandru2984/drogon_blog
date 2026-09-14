@@ -547,6 +547,14 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
         if (!user.getValueOfProfileImage().empty()) {
             ret["profile_image"] = user.getValueOfProfileImage();
         }
+        // Not part of the ORM model (see models/model.json / helpers/Roles.cc
+        // for why role reads go through a raw query instead). The frontend
+        // uses this only to decide whether to show the moderation surface at
+        // all; every privileged endpoint re-checks the role server-side
+        // regardless of what this response said.
+        if (auto role = roles::of(req)) {
+            ret["role"] = roles::name(*role);
+        }
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         issueCsrfCookie(req, resp);             // rehydrate CSRF on session bootstrap

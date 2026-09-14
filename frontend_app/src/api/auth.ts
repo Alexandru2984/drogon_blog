@@ -1,11 +1,16 @@
 import { api } from './client'
 
+export type Role = 'user' | 'moderator' | 'admin'
+
 export interface User {
   id: number
   username: string
   email: string
   bio?: string
   profile_image?: string
+  // Absent only if the /auth/me role lookup itself failed server-side; treat
+  // a missing value the same as 'user' (least privilege).
+  role?: Role
 }
 
 export const authApi = {

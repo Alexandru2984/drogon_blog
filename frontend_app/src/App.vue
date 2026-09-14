@@ -195,6 +195,9 @@ watch(isAuthed, (now, prev) => {
 
 const unread = computed(() => messages.totalUnread)
 const unreadNotifs = computed(() => notifs.unread)
+// Purely a UX convenience — hides a link to a page that would otherwise
+// answer 404. helpers/Roles.h enforces the real gate server-side.
+const isStaff = computed(() => user.value?.role === 'moderator' || user.value?.role === 'admin')
 </script>
 
 <template>
@@ -242,6 +245,9 @@ const unreadNotifs = computed(() => notifs.unread)
             <router-link to="/account/security" role="menuitem">{{ $t('nav.two_fa') }}</router-link>
             <router-link :to="{ name: 'account-data' }" role="menuitem">
               {{ $t('nav.your_data') }}
+            </router-link>
+            <router-link v-if="isStaff" :to="{ name: 'moderation' }" role="menuitem">
+              {{ $t('nav.moderation') }}
             </router-link>
             <template #logout-label>{{ $t('nav.logout') }}</template>
           </AccountMenu>
@@ -307,6 +313,7 @@ const unreadNotifs = computed(() => notifs.unread)
         </router-link>
         <router-link to="/account/security">{{ $t('nav.two_fa') }}</router-link>
         <router-link :to="{ name: 'account-data' }">{{ $t('nav.your_data') }}</router-link>
+        <router-link v-if="isStaff" :to="{ name: 'moderation' }">{{ $t('nav.moderation') }}</router-link>
         <hr />
         <button @click="doLogout">{{ $t('nav.logout') }}</button>
       </template>
