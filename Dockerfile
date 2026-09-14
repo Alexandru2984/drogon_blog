@@ -17,7 +17,7 @@ RUN npm run build
 # provides — the surface we depend on (registerSyncAdvice, runOnQuit,
 # HttpResponsePtr-returning sync advice) landed in 1.9.x and isn't in the
 # Ubuntu noble apt package (1.8.7).
-FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS drogon-builder
+FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS drogon-builder
 ARG DEBIAN_FRONTEND=noninteractive
 ARG DROGON_VERSION=v1.9.13
 ARG DROGON_COMMIT=4c5430757ea5451a7c38fbbef4b4bef7dbb47f2f
@@ -45,7 +45,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 3: build the C++ backend ----------
 # Same base as the drogon-builder so libstdc++ ABI matches at link time;
 # multi-arch via the Ubuntu base + Drogon-from-source above.
-FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS backend
+FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS backend
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config cmake \
@@ -76,7 +76,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ---------- Stage 4: runtime ----------
 # Match the build base (Ubuntu 24.04) so libstdc++ matches; libdrogon is
 # statically linked, so we only need the third-party shared deps.
-FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS runtime
+FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
