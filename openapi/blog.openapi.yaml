@@ -1936,7 +1936,7 @@ paths:
   /reports:
     post:
       tags: [Moderation]
-      summary: Report a post or a comment
+      summary: Report a post, a comment or a user
       description: |
         Open to any signed-in user. Rate-limited per account, because a
         report queue that anyone can flood is a queue nobody reads.
@@ -1948,19 +1948,18 @@ paths:
               type: object
               required: [target_type, target_id, reason]
               properties:
-                target_type: { type: string, enum: [post, comment] }
+                target_type: { type: string, enum: [post, comment, user] }
                 target_id:   { type: integer, minimum: 1 }
-                reason:      { type: string }
-                detail:      { type: string }
+                reason:      { type: string, enum: [spam, harassment, illegal, sexual, other] }
+                detail:      { type: string, description: Truncated to 2 KiB. }
       responses:
         '201':
-          description: Filed.
+          description: |
+            Filed. Filing the same report again while it is still open
+            answers 201 too, rather than an error.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  report: { $ref: '#/components/schemas/Report' }
+              schema: { $ref: '#/components/schemas/Message' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/CsrfMissing' }
@@ -1982,10 +1981,8 @@ paths:
       parameters:
         - name: status
           in: query
-          schema: { type: string, enum: [open, resolved, dismissed] }
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          description: Which queue to read. At most 200 reports, oldest first.
+          schema: { type: string, enum: [open, actioned, dismissed], default: open }
       responses:
         '200':
           description: OK
@@ -2010,22 +2007,24 @@ paths:
           required: true
           schema: { type: integer, minimum: 1 }
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
+              required: [status]
               properties:
-                status: { type: string, enum: [resolved, dismissed] }
+                status: { type: string, enum: [actioned, dismissed] }
                 note:   { type: string }
       responses:
         '200':
-          description: Closed.
+          description: |
+            Closed. Only an open report can be closed, so a second moderator
+            closing the same one gets 404.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  report: { $ref: '#/components/schemas/Report' }
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/CsrfMissing' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2649,17 +2648,24 @@ components:
 
     Report:
       type: object
-      required: [id, target_type, target_id, reason, status, created_at]
+      required: [id, target_type, target_id, reason, status, created_at, reporter]
       properties:
         id:          { type: integer }
-        target_type: { type: string, enum: [post, comment] }
+        target_type: { type: string, enum: [post, comment, user] }
         target_id:   { type: integer }
-        reason:      { type: string }
+        reason:      { type: string, enum: [spam, harassment, illegal, sexual, other] }
         detail:      { type: string }
-        status:      { type: string, enum: [open, resolved, dismissed] }
+        status:      { type: string, enum: [open, actioned, dismissed] }
         created_at:  { type: string, format: date-time }
-        resolved_at: { type: string, format: date-time, nullable: true }
-        resolution_note: { type: string, nullable: true }
+        reporter:
+          type: string
+          description: Username of whoever filed it; empty if that account is gone.
+        post_id:
+          type: integer
+          description: |
+            For a report on a comment, the post the comment is on — a comment
+            has no page of its own. Absent for other targets, and when the
+            comment has since been deleted outright.
 
     AccountExport:
       type: object

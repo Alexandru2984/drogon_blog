@@ -232,9 +232,15 @@ void ModerationController::listReports(
                 const auto r = db->execSqlSync(
                     "SELECT r.id, r.target_type, r.target_id, r.reason, "
                     "       r.detail, r.status, r.created_at, "
-                    "       u.username AS reporter "
+                    "       u.username AS reporter, "
+                    "       c.post_id  AS comment_post_id "
                     "  FROM reports r "
                     "  LEFT JOIN users u ON u.id = r.reporter_id "
+                    // A comment has no page of its own; its post does. Without
+                    // this the queue could name a reported comment but not
+                    // show a moderator where it is.
+                    "  LEFT JOIN comments c "
+                    "         ON r.target_type = 'comment' AND c.id = r.target_id "
                     " WHERE r.status = $1 "
                     " ORDER BY r.created_at ASC "
                     " LIMIT 200",
@@ -252,6 +258,9 @@ void ModerationController::listReports(
                     e["created_at"]  = row["created_at"].as<std::string>();
                     e["reporter"]    = row["reporter"].isNull()
                                           ? "" : row["reporter"].as<std::string>();
+                    if (!row["comment_post_id"].isNull()) {
+                        e["post_id"] = row["comment_post_id"].as<int>();
+                    }
                     arr.append(e);
                 }
 

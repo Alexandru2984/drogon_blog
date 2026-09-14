@@ -243,6 +243,93 @@ DROGON_TEST(Moderation_HidingRemovesThePostEverywhere)
         });
 }
 
+// A comment has no page of its own, so the queue carries the post it sits
+// on; otherwise a moderator reads a report about a comment and has no way to
+// find it. Reports on anything else carry no post_id.
+DROGON_TEST(Moderation_CommentReportsCarryTheirPost)
+{
+    const std::string u = "reporter_" + uniq();
+    const std::string p = "moderation-test-password-1";
+    auto c = std::make_shared<Client>(testBaseUrl());
+
+    Json::Value reg;
+    reg["username"] = u;
+    reg["email"]    = u + "@example.test";
+    reg["password"] = p;
+    Json::Value login;
+    login["username"] = u;
+    login["password"] = p;
+
+    c->http->sendRequest(jsonPost("/auth/register", reg),
+        [TEST_CTX, c, login, u](ReqResult, const HttpResponsePtr& r0) {
+            REQUIRE(r0->getStatusCode() == k201Created);
+            c->http->sendRequest(jsonPost("/auth/login", login),
+                [TEST_CTX, c, u](ReqResult, const HttpResponsePtr& r1) {
+                    REQUIRE(r1->getStatusCode() == k200OK);
+                    c->absorb(r1);
+
+                    Json::Value post;
+                    post["title"]   = "has a reported comment";
+                    post["content"] = "body";
+                    auto pReq = jsonPost("/posts", post);
+                    c->apply(pReq);
+                    c->http->sendRequest(pReq,
+                        [TEST_CTX, c, u](ReqResult, const HttpResponsePtr& r2) {
+                            REQUIRE(r2->getStatusCode() == k201Created);
+                            auto j2 = r2->getJsonObject();
+                            REQUIRE(j2);
+                            const int postId = (*j2)["post"]["id"].asInt();
+
+                            Json::Value cm;
+                            cm["content"] = "a comment someone will report";
+                            auto cReq = jsonPost("/posts/" + std::to_string(postId) + "/comments", cm);
+                            c->apply(cReq);
+                            c->http->sendRequest(cReq,
+                                [TEST_CTX, c, u, postId](ReqResult, const HttpResponsePtr& r3) {
+                                    REQUIRE(r3->getStatusCode() == k201Created);
+                                    auto j3 = r3->getJsonObject();
+                                    REQUIRE(j3);
+                                    const int commentId = (*j3)["comment"]["id"].asInt();
+
+                                    Json::Value rep;
+                                    rep["target_type"] = "comment";
+                                    rep["target_id"]   = commentId;
+                                    rep["reason"]      = "spam";
+                                    auto rReq = jsonPost("/reports", rep);
+                                    c->apply(rReq);
+                                    c->http->sendRequest(rReq,
+                                        [TEST_CTX, c, u, postId, commentId](ReqResult, const HttpResponsePtr& r4) {
+                                            REQUIRE(r4->getStatusCode() == k201Created);
+
+                                            promote(u, "moderator");
+                                            auto list = HttpRequest::newHttpRequest();
+                                            list->setMethod(Get);
+                                            list->setPath("/admin/reports?status=open");
+                                            c->apply(list);
+                                            c->http->sendRequest(list,
+                                                [TEST_CTX, postId, commentId](ReqResult, const HttpResponsePtr& r5) {
+                                                    REQUIRE(r5->getStatusCode() == k200OK);
+                                                    auto j5 = r5->getJsonObject();
+                                                    REQUIRE(j5);
+                                                    bool found = false;
+                                                    for (const auto& e : (*j5)["reports"]) {
+                                                        if (e["target_type"].asString() == "comment" &&
+                                                            e["target_id"].asInt() == commentId) {
+                                                            found = true;
+                                                            CHECK(e["post_id"].asInt() == postId);
+                                                        } else if (e["target_type"].asString() != "comment") {
+                                                            CHECK(!e.isMember("post_id"));
+                                                        }
+                                                    }
+                                                    CHECK(found);
+                                                });
+                                        });
+                                });
+                        });
+                });
+        });
+}
+
 // A suspended account must not be able to write. The gate is central
 // rather than per-handler, so this also covers endpoints added later.
 DROGON_TEST(Moderation_SuspendedAccountCannotWriteButCanRead)

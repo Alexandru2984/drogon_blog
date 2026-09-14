@@ -13,6 +13,9 @@ export interface Report {
   status: ReportStatus
   created_at: string
   reporter: string
+  // For a comment report, the post the comment is on. Absent for other
+  // targets, or when the comment has since been deleted outright.
+  post_id?: number
 }
 
 export const moderationApi = {

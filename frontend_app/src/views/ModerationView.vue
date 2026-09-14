@@ -190,6 +190,9 @@ async function runManual() {
         <router-link v-else-if="r.target_type === 'post'" :to="{ name: 'post', params: { id: r.target_id } }">
           View post
         </router-link>
+        <router-link v-else-if="r.target_type === 'comment' && r.post_id" :to="{ name: 'post', params: { id: r.post_id } }">
+          View the post it's on
+        </router-link>
       </p>
 
       <template v-if="status === 'open'">
