@@ -1087,12 +1087,24 @@ paths:
     delete:
       tags: [Comments]
       summary: Delete the calling user's own comment
+      description: |
+        A comment with replies is tombstoned rather than removed — `content`
+        becomes `[deleted]`, it keeps its place in the thread and loses its
+        author — because `comments.parent_id` cascades and a real delete
+        would take other people's replies with it. A comment without
+        replies is deleted outright. Deleting an already-deleted comment
+        answers 404.
       responses:
         '200':
-          description: Deleted.
+          description: Deleted, or tombstoned when it had replies.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Message' }
+              schema:
+                type: object
+                required: [message, tombstoned]
+                properties:
+                  message:    { type: string }
+                  tombstoned: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2537,10 +2549,15 @@ components:
         content:
           type: string
           description: |
-            `[deleted]` when the author erased their account and this comment
-            had replies. The row survives in that case because
-            `comments.parent_id` cascades — deleting it would delete other
-            people's replies with it.
+            `[deleted]` when the comment was deleted — by its author, or by
+            their account being erased — while it had replies. The row
+            survives in that case because `comments.parent_id` cascades:
+            deleting it would delete other people's replies with it.
+        deleted:
+          type: boolean
+          description: |
+            Present and true on such a tombstone. A tombstone carries no
+            `author`, cannot be edited and takes no new replies.
         parent_id:
           type: integer
           nullable: true

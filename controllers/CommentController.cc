@@ -9,6 +9,10 @@
 #include <drogon/orm/Exception.h>
 #include <trantor/utils/Logger.h>
 
+#include <chrono>
+#include <future>
+#include <memory>
+
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -32,7 +36,7 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
     // deleted concurrently (CommentController previously caught that
     // case with a try/catch around findByPrimaryKey).
     static const char* kSql =
-        "SELECT c.id, c.content, c.created_at, c.updated_at, c.parent_id, "
+        "SELECT c.id, c.content, c.created_at, c.updated_at, c.parent_id, c.deleted_at, "
         "       u.id AS author_id, u.username AS author_username, "
         "       u.profile_image AS author_profile_image "
         "FROM comments c "
@@ -100,7 +104,12 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                     ? Json::nullValue
                     : Json::Value(row["parent_id"].as<int>());
 
-                if (!row["author_id"].isNull()) {
+                // A tombstone (see deleteComment) keeps its place so the
+                // replies under it still have a parent, but names nobody:
+                // its author asked for it to be gone.
+                const bool tombstoned = !row["deleted_at"].isNull();
+                if (tombstoned) commentJson["deleted"] = true;
+                if (!tombstoned && !row["author_id"].isNull()) {
                     commentJson["author"]["id"] = row["author_id"].as<int>();
                     commentJson["author"]["username"] = row["author_username"].as<std::string>();
                     if (!row["author_profile_image"].isNull()) {
@@ -224,7 +233,10 @@ void CommentController::createComment(const HttpRequestPtr &req,
         if (parentId > 0) {
             auto parent = dbClient->execSqlSync(
                 "SELECT user_id FROM comments "
-                " WHERE id = $1 AND post_id = $2 AND hidden_at IS NULL",
+                " WHERE id = $1 AND post_id = $2 AND hidden_at IS NULL "
+                // A tombstone takes no new replies; its author would
+                // otherwise be notified about a comment they deleted.
+                "   AND deleted_at IS NULL",
                 parentId, postId);
             if (parent.empty()) {
                 Json::Value ret;
@@ -289,6 +301,17 @@ void CommentController::createComment(const HttpRequestPtr &req,
         });
 }
 
+namespace {
+HttpResponsePtr commentError(HttpStatusCode code, const std::string& msg)
+{
+    Json::Value ret;
+    ret["error"] = msg;
+    auto resp = HttpResponse::newHttpJsonResponse(ret);
+    resp->setStatusCode(code);
+    return resp;
+}
+} // namespace
+
 void CommentController::updateComment(const HttpRequestPtr &req,
                                      std::function<void(const HttpResponsePtr &)> &&callback,
                                      int commentId)
@@ -297,11 +320,7 @@ void CommentController::updateComment(const HttpRequestPtr &req,
     auto userIdOpt = session->getOptional<int>("user_id");
 
     if (!userIdOpt.has_value()) {
-        Json::Value ret;
-        ret["error"] = "Not authenticated";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k401Unauthorized);
-        callback(resp);
+        callback(commentError(k401Unauthorized, "Not authenticated"));
         return;
     }
 
@@ -314,58 +333,58 @@ void CommentController::updateComment(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
-
-    try {
-        auto comment = mapper.findByPrimaryKey(commentId);
-
-        // Check if user owns the comment
-        if (comment.getValueOfUserId() != userIdOpt.value()) {
-            Json::Value ret;
-            ret["error"] = "Unauthorized";
-            auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k403Forbidden);
-            callback(resp);
-            return;
-        }
-
-        if (json->isMember("content")) {
-            const std::string newContent = (*json)["content"].asString();
-            if (newContent.size() > kMaxCommentBytes) {
-                Json::Value ret;
-                ret["error"] = "Comment too long";
-                auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k413RequestEntityTooLarge);
-                callback(resp);
-                return;
-            }
-            comment.setContent(newContent);
-        }
-
-        mapper.update(comment);
-
-        Json::Value ret;
-        ret["message"] = "Comment updated successfully";
-        ret["comment"]["id"] = comment.getValueOfId();
-        ret["comment"]["content"] = comment.getValueOfContent();
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const UnexpectedRows &) {
-        Json::Value ret;
-        ret["error"] = "Comment not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to update comment";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
+    // Same rules as createComment. An edit used to accept "" and blank the
+    // comment out — a deletion that skipped the tombstone logic below.
+    const std::string newContent = (*json)["content"].asString();
+    if (newContent.empty()) {
+        callback(commentError(k400BadRequest, "Content is required"));
+        return;
     }
+    if (newContent.size() > kMaxCommentBytes) {
+        callback(commentError(k413RequestEntityTooLarge, "Comment too long"));
+        return;
+    }
+
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback,
+        [userId, commentId, newContent, callback] {
+            try {
+                auto db = drogon::app().getDbClient();
+                // A tombstone is not there to edit: letting its author
+                // rewrite "[deleted]" would quietly undo the deletion.
+                const auto owner = db->execSqlSync(
+                    "SELECT user_id FROM comments "
+                    " WHERE id = $1 AND deleted_at IS NULL",
+                    commentId);
+                if (owner.empty()) {
+                    callback(commentError(k404NotFound, "Comment not found"));
+                    return;
+                }
+                if (owner[0]["user_id"].as<int>() != userId) {
+                    callback(commentError(k403Forbidden, "Unauthorized"));
+                    return;
+                }
+                // The guards are repeated here so a delete that lands
+                // between the two statements cannot be edited back.
+                const auto r = db->execSqlSync(
+                    "UPDATE comments SET content = $3 "
+                    " WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL "
+                    "RETURNING id, content",
+                    commentId, userId, newContent);
+                if (r.empty()) {
+                    callback(commentError(k404NotFound, "Comment not found"));
+                    return;
+                }
+                Json::Value ret;
+                ret["message"] = "Comment updated successfully";
+                ret["comment"]["id"] = r[0]["id"].as<int>();
+                ret["comment"]["content"] = r[0]["content"].as<std::string>();
+                callback(HttpResponse::newHttpJsonResponse(ret));
+            } catch (const DrogonDbException &e) {
+                LOG_ERROR << "DB Error (update comment): " << e.base().what();
+                callback(commentError(k500InternalServerError, "Failed to update comment"));
+            }
+        });
 }
 
 void CommentController::deleteComment(const HttpRequestPtr &req,
@@ -376,48 +395,89 @@ void CommentController::deleteComment(const HttpRequestPtr &req,
     auto userIdOpt = session->getOptional<int>("user_id");
 
     if (!userIdOpt.has_value()) {
-        Json::Value ret;
-        ret["error"] = "Not authenticated";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k401Unauthorized);
-        callback(resp);
+        callback(commentError(k401Unauthorized, "Not authenticated"));
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Comments> mapper(dbClient);
+    // comments.parent_id is ON DELETE CASCADE, so deleting a comment that
+    // has replies deletes the replies too — other people's words, gone
+    // because someone removed theirs. Such a comment is tombstoned instead
+    // (content "[deleted]", deleted_at set), the way account erasure has
+    // always done it; one without replies is deleted outright.
+    //
+    // Choosing between the two is a race unless the row is locked first. A
+    // reply's INSERT takes FOR KEY SHARE on its parent for the foreign-key
+    // check, which FOR UPDATE blocks, so once the lock is held no reply can
+    // land; and the second statement's snapshot is taken after the lock, so
+    // it sees every reply that committed before it. One statement would
+    // decide on a snapshot from before the lock and could still cascade a
+    // reply committed in between.
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback,
+        [userId, commentId, callback] {
+            // newTransaction() pins one connection, and the COMMIT's outcome
+            // arrives through this callback — see AuthControllerPrivacy.cc.
+            auto client = drogon::app().getDbClient();
+            auto committed = std::make_shared<std::promise<bool>>();
+            auto commitResult = committed->get_future();
+            auto db = client->newTransaction(
+                [committed](bool ok) { committed->set_value(ok); });
 
-    try {
-        auto comment = mapper.findByPrimaryKey(commentId);
+            HttpResponsePtr refusal;
+            bool tombstoned = false;
+            try {
+                const auto row = db->execSqlSync(
+                    "SELECT user_id FROM comments "
+                    " WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+                    commentId);
+                if (row.empty()) {
+                    refusal = commentError(k404NotFound, "Comment not found");
+                } else if (row[0]["user_id"].as<int>() != userId) {
+                    refusal = commentError(k403Forbidden, "Unauthorized");
+                } else {
+                    // Every child row counts, hidden or tombstoned ones
+                    // included: the cascade would take those too.
+                    const auto r = db->execSqlSync(
+                        "WITH t AS (SELECT EXISTS (SELECT 1 FROM comments "
+                        "                           WHERE parent_id = $1) AS has_replies), "
+                        "tomb AS (UPDATE comments "
+                        "            SET content = '[deleted]', deleted_at = now() "
+                        "          WHERE id = $1 AND (SELECT has_replies FROM t) "
+                        "         RETURNING id), "
+                        "gone AS (DELETE FROM comments "
+                        "          WHERE id = $1 AND NOT (SELECT has_replies FROM t) "
+                        "         RETURNING id) "
+                        "SELECT (SELECT count(*) FROM tomb) AS tombstoned, "
+                        "       (SELECT count(*) FROM gone) AS deleted",
+                        commentId);
+                    tombstoned = r[0]["tombstoned"].as<std::int64_t>() > 0;
+                }
+            } catch (const DrogonDbException &e) {
+                LOG_ERROR << "DB Error (delete comment): " << e.base().what();
+                refusal = commentError(k500InternalServerError, "Failed to delete comment");
+            }
 
-        // Check if user owns the comment
-        if (comment.getValueOfUserId() != userIdOpt.value()) {
+            // Nothing is written on a refusal; roll back so the destructor
+            // releases the lock instead of committing.
+            if (refusal) db->rollback();
+            db.reset();
+            if (refusal) {
+                callback(refusal);
+                return;
+            }
+            if (commitResult.wait_for(std::chrono::seconds(30)) !=
+                    std::future_status::ready ||
+                !commitResult.get())
+            {
+                LOG_ERROR << "comment delete commit failed: id=" << commentId;
+                callback(commentError(k500InternalServerError, "Failed to delete comment"));
+                return;
+            }
+
             Json::Value ret;
-            ret["error"] = "Unauthorized";
-            auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k403Forbidden);
-            callback(resp);
-            return;
-        }
-
-        mapper.deleteByPrimaryKey(commentId);
-
-        Json::Value ret;
-        ret["message"] = "Comment deleted successfully";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const UnexpectedRows &) {
-        Json::Value ret;
-        ret["error"] = "Comment not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to delete comment";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+            ret["message"] = tombstoned ? "Comment deleted; its replies were kept"
+                                        : "Comment deleted successfully";
+            ret["tombstoned"] = tombstoned;
+            callback(HttpResponse::newHttpJsonResponse(ret));
+        });
 }

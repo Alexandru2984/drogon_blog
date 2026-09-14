@@ -170,6 +170,145 @@ DROGON_TEST(Comments_ReplyMustBelongToTheSamePost)
     });
 }
 
+// Deleting your own comment must not take other people's replies with it.
+// comments.parent_id cascades, so a plain DELETE of a comment with replies
+// used to erase every reply underneath — anyone could wipe a discussion by
+// commenting, waiting, and deleting. A parent with replies is tombstoned
+// instead, the way account erasure already did it.
+DROGON_TEST(Comments_DeletingAParentKeepsOtherPeoplesReplies)
+{
+    auto author  = std::make_shared<Client>(testBaseUrl());
+    auto replier = std::make_shared<Client>(testBaseUrl());
+
+    makeUser(author, "tomb_parent_" + uniq(), [TEST_CTX, author, replier] {
+      makeUser(replier, "tomb_reply_" + uniq(), [TEST_CTX, author, replier] {
+        Json::Value p; p["title"] = "Thread"; p["content"] = "Discuss.";
+        author->http->sendRequest(author->json("/posts", Post, p),
+          [TEST_CTX, author, replier](ReqResult, const HttpResponsePtr& r1) {
+            REQUIRE(r1->getStatusCode() == k201Created);
+            const std::string comments = "/posts/" +
+                std::to_string((*r1->getJsonObject())["post"]["id"].asInt()) + "/comments";
+
+            Json::Value top; top["content"] = "Parent.";
+            author->http->sendRequest(author->json(comments, Post, top),
+              [TEST_CTX, author, replier, comments](ReqResult, const HttpResponsePtr& r2) {
+                REQUIRE(r2->getStatusCode() == k201Created);
+                const int parent = (*r2->getJsonObject())["comment"]["id"].asInt();
+
+                Json::Value rep; rep["content"] = "Keep me."; rep["parent_id"] = parent;
+                replier->http->sendRequest(replier->json(comments, Post, rep),
+                  [TEST_CTX, author, replier, comments, parent](ReqResult, const HttpResponsePtr& r3) {
+                    REQUIRE(r3->getStatusCode() == k201Created);
+                    const int child = (*r3->getJsonObject())["comment"]["id"].asInt();
+                    const std::string parentPath = "/comments/" + std::to_string(parent);
+
+                    author->http->sendRequest(author->del(parentPath),
+                      [TEST_CTX, author, replier, comments, parent, child, parentPath](
+                          ReqResult, const HttpResponsePtr& r4) {
+                        REQUIRE(r4->getStatusCode() == k200OK);
+                        CHECK((*r4->getJsonObject())["tombstoned"].asBool());
+
+                        author->http->sendRequest(author->get(comments),
+                          [TEST_CTX, author, replier, comments, parent, child, parentPath](
+                              ReqResult, const HttpResponsePtr& r5) {
+                            REQUIRE(r5->getStatusCode() == k200OK);
+                            const auto& list = (*r5->getJsonObject())["comments"];
+                            REQUIRE(list.size() == 2);
+                            CHECK(list[0]["id"].asInt() == parent);
+                            CHECK(list[0]["deleted"].asBool());
+                            CHECK(list[0]["content"].asString() == "[deleted]");
+                            // A tombstone names nobody.
+                            CHECK(!list[0].isMember("author"));
+                            CHECK(list[1]["id"].asInt() == child);
+                            CHECK(list[1]["content"].asString() == "Keep me.");
+                            CHECK(list[1]["author"]["id"].asInt() == replier->id);
+
+                            // A deleted comment takes no new replies...
+                            Json::Value late; late["content"] = "Late."; late["parent_id"] = parent;
+                            replier->http->sendRequest(replier->json(comments, Post, late),
+                              [TEST_CTX, author, parentPath](ReqResult, const HttpResponsePtr& r6) {
+                                CHECK(r6->getStatusCode() == k404NotFound);
+
+                                // ...cannot be revived by editing...
+                                Json::Value edit; edit["content"] = "Back again.";
+                                author->http->sendRequest(author->json(parentPath, Put, edit),
+                                  [TEST_CTX, author, parentPath](ReqResult, const HttpResponsePtr& r7) {
+                                    CHECK(r7->getStatusCode() == k404NotFound);
+
+                                    // ...and is not deleted a second time.
+                                    author->http->sendRequest(author->del(parentPath),
+                                      [TEST_CTX](ReqResult, const HttpResponsePtr& r8) {
+                                        CHECK(r8->getStatusCode() == k404NotFound);
+                                      });
+                                  });
+                              });
+                          });
+                      });
+                  });
+              });
+          });
+      });
+    });
+}
+
+// A comment without replies still really goes away, only its author can
+// remove it, and an edit cannot blank it out.
+DROGON_TEST(Comments_LeafDeleteAndEditRules)
+{
+    auto author   = std::make_shared<Client>(testBaseUrl());
+    auto stranger = std::make_shared<Client>(testBaseUrl());
+
+    makeUser(author, "leaf_author_" + uniq(), [TEST_CTX, author, stranger] {
+      makeUser(stranger, "leaf_other_" + uniq(), [TEST_CTX, author, stranger] {
+        Json::Value p; p["title"] = "Leaf"; p["content"] = "Body.";
+        author->http->sendRequest(author->json("/posts", Post, p),
+          [TEST_CTX, author, stranger](ReqResult, const HttpResponsePtr& r1) {
+            REQUIRE(r1->getStatusCode() == k201Created);
+            const std::string comments = "/posts/" +
+                std::to_string((*r1->getJsonObject())["post"]["id"].asInt()) + "/comments";
+
+            Json::Value c; c["content"] = "Original.";
+            author->http->sendRequest(author->json(comments, Post, c),
+              [TEST_CTX, author, stranger, comments](ReqResult, const HttpResponsePtr& r2) {
+                REQUIRE(r2->getStatusCode() == k201Created);
+                const std::string path = "/comments/" +
+                    std::to_string((*r2->getJsonObject())["comment"]["id"].asInt());
+
+                Json::Value blank; blank["content"] = "";
+                author->http->sendRequest(author->json(path, Put, blank),
+                  [TEST_CTX, author, stranger, comments, path](ReqResult, const HttpResponsePtr& r3) {
+                    CHECK(r3->getStatusCode() == k400BadRequest);
+
+                    Json::Value edit; edit["content"] = "Edited.";
+                    author->http->sendRequest(author->json(path, Put, edit),
+                      [TEST_CTX, author, stranger, comments, path](ReqResult, const HttpResponsePtr& r4) {
+                        REQUIRE(r4->getStatusCode() == k200OK);
+                        CHECK((*r4->getJsonObject())["comment"]["content"].asString() == "Edited.");
+
+                        stranger->http->sendRequest(stranger->del(path),
+                          [TEST_CTX, author, comments, path](ReqResult, const HttpResponsePtr& r5) {
+                            CHECK(r5->getStatusCode() == k403Forbidden);
+
+                            author->http->sendRequest(author->del(path),
+                              [TEST_CTX, author, comments](ReqResult, const HttpResponsePtr& r6) {
+                                REQUIRE(r6->getStatusCode() == k200OK);
+                                CHECK(!(*r6->getJsonObject())["tombstoned"].asBool());
+
+                                author->http->sendRequest(author->get(comments),
+                                  [TEST_CTX](ReqResult, const HttpResponsePtr& r7) {
+                                    REQUIRE(r7->getStatusCode() == k200OK);
+                                    CHECK((*r7->getJsonObject())["comments"].size() == 0);
+                                  });
+                              });
+                          });
+                      });
+                  });
+              });
+          });
+      });
+    });
+}
+
 // Bookmarking is idempotent in both directions — a double tap must not be an
 // error the client has to tell apart from a real failure — and the post
 // reports the viewer's own state so the control can render itself.
