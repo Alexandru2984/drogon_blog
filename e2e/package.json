@@ -10,10 +10,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
-    "@types/node":       "^26.0.1",
+    "@types/node":       "^26.5.1",
     "otplib":            "^13.4.1",
-    "pg":                "^8.22.0",
-    "@types/pg":         "^8.11.10",
-    "typescript":        "^6.0.3"
+    "pg":                "^8.23.0",
+    "@types/pg":         "^8.23.1",
+    "typescript":        "^7.0.2"
   }
 }
