@@ -298,11 +298,12 @@ cmake --build build --target blog_test
 TEST_DB_HOST=127.0.0.1 TEST_DB_PASSWORD=… \
   ./build/test/blog_test
 
-# Browser end-to-end — Playwright + Chromium against the SPA + backend.
+# Browser end-to-end — Playwright + Chromium against a disposable stack,
+# never production (the config refuses it). e2e/README.md has the compose
+# override CI uses.
 cd e2e
 npm ci && npx playwright install chromium
-BLOG_DISABLE_RATE_LIMIT=1 sudo systemctl restart drogon-blog
-npm test
+E2E_BASE_URL=http://localhost:8092 npm test
 ```
 
 The C++ tests cover Argon2id verify, the auth state machine (including the constant-time login and atomic password-reset semantics from [`SECURITY.md`](SECURITY.md)), the markdown sanitiser, the cursor-paginated feed, full-text search ranking and snippets, and the image pipeline (magic-byte sniffer, EXIF strip).

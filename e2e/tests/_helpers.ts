@@ -263,3 +263,17 @@ export async function userIdByName(username: string): Promise<number> {
     await c.end()
   }
 }
+
+// Grants a staff role the way scripts/grant-role.sh does on a real host:
+// directly in the database, because there is deliberately no HTTP endpoint
+// for it.
+export async function setRole(username: string, role: 'user' | 'moderator' | 'admin'): Promise<void> {
+  const c = pgClientFromEnv()
+  await c.connect()
+  try {
+    const r = await c.query('UPDATE users SET role = $2 WHERE username = $1', [username, role])
+    if (r.rowCount !== 1) throw new Error(`no user with username ${username}`)
+  } finally {
+    await c.end()
+  }
+}
