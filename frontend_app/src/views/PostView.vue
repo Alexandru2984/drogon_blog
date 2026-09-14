@@ -120,6 +120,11 @@ function subscribeLive(postId: number) {
   live.subscribePost(postId)
 }
 
+// Ids deleted from this view. The watcher below re-merges any comment it has
+// seen over the socket that the list lacks, which would otherwise bring a
+// deleted comment back the next time someone else posts.
+const removedIds = new Set<number>()
+
 // Merge server-pushed live comments into the local list, dedup by id. The
 // initial fetch + this watcher together guarantee we never miss one and
 // never show duplicates if the REST roundtrip lands first.
@@ -129,7 +134,7 @@ watch(
     const incoming = live.liveCommentsByPost.get(props.id) ?? []
     const seen = new Set(comments.value.map(c => c.id))
     for (const c of incoming) {
-      if (!seen.has(c.id)) {
+      if (!seen.has(c.id) && !removedIds.has(c.id)) {
         comments.value.push(c)
         seen.add(c.id)
       }
@@ -207,6 +212,35 @@ async function submitReply(payload: { parentId: number; content: string }) {
     comments.value = await commentsApi.forPost(props.id)
   } catch (e: any) {
     toasts.push(e?.response?.data?.error ?? 'Could not post reply', 'error')
+  } finally {
+    posting.value = false
+  }
+}
+
+async function editComment(payload: { id: number; content: string }) {
+  if (posting.value) return
+  posting.value = true
+  try {
+    await commentsApi.update(payload.id, payload.content)
+    comments.value = await commentsApi.forPost(props.id)
+    toasts.push('Comment updated', 'ok')
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not update comment', 'error')
+  } finally {
+    posting.value = false
+  }
+}
+
+async function removeComment(id: number) {
+  if (posting.value) return
+  posting.value = true
+  try {
+    const res = await commentsApi.remove(id)
+    if (!res.tombstoned) removedIds.add(id)
+    comments.value = await commentsApi.forPost(props.id)
+    toasts.push(res.tombstoned ? 'Comment deleted — its replies were kept' : 'Comment deleted', 'ok')
+  } catch (e: any) {
+    toasts.push(e?.response?.data?.error ?? 'Could not delete comment', 'error')
   } finally {
     posting.value = false
   }
@@ -347,7 +381,7 @@ async function deletePost() {
     </article>
 
     <section class="comments">
-      <h2 class="comments-heading">Comments ({{ comments.length }})</h2>
+      <h2 class="comments-heading">Comments ({{ comments.filter(c => !c.deleted).length }})</h2>
 
       <form v-if="auth.isAuthed" @submit.prevent="submitComment" class="card">
         <label for="new-comment" class="visually-hidden">Write a comment</label>
@@ -380,6 +414,8 @@ async function deletePost() {
         :posting="posting"
         @reply="(id) => (replyingTo = id)"
         @submit="submitReply"
+        @edit="editComment"
+        @remove="removeComment"
       />
     </section>
 

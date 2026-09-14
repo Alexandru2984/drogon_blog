@@ -20,6 +20,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'reply', parentId: number | null): void
   (e: 'submit', payload: { parentId: number; content: string }): void
+  (e: 'edit', payload: { id: number; content: string }): void
+  (e: 'remove', id: number): void
 }>()
 
 interface Node extends Comment {
@@ -83,6 +85,36 @@ function send(parentId: number) {
   draft.value = ''
 }
 
+// Only the author may edit or delete, and a tombstone is nobody's to touch.
+function isMine(c: Comment) {
+  return auth.isAuthed && !c.deleted && c.author?.id === auth.user!.id
+}
+
+const editingId = ref<number | null>(null)
+const editDraft = ref('')
+
+function startEdit(c: Comment) {
+  editingId.value = c.id
+  editDraft.value = c.content
+}
+
+function saveEdit(id: number) {
+  const text = editDraft.value.trim()
+  if (!text) return
+  emit('edit', { id, content: text })
+  editingId.value = null
+}
+
+function remove(c: Comment) {
+  // A comment with replies stays behind as "[deleted]" so the thread under
+  // it still reads; saying so up front avoids a surprise.
+  const hasReplies = props.comments.some(o => o.parent_id === c.id)
+  const msg = hasReplies
+    ? 'Delete this comment? It has replies, so it will stay in the thread as "deleted".'
+    : 'Delete this comment?'
+  if (confirm(msg)) emit('remove', c.id)
+}
+
 function when(s: string) {
   return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
 }
@@ -102,22 +134,37 @@ function iso(s: string) {
     >
       <header class="row tight comment-head">
         <strong v-if="c.author">{{ c.author.username }}</strong>
-        <span v-else class="muted">unknown</span>
+        <span v-else class="muted">{{ c.deleted ? 'deleted' : 'unknown' }}</span>
         <time v-if="iso(c.created_at)" :datetime="iso(c.created_at)" class="muted">
           {{ when(c.created_at) }}
         </time>
       </header>
 
-      <p class="post-content comment-body">{{ c.content }}</p>
+      <p v-if="c.deleted" class="muted comment-body comment-deleted">This comment was deleted.</p>
+      <form v-else-if="editingId === c.id" class="reply-form" @submit.prevent="saveEdit(c.id)">
+        <label :for="`edit-${c.id}`" class="visually-hidden">Edit your comment</label>
+        <textarea :id="`edit-${c.id}`" v-model="editDraft" rows="3" maxlength="2000"></textarea>
+        <div class="row tight" style="margin-top: var(--sp-2);">
+          <button class="sm" :disabled="!editDraft.trim() || posting">
+            {{ posting ? 'Saving…' : 'Save' }}
+          </button>
+          <button type="button" class="quiet sm" @click="editingId = null">Cancel</button>
+        </div>
+      </form>
+      <p v-else class="post-content comment-body">{{ c.content }}</p>
 
-      <div v-if="canReply || (auth.isAuthed && c.author && c.author.id !== auth.user!.id)" class="row tight">
+      <div v-if="auth.isAuthed && !c.deleted && editingId !== c.id" class="row tight">
         <button
           v-if="canReply && replyingTo !== c.id"
           class="quiet sm"
           @click="startReply(c.id)"
         >Reply</button>
+        <template v-if="isMine(c)">
+          <button class="quiet sm" :disabled="posting" @click="startEdit(c)">Edit</button>
+          <button class="quiet sm danger-text" :disabled="posting" @click="remove(c)">Delete</button>
+        </template>
         <ReportButton
-          v-if="auth.isAuthed && c.author && c.author.id !== auth.user!.id"
+          v-else-if="c.author"
           target-type="comment"
           :target-id="c.id"
         />
@@ -163,4 +210,10 @@ function iso(s: string) {
 
 .reply-form { margin-top: var(--sp-3); }
 .reply-form textarea { min-height: 5rem; }
+
+.comment-deleted { font-style: italic; }
+
+/* Same treatment as the post's Delete: quiet until hovered. */
+.danger-text { color: var(--danger); }
+.danger-text:hover { background: var(--danger-soft); color: var(--danger); }
 </style>

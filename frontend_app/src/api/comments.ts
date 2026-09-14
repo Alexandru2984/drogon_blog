@@ -11,6 +11,9 @@ export interface Comment {
   // rather than of the tree shape.
   parent_id?: number | null
   author?: { id: number; username: string; profile_image?: string }
+  // A deleted comment that had replies, kept so they still have a parent.
+  // It carries no author and can be neither edited nor replied to.
+  deleted?: boolean
 }
 
 export const commentsApi = {
@@ -24,7 +27,15 @@ export const commentsApi = {
     if (parentId) body.parent_id = parentId
     return api.post(`/posts/${postId}/comments`, body).then(r => r.data)
   },
+  // The server re-checks ownership and refuses an empty body or a deleted
+  // comment.
+  update(commentId: number, content: string) {
+    return api.put<{ comment: { id: number; content: string } }>(`/comments/${commentId}`, { content })
+      .then(r => r.data.comment)
+  },
+  // `tombstoned` is true when the comment had replies: it stays in the thread
+  // as "[deleted]" so they keep their parent.
   remove(commentId: number) {
-    return api.delete(`/comments/${commentId}`).then(r => r.data)
+    return api.delete<{ message: string; tombstoned: boolean }>(`/comments/${commentId}`).then(r => r.data)
   },
 }
