@@ -34,6 +34,29 @@ std::string env(const char* key, const char* fallback = "")
     return v ? v : fallback;
 }
 
+// Escape a value before it lands in an HTML email body. Usernames are
+// currently constrained to [A-Za-z0-9_-] and SMTP_FROM_NAME is operator-set,
+// so nothing attacker-controlled reaches these bodies today — but an email
+// template is exactly the place a future relaxation of the username charset
+// (or a legacy row) would turn into HTML injection in mail sent to *other*
+// people, so escape defensively at the boundary.
+std::string htmlEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&':  out += "&amp;";  break;
+            case '<':  out += "&lt;";   break;
+            case '>':  out += "&gt;";   break;
+            case '"':  out += "&quot;"; break;
+            case '\'': out += "&#39;";  break;
+            default:   out.push_back(c);
+        }
+    }
+    return out;
+}
+
 struct UploadCtx {
     const char* data;
     std::size_t remaining;
@@ -184,7 +207,7 @@ void EmailHelper::sendVerificationEmail(const std::string& email,
     std::ostringstream body;
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
-         << "<h2 style='color:#333;'>Welcome to " << env("SMTP_FROM_NAME") << ", " << username << "!</h2>"
+         << "<h2 style='color:#333;'>Welcome to " << htmlEscape(env("SMTP_FROM_NAME")) << ", " << htmlEscape(username) << "!</h2>"
          << "<p>Thank you for registering. Please verify your email address by clicking the button below:</p>"
          << "<div style='text-align:center;margin:30px 0;'>"
          << "<a href='" << link << "' style='background-color:#4CAF50;color:white;padding:14px 20px;"
@@ -204,8 +227,8 @@ void EmailHelper::sendRegistrationAttemptEmail(const std::string& email,
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
          << "<h2 style='color:#333;'>Someone tried to register with your email</h2>"
-         << "<p>Hi " << existingUsername << ",</p>"
-         << "<p>An account already exists at " << env("SMTP_FROM_NAME")
+         << "<p>Hi " << htmlEscape(existingUsername) << ",</p>"
+         << "<p>An account already exists at " << htmlEscape(env("SMTP_FROM_NAME"))
          << " under this email address. Just now, someone attempted to create a"
          << " <em>new</em> account using the same address.</p>"
          << "<p>If this was you and you forgot you already had an account, you can"
@@ -225,9 +248,9 @@ void EmailHelper::sendLoginThrottleEmail(const std::string& email,
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
          << "<h2 style='color:#333;'>Repeated failed sign-ins on your account</h2>"
-         << "<p>Hi " << username << ",</p>"
+         << "<p>Hi " << htmlEscape(username) << ",</p>"
          << "<p>There have been several failed sign-in attempts on your "
-         << env("SMTP_FROM_NAME") << " account, so we have paused sign-ins "
+         << htmlEscape(env("SMTP_FROM_NAME")) << " account, so we have paused sign-ins "
          << "for about " << minutes << " minutes.</p>"
          << "<p><strong>If this was you</strong> — you mistyped your password a "
          << "few times. Wait for the pause to lift, or reset your password from "
@@ -253,7 +276,7 @@ void EmailHelper::sendPasswordResetEmail(const std::string& email,
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
          << "<h2 style='color:#333;'>Password Reset Request</h2>"
-         << "<p>Hi " << username << ",</p>"
+         << "<p>Hi " << htmlEscape(username) << ",</p>"
          << "<p>You requested to reset your password. Click the button below to continue:</p>"
          << "<div style='text-align:center;margin:30px 0;'>"
          << "<a href='" << link << "' style='background-color:#2196F3;color:white;padding:14px 20px;"
