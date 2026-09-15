@@ -27,6 +27,7 @@
 #include <thread>
 #include <unordered_set>
 #include <cstdlib>
+#include <cstdio>
 #include <cctype>
 #include <stdexcept>
 
@@ -64,6 +65,40 @@ void loadEnvFile(const std::string& path)
     }
 }
 
+// Escape a value for insertion inside a JSON string literal, WITHOUT adding
+// the surrounding quotes. config.json substitutes ${VAR} both inside strings
+// ("passwd": "${DB_PASSWORD}") and in a bare number slot ("port": ${DB_PORT}).
+// Escaping " \ and control characters is correct in the first context and a
+// no-op in the second (a numeric value has none of them), so applying it
+// unconditionally is safe. Without it, a password containing a " or a \ ends
+// the JSON string early and the rest of the value is parsed as config —
+// syntax that breaks startup at best and, with a crafted value, alters it.
+std::string jsonEscape(const std::string& v)
+{
+    std::string out;
+    out.reserve(v.size() + 8);
+    for (unsigned char c : v) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[7];
+                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out.push_back(static_cast<char>(c));
+                }
+        }
+    }
+    return out;
+}
+
 // Expands ${VAR_NAME} occurrences using the current process env.
 std::string expandEnv(const std::string& s)
 {
@@ -78,7 +113,7 @@ std::string expandEnv(const std::string& s)
             {
                 std::string name = s.substr(i + 2, end - (i + 2));
                 const char* v = std::getenv(name.c_str());
-                if (v) out.append(v);
+                if (v) out.append(jsonEscape(v));
                 i = end + 1;
                 continue;
             }
