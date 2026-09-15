@@ -23,6 +23,14 @@ public:
                                        const std::string& username,
                                        const std::string& token);
 
+    // Sent to the PREVIOUS address when an account's email is changed, so the
+    // original owner learns of it even though the change requires the current
+    // password. Changing the email is the pivot an attacker who has the
+    // password makes to seize password recovery; the old address is the one
+    // place the real owner is still reachable to react.
+    static void sendEmailChangedNotice(const std::string& oldEmail,
+                                       const std::string& username);
+
     // Sent to a user whose email was used as a registration target by someone
     // else. Prevents email-enumeration via the register endpoint without
     // leaving the legitimate owner in the dark.

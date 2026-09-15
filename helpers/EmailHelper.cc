@@ -240,6 +240,30 @@ void EmailHelper::sendRegistrationAttemptEmail(const std::string& email,
     enqueue({email, "Someone tried to register with your email", body.str()});
 }
 
+void EmailHelper::sendEmailChangedNotice(const std::string& oldEmail,
+                                         const std::string& username)
+{
+    std::ostringstream body;
+    body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
+         << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
+         << "<h2 style='color:#333;'>The email on your account was changed</h2>"
+         << "<p>Hi " << htmlEscape(username) << ",</p>"
+         << "<p>The email address on your " << htmlEscape(env("SMTP_FROM_NAME"))
+         << " account was just changed to a different address, so future "
+         << "notifications and password resets will go there instead of here.</p>"
+         << "<p><strong>If this was you</strong>, no action is needed.</p>"
+         << "<p><strong>If this was not you</strong>, someone with your password "
+         << "has taken over the account. Reset your password immediately from the "
+         << "sign-in page — a reset revokes every active session — and if you use "
+         << "that password anywhere else, change it there too. Turning on "
+         << "two-factor authentication makes a stolen password useless on its own.</p>"
+         << "<p style='color:#999;font-size:12px;margin-top:30px;'>"
+         << "This is the last message we will send to this address for this "
+         << "account.</p>"
+         << "</div></body></html>";
+    enqueue({oldEmail, "The email on your account was changed", body.str()});
+}
+
 void EmailHelper::sendLoginThrottleEmail(const std::string& email,
                                          const std::string& username,
                                          int                minutes)

@@ -128,6 +128,10 @@ void UserController::updateProfile(const HttpRequestPtr &req,
     try {
         auto user = mapper.findByPrimaryKey(userIdOpt.value());
 
+        // The address to warn if the email changes — captured before the
+        // change is applied so the notice reaches the previous owner.
+        std::string emailChangedFrom;
+
         // Changing the email is privileged: an attacker who hijacks a live
         // session could otherwise pivot the account by retargeting password
         // recovery. Require the current password and re-issue verification.
@@ -158,6 +162,7 @@ void UserController::updateProfile(const HttpRequestPtr &req,
                     callback(resp);
                     return;
                 }
+                emailChangedFrom = user.getValueOfEmail();
                 Json::Value meta;
                 meta["old_email"] = user.getValueOfEmail();
                 meta["new_email"] = newEmail;
@@ -199,6 +204,15 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         }
 
         mapper.update(user);
+
+        // Only after the change has committed: tell the previous address, so a
+        // takeover by someone who already has the password is not silent to the
+        // real owner. Sending the new verification mail alone would leave the
+        // old address — the one place the owner is still reachable — dark.
+        if (!emailChangedFrom.empty()) {
+            EmailHelper::sendEmailChangedNotice(emailChangedFrom,
+                                                user.getValueOfUsername());
+        }
 
         Json::Value ret;
         ret["message"]          = "Profile updated successfully";
