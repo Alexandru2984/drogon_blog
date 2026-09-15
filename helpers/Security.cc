@@ -3,7 +3,9 @@
 #include <drogon/drogon.h>
 #include <sodium.h>
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -433,10 +435,22 @@ void registerAdvices()
             const auto path   = req->getPath();
             const auto method = req->getMethod();
 
+            // Drogon routes registered handlers case-INSENSITIVELY, but both
+            // guards below match the path against fixed lowercase strings. So
+            // `GET /POSTS/SEARCH` reaches the search handler while `getPath()`
+            // returns the original case — and an exact `==` misses it. That
+            // let a bot loop `/POSTS/SEARCH?q=…` straight past the per-IP
+            // FTS-DoS limiter, the one endpoint that limiter exists to
+            // protect. Fold the path once and compare against the lowercase
+            // rule/exempt sets so every case variant lands in the same bucket.
+            std::string lowerPath = path;
+            std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+
             // ---- Rate limit ----
             if (rateLimitEnabled) {
                 for (const auto& rule : kRateRules) {
-                    if (path == rule.path && method == rule.method) {
+                    if (lowerPath == rule.path && method == rule.method) {
                         auto d = rateLimitTake(
                             rule.path, clientIp(req),
                             rule.capacity, rule.refillPerSec);
@@ -471,7 +485,7 @@ void registerAdvices()
             // Safe methods do not mutate state; pre-auth endpoints can't have a
             // CSRF cookie yet so they're exempt by path.
             if (method != drogon::Get && method != drogon::Head &&
-                method != drogon::Options && !kCsrfExempt.count(path))
+                method != drogon::Options && !kCsrfExempt.count(lowerPath))
             {
                 const auto cookieTok = req->getCookie(csrfCookieName());
                 const auto headerTok = req->getHeader("X-CSRF-Token");
