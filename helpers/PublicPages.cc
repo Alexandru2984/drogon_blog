@@ -258,7 +258,7 @@ void install(const std::string& siteOrigin)
                                       "%Y-%m-%dT%H:%M:%S", false) << "Z\n"
                 << "Preferred-Languages: en, ro\n"
                 << "Canonical: " << origin << "/.well-known/security.txt\n"
-                << "Policy: https://github.com/micutu/drogon_blog/blob/main/SECURITY.md\n";
+                << "Policy: https://github.com/Alexandru2984/drogon_blog/blob/main/SECURITY.md\n";
 
             auto resp = HttpResponse::newHttpResponse();
             resp->setStatusCode(k200OK);
