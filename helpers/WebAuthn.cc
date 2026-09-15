@@ -626,9 +626,19 @@ std::optional<AuthenticationResult> finishAuthentication(
         return std::nullopt;
     }
 
-    // Sign-counter regression check. The spec allows authenticators that
-    // never increment (always 0). Reject only on genuine regression.
-    if (ad.signCount != 0 && ad.signCount <= stored_sign_count) {
+    // Sign-counter clone detection. An authenticator that maintains a counter
+    // must advance it on every assertion; one that never maintains one reports
+    // 0 every time. So accept exactly two shapes:
+    //   * a strict increase (a real advance), or
+    //   * 0 against a stored 0 (a non-incrementing authenticator, consistent).
+    // Reject everything else — in particular a 0 (or any non-advancing value)
+    // against a counter that HAS advanced. That is the clone signature, and
+    // the previous form (accept whenever signCount == 0) not only let it
+    // through but, via the caller's UPDATE, reset the stored counter to 0 and
+    // disabled regression detection permanently. The single-use challenge is
+    // what stops replay; this is what stops a cloned counter.
+    if (!(ad.signCount > stored_sign_count ||
+          (ad.signCount == 0 && stored_sign_count == 0))) {
         error_out = "signCount regression — possible cloned authenticator";
         return std::nullopt;
     }

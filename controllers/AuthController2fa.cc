@@ -1305,24 +1305,25 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
         return;
     }
 
-    // Conditional UPDATE closes the TOCTOU window between the SELECT
-    // above and this write. With `sign_count < $1` two concurrent
-    // verifications of the same captured assertion would otherwise BOTH:
-    //   - SELECT the same storedCnt
-    //   - pass new_sign_count > storedCnt
-    //   - UPDATE sign_count = new_sign_count
-    // …completing twice for a single counter advance. The guard makes the
-    // second UPDATE a no-op (0 rows affected); the helper's sign_count
-    // regression check on the next legitimate login then rejects the
-    // cloned credential. RETURNING id lets us notice the miss and audit it.
+    // Conditional UPDATE, matching finishAuthentication's clone check so the
+    // durable state cannot disagree with the accept decision. Accept exactly:
+    //   * a strict advance (`$1 > sign_count`), or
+    //   * 0 against a stored 0 (a non-incrementing authenticator — Apple and
+    //     most platform passkeys always report 0; the helper allows a static
+    //     0 and clone detection is simply unavailable for them, so replay is
+    //     instead prevented by the single-use challenge claimed above).
     //
-    // The `$1 = 0` branch handles authenticators that never increment their
-    // counter (Apple/most platform passkeys always report 0). For those the
-    // helper accepts the assertion (WebAuthn allows a static 0), but
-    // `sign_count < $1` would be `0 < 0` = false and reject every login as a
-    // replay. Counter-based clone detection is simply unavailable for these
-    // keys; replay is instead prevented by the single-use challenge, which is
-    // atomically claimed from the session before finishAuthentication above.
+    // The previous guard was `$1 = 0::bigint OR sign_count < $1`. Its `$1 = 0`
+    // arm accepted a 0 even when the stored counter had advanced, and then
+    // wrote sign_count = 0 — so a cloned authenticator reporting 0 both passed
+    // and reset the counter, permanently disabling regression detection. The
+    // form below never lowers a counter that has moved.
+    //
+    // The strict-advance arm also closes the TOCTOU window: two concurrent
+    // verifications of the same captured assertion both SELECT the same
+    // storedCnt, but the first UPDATE moves sign_count to $1, so the second
+    // sees `$1 > sign_count` as false and affects 0 rows. RETURNING id lets us
+    // notice the miss and audit it.
     //
     // The `0::bigint` cast is load-bearing: an untyped `$1 = 0` makes Postgres
     // infer $1 as `integer`, but we bind an int64 (sign_count is bigint), so
@@ -1332,7 +1333,8 @@ void AuthController::webauthnLoginFinish(const HttpRequestPtr& req,
     auto upd = db->execSqlSync(
         "UPDATE user_webauthn_credentials "
         "   SET sign_count = $1, last_used_at = NOW() "
-        " WHERE id = $2 AND ($1 = 0::bigint OR sign_count < $1) "
+        " WHERE id = $2 "
+        "   AND ($1 > sign_count OR ($1 = 0::bigint AND sign_count = 0)) "
         "RETURNING id",
         static_cast<std::int64_t>(res->new_sign_count), credRowId);
     if (upd.empty()) {

@@ -521,3 +521,64 @@ DROGON_TEST(TwoFactor_EnrollmentFinishRequiresFreshPasswordAuthorization)
                 });
         });
 }
+
+// The sign-counter guard is what turns a cloned authenticator into a locked
+// account rather than an open door. Forging a signed assertion needs the
+// private key, so this exercises the guard at the DB layer against the exact
+// WHERE clause the verify path uses: a clone reporting 0 against a counter
+// that has advanced must be rejected AND must not reset the counter, while a
+// real advance and a genuinely non-incrementing key still succeed.
+DROGON_TEST(TwoFactor_SignCountGuardRejectsCounterRegression)
+{
+    auto db = app().getDbClient();
+    const std::string suffix   = uniqueSuffix();
+    const std::string incUser  = "wa_inc_"  + suffix;
+    const std::string zeroUser = "wa_zero_" + suffix;
+    const std::string incCred  = "cred-inc-"  + suffix;
+    const std::string zeroCred = "cred-zero-" + suffix;
+
+    db->execSqlSync("INSERT INTO users (username,email,password_hash) "
+                    "VALUES ($1,$2,'x'),($3,$4,'x')",
+                    incUser, incUser + "@t.test",
+                    zeroUser, zeroUser + "@t.test");
+    db->execSqlSync("INSERT INTO user_webauthn_credentials "
+                    "(user_id,credential_id,public_key,sign_count,nickname) "
+                    "SELECT id,$2,decode('a0','hex'),5,'inc' "
+                    "  FROM users WHERE username=$1",
+                    incUser, incCred);
+    db->execSqlSync("INSERT INTO user_webauthn_credentials "
+                    "(user_id,credential_id,public_key,sign_count,nickname) "
+                    "SELECT id,$2,decode('a0','hex'),0,'zero' "
+                    "  FROM users WHERE username=$1",
+                    zeroUser, zeroCred);
+
+    auto guard = [&](const std::string& cred, std::int64_t next) {
+        return db->execSqlSync(
+            "UPDATE user_webauthn_credentials "
+            "   SET sign_count=$1,last_used_at=NOW() "
+            " WHERE credential_id=$2 "
+            "   AND ($1 > sign_count OR ($1 = 0::bigint AND sign_count = 0)) "
+            "RETURNING id",
+            next, cred).size();
+    };
+    auto counter = [&](const std::string& cred) {
+        return db->execSqlSync(
+            "SELECT sign_count FROM user_webauthn_credentials "
+            " WHERE credential_id=$1", cred)[0]["sign_count"].as<std::int64_t>();
+    };
+
+    // Clone reporting 0 against an advanced counter: rejected, counter intact.
+    CHECK(guard(incCred, 0) == 0);
+    CHECK(counter(incCred) == 5);
+    // A genuine advance is accepted.
+    CHECK(guard(incCred, 6) == 1);
+    CHECK(counter(incCred) == 6);
+    // Replay of the same value is rejected (the TOCTOU arm).
+    CHECK(guard(incCred, 6) == 0);
+    // A non-incrementing authenticator (0 against stored 0) keeps working.
+    CHECK(guard(zeroCred, 0) == 1);
+    CHECK(guard(zeroCred, 0) == 1);
+
+    db->execSqlSync("DELETE FROM users WHERE username IN ($1,$2)",
+                    incUser, zeroUser);
+}
