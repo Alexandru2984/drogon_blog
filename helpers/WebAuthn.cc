@@ -7,6 +7,7 @@
 #include <sodium.h>
 
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -190,43 +191,59 @@ struct CoseKey {
     std::vector<unsigned char> y;
 };
 
+// Read a CBOR integer (major 0 unsigned or 1 negative) as a signed 64-bit
+// value, rejecting anything that would overflow. A CBOR negative int encodes
+// -1-n; computing that as `-(long long)n - 1` is signed-overflow UB for a
+// large n, so the magnitude is bounded first. COSE labels and the numeric
+// values we read are all small, so a value that does not fit is simply not a
+// key we can use.
+bool readCoseInt(CborReader& r, long long& out)
+{
+    int m;
+    std::uint64_t u;
+    if (!r.readHead(m, u)) return false;
+    if (u > static_cast<std::uint64_t>(std::numeric_limits<long long>::max()))
+        return false;
+    if (m == 0)      { out = static_cast<long long>(u);      return true; }
+    if (m == 1)      { out = -1 - static_cast<long long>(u); return true; }
+    return false;
+}
+
 bool parseCoseKey(const std::vector<unsigned char>& cose, CoseKey& out)
 {
     CborReader r(cose.data(), cose.size());
     int major;
     std::uint64_t mapLen;
     if (!r.readHead(major, mapLen) || major != 5) return false;
+
     for (std::uint64_t i = 0; i < mapLen; ++i) {
-        int km;
-        std::uint64_t kv;
-        if (!r.readHead(km, kv)) return false;
         long long key;
-        if (km == 0)      key = static_cast<long long>(kv);
-        else if (km == 1) key = -static_cast<long long>(kv) - 1;
-        else return false;
+        if (!readCoseInt(r, key)) return false;
 
-        int vm;
-        std::uint64_t vv;
-        if (!r.readHead(vm, vv)) return false;
-
-        auto signedValue = [&]() -> long long {
-            if (vm == 0) return static_cast<long long>(vv);
-            if (vm == 1) return -static_cast<long long>(vv) - 1;
-            return 0;
-        };
-
-        if (key == 1) out.kty = static_cast<int>(signedValue());
-        else if (key == 3) out.alg = static_cast<int>(signedValue());
-        else if (key == -1) out.crv = static_cast<int>(signedValue());
-        else if (key == -2 && vm == 2) { if (!r.readBytes(vv, out.x)) return false; }
-        else if (key == -3 && vm == 2) { if (!r.readBytes(vv, out.y)) return false; }
-        else {
-            // Skip unknown values. The header was already consumed, so
-            // for byte/text strings we still need to consume the body.
-            if (vm == 2 || vm == 3) {
-                std::vector<unsigned char> sink;
-                if (!r.readBytes(vv, sink)) return false;
-            }
+        if (key == 1 || key == 3 || key == -1) {
+            // kty / alg / crv are small integers. Read as 64-bit and reject
+            // anything outside int range rather than truncating it: a forged
+            // value must not be able to collapse onto a supported alg (-7/-8)
+            // via a narrowing cast.
+            long long val;
+            if (!readCoseInt(r, val)) return false;
+            if (val < std::numeric_limits<int>::min() ||
+                val > std::numeric_limits<int>::max()) return false;
+            if      (key == 1)  out.kty = static_cast<int>(val);
+            else if (key == 3)  out.alg = static_cast<int>(val);
+            else                out.crv = static_cast<int>(val);
+        } else if (key == -2 || key == -3) {
+            int vm;
+            std::uint64_t vv;
+            if (!r.readHead(vm, vv)) return false;
+            if (vm != 2) return false;                 // must be a byte string
+            if (!r.readBytes(vv, key == -2 ? out.x : out.y)) return false;
+        } else {
+            // Unknown label: skip the whole value (head + body, any type),
+            // depth-capped. The previous version only consumed byte/text
+            // bodies and left arrays/maps/tags mid-stream, desyncing the
+            // parser for everything after them.
+            if (!r.skip()) return false;
         }
     }
     return true;
