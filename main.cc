@@ -28,6 +28,7 @@
 #include <unordered_set>
 #include <cstdlib>
 #include <cctype>
+#include <stdexcept>
 
 namespace {
 
@@ -275,6 +276,47 @@ int main()
 
     // Rate limiting, CSRF (double-submit), and response security headers.
     security::registerAdvices();
+
+    // Turn uncaught exceptions that escape a handler into a controlled
+    // response instead of a bare 500. Two whole classes of malformed *input*
+    // reach this point as a throw, and Drogon's default answers 500 for both
+    // — which the access-log advice then escalates to Sentry, so an anonymous
+    // caller can mint unbounded error events by sending garbage:
+    //
+    //   * std::invalid_argument / std::out_of_range — an int path parameter is
+    //     bound with std::stoi before the handler runs, so GET /posts/abc or
+    //     an id past INT_MAX throws in the router, not in code we can guard.
+    //   * Json::Exception — a body that parses but is not an object (an array,
+    //     a bare string) makes (*json)["field"] throw resolveReference, and a
+    //     body nested past json_parser_stack_limit makes getJsonObject()
+    //     itself throw "Exceeded stackLimit" before the !json guard can run.
+    //
+    // All three are the client's fault, so answer 400 and keep them out of
+    // the error budget. Anything else is genuinely ours: 500, logged, and
+    // left for Sentry.
+    drogon::app().setExceptionHandler(
+        [](const std::exception& e,
+           const drogon::HttpRequestPtr& req,
+           std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+            const bool badInput =
+                dynamic_cast<const std::invalid_argument*>(&e) ||
+                dynamic_cast<const std::out_of_range*>(&e) ||
+                dynamic_cast<const Json::Exception*>(&e);
+
+            Json::Value body;
+            body["error"] = badInput ? "Bad request" : "Internal server error";
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+            resp->setStatusCode(badInput ? drogon::k400BadRequest
+                                         : drogon::k500InternalServerError);
+            if (badInput) {
+                LOG_DEBUG << "bad-input exception on " << req->getPath()
+                          << ": " << e.what();
+            } else {
+                LOG_ERROR << "unhandled exception on " << req->getPath()
+                          << ": " << e.what();
+            }
+            cb(resp);
+        });
 
     // Session registry + the advice that drops a revoked session before any
     // handler sees it. After security::registerAdvices() so the CSRF and
