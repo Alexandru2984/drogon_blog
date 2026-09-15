@@ -422,8 +422,21 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
 
         Criteria crit(Cols::_id, CompareOperator::GE, 1);   // always-true base
         const auto q = req->getParameter("q");
-        if (!q.empty() && q.size() <= 64)
-            crit = crit && Criteria(Cols::_username, CompareOperator::Like, q + "%");
+        if (!q.empty() && q.size() <= 64) {
+            // Treat the query as a literal prefix, not a LIKE pattern. Without
+            // escaping, a `%` matched every user and `_` matched any char, so
+            // "start a conversation" search doubled as a wildcard enumeration
+            // of the directory. Postgres LIKE uses backslash as its default
+            // escape, so escaping \ % _ in the term makes them literal.
+            std::string prefix;
+            prefix.reserve(q.size() + 4);
+            for (char c : q) {
+                if (c == '\\' || c == '%' || c == '_') prefix.push_back('\\');
+                prefix.push_back(c);
+            }
+            crit = crit && Criteria(Cols::_username,
+                                    CompareOperator::Like, prefix + "%");
+        }
         const auto before = req->getParameter("before");
         if (!before.empty()) {
             try { const long long v = std::stoll(before); if (v > 0)
