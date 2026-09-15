@@ -342,8 +342,22 @@ void UserController::uploadProfileImage(const HttpRequestPtr &req,
 
             try {
                 auto user = mapper.findByPrimaryKey(userIdOpt.value());
+                const std::string oldImage = user.getValueOfProfileImage();
                 user.setProfileImage(publicPath);
                 mapper.update(user);
+
+                // Delete the avatar this one replaces. Without it every
+                // re-upload left the previous JPEG behind, so uploads/profiles/
+                // grew without bound. Confined to the profiles dir and skipped
+                // when unchanged, so it can only ever remove a superseded
+                // avatar this endpoint wrote.
+                if (oldImage != publicPath &&
+                    oldImage.rfind("/uploads/profiles/", 0) == 0 &&
+                    oldImage.find("..") == std::string::npos)
+                {
+                    std::error_code oldEc;
+                    std::filesystem::remove("." + oldImage, oldEc);
+                }
 
                 Json::Value ret;
                 ret["message"]       = "Profile image uploaded successfully";
