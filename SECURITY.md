@@ -126,6 +126,18 @@ control.
   (nginx returns 404, the listener binds to loopback), so the token is a second
   layer rather than the only one.
 
+- **The production host runs Drogon 1.9.11 while the container image pins
+  1.9.13.** No CVE forces alignment: the disclosed Drogon advisories
+  (CVE-2022-25297 < 1.7.5, CVE-2022-3959 ≤ 1.8.1) are all far behind 1.9.11,
+  and the 1.9.12/1.9.13 notes carry no security advisory. The only
+  security-shaped change in the gap is 1.9.13's "fix parsing invalid numbers in
+  HTTP headers" (defensive) and an `execvp`-for-`system` change in
+  `SharedLibManager`, which is unreachable here (`load_dynamic_views` is
+  `false`). The drift is therefore a fidelity issue — CI/Docker exercise a
+  different framework build than production — not an exposure. Close it by
+  standardising both on one version (rebuild the host to 1.9.13, or pin the
+  image/README to 1.9.11) whenever the app is next rebuilt; there is no urgency.
+
 ---
 
 ## Controls overview
