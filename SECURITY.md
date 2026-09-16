@@ -102,6 +102,7 @@ the application are tracked with the operator runbook, not here.
 - **IDOR on writes.** All mutation handlers (`updatePost`, `deletePost`, `updateComment`, `deleteComment`, `markAsRead`, `deleteMessage`) cross-check `session.user_id` against the row's owner before mutating.
 - **Avatar path traversal.** The upload filename is generated server-side (`profile_<user_id>_<unix_ts><ext>`); the user-supplied filename is discarded except for its extension. Decompression-bomb and EXIF risks are addressed in the follow-up image-pipeline work (libvips).
 - **CSRF.** Mutating endpoints require a double-submit cookie/header match (see `helpers/Security.cc`).
+- **Client-side auth surface (SPA).** The session cookie is `HttpOnly`, so it is invisible to JavaScript; no token is ever placed in `localStorage`/`sessionStorage` (those hold only theme and locale). The API client is same-origin with `withCredentials` and echoes the readable CSRF cookie only on mutating verbs. Rendered post bodies pass cmark SAFE → DOMPurify (`sanitizePostHtml`) → highlight.js, which is fed inert `textContent` and emits its own escaped markup, so the `v-html` and `innerHTML` sinks carry no attacker HTML. The post-login redirect is filtered by `LoginView.safeNext` (single-leading-slash paths only). Route auth is enforced by the server (404 to non-staff, per `helpers/Roles.h`); the `meta.auth` router guard is UX only and never the authority.
 
 ### Known limitations
 
