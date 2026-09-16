@@ -47,7 +47,14 @@ AvatarResult fail(int status, std::string msg)
 
 bool initLibrary()
 {
-    return VIPS_INIT("drogon-blog") == 0;
+    if (VIPS_INIT("drogon-blog") != 0) return false;
+    // Defence-in-depth: the upload pipeline runs libvips over attacker-supplied
+    // files. Block libvips's less-audited ("untrusted") loaders from touching
+    // that input, so a malicious file in an obscure format cannot select a
+    // rarely-exercised decoder — only the mainstream JPEG/PNG/WebP/GIF paths,
+    // which the magic-byte sniffer already gates to, stay reachable.
+    vips_block_untrusted_set(TRUE);
+    return true;
 }
 
 void shutdownLibrary()
