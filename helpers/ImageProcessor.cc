@@ -53,7 +53,13 @@ bool initLibrary()
     // that input, so a malicious file in an obscure format cannot select a
     // rarely-exercised decoder — only the mainstream JPEG/PNG/WebP/GIF paths,
     // which the magic-byte sniffer already gates to, stay reachable.
+    //
+    // vips_block_untrusted_set() landed in libvips 8.13; guard by version so
+    // the code still compiles against older libvips (the CI drogon:latest
+    // image predates it). Production runs 8.18, so the block is applied there.
+#if VIPS_VERSION_MAJOR > 8 || (VIPS_VERSION_MAJOR == 8 && VIPS_VERSION_MINOR >= 13)
     vips_block_untrusted_set(TRUE);
+#endif
     return true;
 }
 
