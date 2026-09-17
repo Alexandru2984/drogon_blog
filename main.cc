@@ -13,6 +13,7 @@
 #include "helpers/PublicPages.h"
 #include "helpers/Roles.h"
 #include "helpers/Security.h"
+#include "helpers/Scheduler.h"
 #include "helpers/Sessions.h"
 #include "helpers/Workers.h"
 #include "controllers/MessageWebSocket.h"
@@ -229,6 +230,7 @@ int main()
     workers::start();
 
     EmailHelper::start();
+    scheduler::start();   // publishes scheduled posts when their time arrives
     presence::install();
     sentry::install();
 
@@ -289,6 +291,7 @@ int main()
         // Workers first: an in-flight job may still be talking to the
         // database or libvips, and both are torn down below.
         workers::stop();
+        scheduler::stop();
         pglisten::stop();
         EmailHelper::stop();
         presence::stop();
@@ -372,10 +375,11 @@ int main()
     api_docs::install();
 
     // /feed.xml (Atom 1.0) + /preview/posts/{id} (OpenGraph/Twitter cards).
-    public_pages::install(
-        std::getenv("BLOG_SITE_ORIGIN")
-            ? std::getenv("BLOG_SITE_ORIGIN")
-            : "https://blog.micutu.com");
+    // Read the env once: a second getenv() is not guaranteed to return the
+    // same non-null pointer, so `getenv(x) ? getenv(x) : default` can hand a
+    // null to the std::string parameter (clang-analyzer flags exactly this).
+    const char* siteOrigin = std::getenv("BLOG_SITE_ORIGIN");
+    public_pages::install(siteOrigin ? siteOrigin : "https://blog.micutu.com");
 
     // Graceful shutdown.
     //

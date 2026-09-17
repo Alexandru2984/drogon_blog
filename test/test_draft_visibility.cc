@@ -2,6 +2,8 @@
 #include <drogon/drogon_test.h>
 #include <drogon/HttpClient.h>
 
+#include "../helpers/Scheduler.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -131,6 +133,31 @@ HttpRequestPtr anonGet(const std::string& path)
     req->setMethod(Get);
     req->setPath(path);
     return req;
+}
+
+// Creates a post scheduled to publish at `publishAt` (an ISO timestamp).
+HttpRequestPtr makeScheduledPost(const std::string& title,
+                                 const std::string& content,
+                                 const std::string& publishAt)
+{
+    Json::Value body;
+    body["title"]      = title;
+    body["content"]    = content;
+    body["publish_at"] = publishAt;
+    auto req = HttpRequest::newHttpJsonRequest(body);
+    req->setMethod(Post);
+    req->setPath("/posts");
+    return req;
+}
+
+// Whether GET /posts (the anonymous feed) currently carries `postId`.
+bool feedContains(const HttpResponsePtr& resp, int postId)
+{
+    auto json = resp->getJsonObject();
+    if (!json) return false;
+    for (const auto& p : (*json)["posts"])
+        if (p["id"].asInt() == postId) return true;
+    return false;
 }
 
 } // namespace
@@ -381,6 +408,87 @@ DROGON_TEST(Drafts_AreAbsentFromPublicDiscoverySurfaces)
                             REQUIRE(r == ReqResult::Ok);
                             CHECK(resp->getStatusCode() == k404NotFound);
                         });
+                });
+        });
+}
+
+// A scheduled post is a draft until its time arrives: invisible on the feed,
+// then published — with the follower notification — by the scheduler sweep.
+DROGON_TEST(Scheduled_PostIsHiddenUntilSwept)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+    const std::string token = "sched_" + uniqueSuffix();
+
+    withAuthor(client, "scheduler",
+        [TEST_CTX, client, token](const Author& a) {
+            // A fixed far-future UTC instant, unambiguous regardless of the
+            // server timezone — the exact time does not matter because the
+            // test forces the row due below before sweeping.
+            auto create = makeScheduledPost("Scheduled " + token,
+                                            "Body " + token + ".",
+                                            "2099-01-01T00:00:00Z");
+            a.attachAuth(create);
+
+            client->sendRequest(create,
+                [TEST_CTX, client, token](ReqResult, const HttpResponsePtr& c) {
+                    REQUIRE(c->getStatusCode() == k201Created);
+                    auto cj = c->getJsonObject();
+                    REQUIRE(cj);
+                    // Stored as a draft, and the schedule time is echoed back.
+                    CHECK((*cj)["post"]["is_draft"].asBool() == true);
+                    CHECK((*cj)["post"].isMember("scheduled_at"));
+                    const int postId = (*cj)["post"]["id"].asInt();
+                    REQUIRE(postId > 0);
+
+                    // Not on the public feed while scheduled.
+                    client->sendRequest(anonGet("/posts"),
+                        [TEST_CTX, client, postId](ReqResult,
+                                                   const HttpResponsePtr& before) {
+                            REQUIRE(before->getStatusCode() == k200OK);
+                            CHECK(feedContains(before, postId) == false);
+
+                            // Force it due, then run one deterministic sweep.
+                            auto db = app().getDbClient();
+                            db->execSqlSync(
+                                "UPDATE posts SET scheduled_at = now() - "
+                                "interval '1 minute' WHERE id = $1", postId);
+                            const auto published = scheduler::publishDueNow();
+                            CHECK(published >= 1);
+
+                            // Now live on the feed.
+                            client->sendRequest(anonGet("/posts"),
+                                [TEST_CTX, postId](ReqResult,
+                                                   const HttpResponsePtr& after) {
+                                    REQUIRE(after->getStatusCode() == k200OK);
+                                    CHECK(feedContains(after, postId) == true);
+                                });
+                        });
+                });
+        });
+}
+
+// A malformed or past publish_at is a 400, never a 500 and never a silent
+// publish-now.
+DROGON_TEST(Scheduled_RejectsInvalidPublishAt)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+
+    withAuthor(client, "schedbad",
+        [TEST_CTX, client](const Author& a) {
+            auto garbage = makeScheduledPost("bad ts", "body",
+                                             "not-a-timestamp");
+            a.attachAuth(garbage);
+            client->sendRequest(garbage,
+                [TEST_CTX](ReqResult, const HttpResponsePtr& r) {
+                    CHECK(r->getStatusCode() == k400BadRequest);
+                });
+
+            auto past = makeScheduledPost("past ts", "body",
+                                          "2000-01-01T00:00:00Z");
+            a.attachAuth(past);
+            client->sendRequest(past,
+                [TEST_CTX](ReqResult, const HttpResponsePtr& r) {
+                    CHECK(r->getStatusCode() == k400BadRequest);
                 });
         });
 }

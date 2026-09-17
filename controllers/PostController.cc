@@ -335,7 +335,7 @@ void PostController::getMyDrafts(const HttpRequestPtr &req,
     static const std::string kSql =
         std::string(
         "SELECT p.id, p.title, p.content, p.created_at, p.updated_at, "
-        "       p.reading_minutes, p.excerpt, ") + post_meta::kTagsJsonColumn + " "
+        "       p.reading_minutes, p.excerpt, p.scheduled_at, ") + post_meta::kTagsJsonColumn + " "
         "FROM posts p "
         "WHERE p.user_id = $1 AND p.published_at IS NULL AND p.hidden_at IS NULL "
         "ORDER BY p.updated_at DESC "
@@ -356,6 +356,11 @@ void PostController::getMyDrafts(const HttpRequestPtr &req,
                 post["updated_at"]      = row["updated_at"].as<std::string>();
                 post["reading_minutes"] = row["reading_minutes"].as<int>();
                 post["is_draft"]        = true;
+                // A scheduled draft carries the time it will go live, so the
+                // author's drafts list can show "scheduled for …" rather than
+                // an indistinguishable plain draft.
+                if (!row["scheduled_at"].isNull())
+                    post["scheduled_at"] = row["scheduled_at"].as<std::string>();
                 if (!row["excerpt"].isNull())
                     post["excerpt"] = row["excerpt"].as<std::string>();
                 post["tags"] = post_meta::tagsFromJson(
@@ -872,39 +877,86 @@ void PostController::createPost(const HttpRequestPtr &req,
     // `"draft": true` withholds it.
     const bool asDraft = (*json)["draft"].isBool() && (*json)["draft"].asBool();
 
+    // Optional future publish time. A scheduled post is stored as a draft
+    // (published_at NULL) carrying scheduled_at; helpers/Scheduler flips it
+    // live at that moment. Absent or empty means no schedule.
+    const std::string publishAtRaw = (*json)["publish_at"].isString()
+        ? (*json)["publish_at"].asString() : std::string{};
+
     try {
+        // Validate the schedule time against the database clock (the same one
+        // the scheduler compares against), before writing anything. A bad
+        // format is a 400, not a 500, and a time in the past is rejected
+        // rather than silently publishing now.
+        std::optional<std::string> scheduledAt;
+        if (!publishAtRaw.empty()) {
+            bool future = false;
+            try {
+                future = dbClient->execSqlSync(
+                    "SELECT $1::timestamptz > now() AS future",
+                    publishAtRaw)[0]["future"].as<bool>();
+            } catch (const DrogonDbException&) {
+                Json::Value ret;
+                ret["error"] = "Invalid publish_at timestamp";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k400BadRequest);
+                callback(resp);
+                return;
+            }
+            if (!future) {
+                Json::Value ret;
+                ret["error"] = "publish_at must be in the future";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k400BadRequest);
+                callback(resp);
+                return;
+            }
+            scheduledAt = publishAtRaw;
+        }
+
         // Raw SQL rather than the ORM mapper: the generated model predates
         // this migration and has no accessor for published_at, and
         // regenerating every model file to add one column is a much larger
         // diff than the feature warrants.
+        //
+        // published_at is withheld (draft) when explicitly a draft OR when a
+        // schedule is set; scheduled_at carries the future time in that case.
         auto ins = dbClient->execSqlSync(
             "INSERT INTO posts (user_id, title, content, content_html, "
-            "                   reading_minutes, excerpt, published_at) "
+            "                   reading_minutes, excerpt, published_at, scheduled_at) "
             "VALUES ($1, $2, $3, $4, $5::int, $6, "
-            "        CASE WHEN $7::bool THEN NULL ELSE now() END) "
-            "RETURNING id, created_at, published_at",
+            "        CASE WHEN $7::bool OR $8::timestamptz IS NOT NULL "
+            "             THEN NULL ELSE now() END, "
+            "        $8::timestamptz) "
+            "RETURNING id, created_at, published_at, scheduled_at",
             userIdOpt.value(), title, content, contentHtml,
-            readingMinutes, excerpt, asDraft);
+            readingMinutes, excerpt, asDraft, scheduledAt);
 
-        const int newId = ins[0]["id"].as<int>();
+        const int  newId         = ins[0]["id"].as<int>();
+        const bool isDraftResult = ins[0]["published_at"].isNull();
+        const bool scheduled     = !ins[0]["scheduled_at"].isNull();
         post_meta::syncPostTags(dbClient, newId, tags);
 
-        // Followers hear about published posts, not drafts. A draft that
-        // notified everyone the moment it was saved would be the single
-        // most annoying thing this feature could do.
-        if (!asDraft) {
+        // Followers hear about a post when it actually goes live, not when it
+        // is saved as a draft or scheduled. The scheduler emits the follower
+        // notification at publish time for scheduled posts.
+        if (!isDraftResult) {
             notifications::emitNewPostToFollowers(dbClient, userIdOpt.value(), newId);
         }
 
         Json::Value ret;
-        ret["message"] = asDraft ? "Draft saved" : "Post created successfully";
+        ret["message"] = scheduled     ? "Post scheduled"
+                       : isDraftResult ? "Draft saved"
+                                       : "Post created successfully";
         ret["post"]["id"]              = newId;
         ret["post"]["title"]           = title;
         ret["post"]["content"]         = content;
         ret["post"]["content_html"]    = contentHtml;
         ret["post"]["reading_minutes"] = readingMinutes;
         ret["post"]["excerpt"]         = excerpt;
-        ret["post"]["is_draft"]        = asDraft;
+        ret["post"]["is_draft"]        = isDraftResult;
+        if (scheduled)
+            ret["post"]["scheduled_at"] = ins[0]["scheduled_at"].as<std::string>();
         ret["post"]["tags"]            = post_meta::tagsForPost(dbClient, newId);
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);

@@ -2386,6 +2386,15 @@ components:
             A draft is invisible to everyone but its author — absent from
             the feed, tag listings and search, and `404` rather than `403`
             to another reader.
+        publish_at:
+          type: string
+          format: date-time
+          description: |
+            Optional future time to publish automatically. While it is in the
+            future the post is stored as a draft carrying this time (returned
+            as `scheduled_at`); a background sweep publishes it — and notifies
+            followers — when it arrives. Must be in the future: a past or
+            malformed value is a `400`.
 
     PostUpdate:
       type: object
