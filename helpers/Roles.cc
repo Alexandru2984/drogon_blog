@@ -183,7 +183,7 @@ void install()
 {
     // Deferred onto the loop: Drogon builds its DB client pool inside
     // run(), so getDbClient() at install time asserts on an empty map.
-    // Same shape as flags::install() and sessions::install().
+    // Same shape as sessions::install().
     drogon::app().getLoop()->queueInLoop([] {
         try {
             auto db = drogon::app().getDbClient();

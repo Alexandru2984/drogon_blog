@@ -83,8 +83,6 @@ tags:
     description: Data portability and erasure — download a copy of the account, or end it.
   - name: Moderation
     description: Abuse reports, plus the staff-only queue and the hide / suspend actions behind it.
-  - name: Flags
-    description: Feature flags as evaluated for the calling user.
 
 security:
   - sessionCookie: []
@@ -2142,61 +2140,6 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/CsrfMissing' }
         '404': { $ref: '#/components/responses/NotFound' }
-
-  # --------------------------------------------------------- Feature flags
-  /flags:
-    get:
-      tags: [Flags]
-      summary: Public feature flags as evaluated for the caller
-      description: |
-        Only flags marked public are listed — the rest are not leaked by key,
-        since a flag name describes unreleased work. Cached `private` for 30 s
-        so a page load does not re-evaluate the whole set.
-      security: []
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  flags:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        key:     { type: string }
-                        enabled: { type: boolean }
-
-  /flags/{key}:
-    get:
-      tags: [Flags]
-      summary: One flag, evaluated for the caller
-      description: |
-        An unknown key answers `200` with `known: false, enabled: false`
-        rather than `404`. A client asking about a flag it has been shipped
-        with should get a usable answer, not an error, when the server has
-        not heard of it yet.
-      security: []
-      parameters:
-        - name: key
-          in: path
-          required: true
-          schema: { type: string, maxLength: 64 }
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  key:     { type: string }
-                  known:   { type: boolean }
-                  enabled: { type: boolean }
-        '400': { $ref: '#/components/responses/BadRequest' }
-
 
 components:
   securitySchemes:

@@ -29,5 +29,3 @@ isn't in the README", that's the trigger.
 | [0006](0006-pg-notify-over-redis-pubsub.md) | pg_notify (not Redis pub/sub) for WS fan-out |
 | [0007](0007-hiredis-sync-presence.md)   | Hiredis sync API for presence, not drogon::RedisClient |
 | [0008](0008-sync-write-access-log.md)   | Synchronous write(2) for access log |
-| [0009](0009-readonly-grpc.md)           | gRPC surface stays read-only |
-| [0010](0010-deterministic-flag-bucketing.md) | sha256(key:user_id)%100 for feature flag bucketing |

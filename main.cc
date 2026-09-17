@@ -7,7 +7,6 @@
 #include "helpers/Markdown.h"
 #include "helpers/ApiDocs.h"
 #include "helpers/Ops.h"
-#include "helpers/Flags.h"
 #include "helpers/PgListener.h"
 #include "helpers/Presence.h"
 #include "helpers/Sentry.h"
@@ -232,7 +231,6 @@ int main()
     EmailHelper::start();
     presence::install();
     sentry::install();
-    flags::install();
 
     // Cross-process WebSocket fan-out: a dedicated libpq connection LISTENs
     // on `blog_event` and routes every notification into the in-process
@@ -284,14 +282,6 @@ int main()
                 roles::onBanChangedNotification(
                     root["user_id"].asInt(),
                     root.get("banned", false).asBool());
-            }
-            else if (kind == "flag_changed")
-            {
-                // Migration 0007 routes feature_flags mutations
-                // through the same channel. The whole cache reloads
-                // — the table is small, and a partial update would
-                // double the surface for stale reads on delete.
-                flags::reload();
             }
         });
 

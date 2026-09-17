@@ -100,7 +100,7 @@ void install()
     // Deferred onto the loop rather than run here: Drogon builds its DB
     // client pool inside run(), so calling getDbClient() at install time
     // trips an assertion on an empty map. Same reason and same shape as
-    // flags::install(). Queueing it means it fires as soon as the loop
+    // roles::install(). Queueing it means it fires as soon as the loop
     // starts pumping, by which point the pool exists.
     drogon::app().getLoop()->queueInLoop([] {
         try {
