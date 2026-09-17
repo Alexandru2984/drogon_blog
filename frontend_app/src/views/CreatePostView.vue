@@ -11,6 +11,9 @@ const tagsInput = ref('')
 const loading = ref(false)
 const savingDraft = ref(false)
 const error = ref('')
+// Optional "publish later" time, as the <input type="datetime-local"> local
+// string (e.g. "2026-09-20T14:30"). Converted to a UTC ISO instant on submit.
+const scheduleAt = ref('')
 
 // Split on commas here rather than sending the raw string, so what the
 // author sees in the field is what gets sent. The server normalises and
@@ -176,21 +179,35 @@ async function save(asDraft: boolean) {
   }
   if (asDraft) savingDraft.value = true
   else         loading.value = true
+  // A schedule only applies to a publish, not to an explicit "save as draft".
+  const scheduled = !asDraft && !!scheduleAt.value
   try {
-    const res = await postsApi.create({
+    const payload: {
+      title: string; content: string; tags: string[]
+      draft: boolean; publish_at?: string
+    } = {
       title:   title.value,
       content: content.value,
       tags:    tagList(),
       draft:   asDraft,
-    })
-    toasts.push(asDraft ? 'Draft saved' : 'Post published', 'ok')
-    // A draft goes to the drafts list, where the author can keep working;
-    // a published post goes to the post, which is what they just made.
-    router.push(asDraft
+    }
+    // datetime-local is a local wall-clock time; send the UTC instant so the
+    // server schedules the moment the author actually meant.
+    if (scheduled) payload.publish_at = new Date(scheduleAt.value).toISOString()
+
+    const res = await postsApi.create(payload)
+    toasts.push(scheduled ? 'Post scheduled'
+                          : asDraft ? 'Draft saved' : 'Post published', 'ok')
+    // A scheduled post is a draft until it fires, so it joins the drafts list
+    // (which shows its go-live time); a plain draft goes there too, and a
+    // published post goes to the post the author just made.
+    router.push(scheduled || asDraft
       ? { name: 'drafts' }
       : { name: 'post', params: { id: res.post.id } })
   } catch (e: any) {
-    error.value = e?.response?.data?.error ?? (asDraft ? 'Failed to save' : 'Failed to publish')
+    error.value = e?.response?.data?.error
+      ?? (scheduled ? 'Failed to schedule'
+                    : asDraft ? 'Failed to save' : 'Failed to publish')
   } finally {
     loading.value = false
     savingDraft.value = false
@@ -281,9 +298,18 @@ function submit() { save(false) }
 
     <!-- The two actions wrap onto separate rows rather than shrinking; at
          320 px "Publishing…" and "Cancel" side by side clipped both. -->
+    <label for="post-schedule" style="margin-top: var(--sp-5);">Schedule for later (optional)</label>
+    <div class="row tight">
+      <input id="post-schedule" type="datetime-local" v-model="scheduleAt"
+             :disabled="loading || savingDraft" />
+      <button v-if="scheduleAt" type="button" class="btn quiet"
+              @click="scheduleAt = ''">Clear</button>
+    </div>
+
     <div class="row tight" style="margin-top: var(--sp-5);">
       <button :disabled="loading || savingDraft || !title.trim() || !content.trim()">
-        {{ loading ? 'Publishing…' : 'Publish' }}
+        {{ loading ? (scheduleAt ? 'Scheduling…' : 'Publishing…')
+                   : (scheduleAt ? 'Schedule'    : 'Publish') }}
       </button>
       <!-- type=button so it does not submit the form: saving a draft is a
            different action, not a variant of publishing. -->

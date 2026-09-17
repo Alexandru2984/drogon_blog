@@ -23,6 +23,9 @@ export interface Post {
   // there is not a missing field.
   published_at?: string | null
   is_draft?: boolean
+  // Set on a scheduled draft (via /posts/drafts and the create response): the
+  // future time the scheduler will publish it at.
+  scheduled_at?: string | null
   reading_minutes?: number
   view_count?: number
   excerpt?: string
@@ -109,7 +112,7 @@ export const postsApi = {
       .post<PreviewResult>('/posts/preview', { content }, { signal })
       .then(r => r.data)
   },
-  create(payload: { title: string; content: string; tags?: string[]; draft?: boolean }) {
+  create(payload: { title: string; content: string; tags?: string[]; draft?: boolean; publish_at?: string }) {
     return api.post('/posts', payload).then(r => r.data)
   },
   // Upload an inline image; returns a same-origin URL to embed as Markdown

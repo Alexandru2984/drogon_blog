@@ -103,6 +103,10 @@ function iso(s: string) {
       Last edited
       <time v-if="iso(d.updated_at)" :datetime="iso(d.updated_at)">{{ when(d.updated_at) }}</time>
     </p>
+    <p v-if="d.scheduled_at" class="faint draft-when">
+      📅 Scheduled to publish
+      <time :datetime="iso(d.scheduled_at)">{{ when(d.scheduled_at) }}</time>
+    </p>
 
     <div class="row tight">
       <button :disabled="busyId === d.id" @click="publish(d)">
