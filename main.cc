@@ -11,7 +11,6 @@
 #include "helpers/PgListener.h"
 #include "helpers/Presence.h"
 #include "helpers/Sentry.h"
-#include "helpers/GrpcServer.h"
 #include "helpers/PublicPages.h"
 #include "helpers/Roles.h"
 #include "helpers/Security.h"
@@ -233,7 +232,6 @@ int main()
     EmailHelper::start();
     presence::install();
     sentry::install();
-    rpc::install();
     flags::install();
 
     // Cross-process WebSocket fan-out: a dedicated libpq connection LISTENs
@@ -305,7 +303,6 @@ int main()
         EmailHelper::stop();
         presence::stop();
         sentry::stop();
-        rpc::stop();
         image::shutdownLibrary();
     });
 

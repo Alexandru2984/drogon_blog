@@ -34,13 +34,6 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../controllers TEST_CTL_SRC)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../helpers     TEST_HELPER_SRC)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/../models      TEST_MODEL_SRC)
 
-# Strip the gRPC bridge sources from the test build — the tests don't
-# exercise the gRPC surface (the REST controllers cover the same DB
-# code paths) and pulling them in would require teaching this CMake
-# about the protoc codegen step. Easier to keep the test target
-# pure-REST.
-list(FILTER TEST_HELPER_SRC EXCLUDE REGEX "/GrpcServer\\.cc$")
-
 target_sources(${PROJECT_NAME} PRIVATE
     ${TEST_CTL_SRC}
     ${TEST_HELPER_SRC}
@@ -73,34 +66,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LIBPQ_LIBRARIES}
     ${HIREDIS_LIBRARIES}
     brotlidec brotlienc)
-
-# Exercise the optional gRPC reader whenever the toolchain is present. Reuse
-# the protobuf outputs generated for the production build and compile the
-# exact service implementation that ships, instead of testing a SQL
-# look-alike.
-if (BLOG_GRPC_AVAILABLE)
-    set(TEST_GRPC_GENERATED_SOURCES
-        ${CMAKE_BINARY_DIR}/proto/blog.pb.cc
-        ${CMAKE_BINARY_DIR}/proto/blog.grpc.pb.cc)
-    # GENERATED was directory-scoped before CMake 3.20, so repeat the property
-    # here where the test target consumes the parent's custom-command outputs.
-    set_source_files_properties(${TEST_GRPC_GENERATED_SOURCES}
-        PROPERTIES GENERATED TRUE)
-    target_sources(${PROJECT_NAME} PRIVATE
-        test_grpc.cc
-        ${TEST_GRPC_GENERATED_SOURCES}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/grpc/BlogReaderService.cc)
-    add_dependencies(${PROJECT_NAME} blog_grpc_codegen)
-    target_include_directories(${PROJECT_NAME} PRIVATE
-        ${CMAKE_BINARY_DIR}/proto
-        ${GRPCPP_INCLUDE_DIRS}
-        ${PROTOBUF_INCLUDE_DIRS})
-    target_link_directories(${PROJECT_NAME} PRIVATE
-        ${GRPCPP_LIBRARY_DIRS}
-        ${PROTOBUF_LIBRARY_DIRS})
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        ${GRPCPP_LIBRARIES}
-        ${PROTOBUF_LIBRARIES})
-endif ()
 
 ParseAndAddDrogonTests(${PROJECT_NAME})
