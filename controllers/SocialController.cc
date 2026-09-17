@@ -50,44 +50,17 @@ HttpResponsePtr serverError(const char* what)
 // Shared shape for any list of posts this controller returns, so the
 // bookmarks page and the following feed render with the same client code as
 // the main feed.
-Json::Value postRow(const Row& row)
-{
-    Json::Value post;
-    const auto id      = row["id"].as<int64_t>();
-    post["id"]         = id;
-    post["title"]      = row["title"].as<std::string>();
-    post["content"]    = row["content"].as<std::string>();
-    if (!row["content_html"].isNull())
-        post["content_html"] = row["content_html"].as<std::string>();
-    post["created_at"]      = row["created_at"].as<std::string>();
-    post["updated_at"]      = row["updated_at"].as<std::string>();
-    post["reading_minutes"] = row["reading_minutes"].as<int>();
-    post["view_count"]      = row["view_count"].as<int64_t>();
-    if (!row["excerpt"].isNull())
-        post["excerpt"] = row["excerpt"].as<std::string>();
-
-    post["tags"] = post_meta::tagsFromJson(row["tags_json"].as<std::string>());
-
-    if (!row["author_id"].isNull()) {
-        post["author"]["id"]       = row["author_id"].as<int64_t>();
-        post["author"]["username"] = row["author_username"].as<std::string>();
-        if (!row["author_profile_image"].isNull()) {
-            const auto img = row["author_profile_image"].as<std::string>();
-            if (!img.empty()) post["author"]["profile_image"] = img;
-        }
-    }
-    return post;
-}
-
 Json::Value postList(const Result& r)
 {
+    // Shared with PostController's feed/tag listings so every post list emits
+    // the same shape (see post_meta::feedRowJson).
     Json::Value out(Json::arrayValue);
-    for (const auto& row : r) out.append(postRow(row));
+    for (const auto& row : r) out.append(post_meta::feedRowJson(row));
     return out;
 }
 
 // The column list every post query in this file selects. Kept in one place
-// so postRow() and the queries cannot drift apart.
+// so post_meta::feedRowJson() and the queries cannot drift apart.
 //
 // Tags ride along as a JSON column rather than arriving from a follow-up
 // tagsForPosts() call. That call is execSqlSync, and postList() runs inside

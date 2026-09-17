@@ -193,6 +193,34 @@ Json::Value tagsFromJson(const std::string& text)
     return parsed;
 }
 
+Json::Value feedRowJson(const Row& row)
+{
+    Json::Value post;
+    post["id"]              = row["id"].as<int64_t>();
+    post["title"]           = row["title"].as<std::string>();
+    post["content"]         = row["content"].as<std::string>();
+    if (!row["content_html"].isNull())
+        post["content_html"] = row["content_html"].as<std::string>();
+    post["created_at"]      = row["created_at"].as<std::string>();
+    post["updated_at"]      = row["updated_at"].as<std::string>();
+    post["reading_minutes"] = row["reading_minutes"].as<int>();
+    post["view_count"]      = row["view_count"].as<int64_t>();
+    if (!row["excerpt"].isNull())
+        post["excerpt"] = row["excerpt"].as<std::string>();
+
+    post["tags"] = tagsFromJson(row["tags_json"].as<std::string>());
+
+    if (!row["author_id"].isNull()) {
+        post["author"]["id"]       = row["author_id"].as<int64_t>();
+        post["author"]["username"] = row["author_username"].as<std::string>();
+        if (!row["author_profile_image"].isNull()) {
+            const auto img = row["author_profile_image"].as<std::string>();
+            if (!img.empty()) post["author"]["profile_image"] = img;
+        }
+    }
+    return post;
+}
+
 bool isDraft(const DbClientPtr& db, int postId)
 {
     try {

@@ -142,33 +142,11 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         ret["posts"] = Json::Value(Json::arrayValue);
 
         for (const auto& row : r) {
-            Json::Value post;
-            const auto id      = row["id"].as<int64_t>();
-            post["id"]         = id;
-            post["title"]      = row["title"].as<std::string>();
-            post["content"]    = row["content"].as<std::string>();
-            if (!row["content_html"].isNull())
-                post["content_html"] = row["content_html"].as<std::string>();
-            post["created_at"] = row["created_at"].as<std::string>();
-            post["updated_at"] = row["updated_at"].as<std::string>();
+            Json::Value post = post_meta::feedRowJson(row);
+            // published_at rides along only on this listing (the feed shows a
+            // draft badge); the shared serializer omits it.
             if (!row["published_at"].isNull())
                 post["published_at"] = row["published_at"].as<std::string>();
-            post["reading_minutes"] = row["reading_minutes"].as<int>();
-            post["view_count"]      = row["view_count"].as<int64_t>();
-            if (!row["excerpt"].isNull())
-                post["excerpt"] = row["excerpt"].as<std::string>();
-
-            post["tags"] = post_meta::tagsFromJson(
-                row["tags_json"].as<std::string>());
-
-            if (!row["author_id"].isNull()) {
-                post["author"]["id"]       = row["author_id"].as<int64_t>();
-                post["author"]["username"] = row["author_username"].as<std::string>();
-                if (!row["author_profile_image"].isNull()) {
-                    auto img = row["author_profile_image"].as<std::string>();
-                    if (!img.empty()) post["author"]["profile_image"] = img;
-                }
-            }
             ret["posts"].append(post);
         }
 
@@ -320,32 +298,7 @@ void PostController::getPostsByTag(const HttpRequestPtr &req,
             ret["posts"] = Json::Value(Json::arrayValue);
 
             for (const auto& row : r) {
-                Json::Value post;
-                const auto id      = row["id"].as<int64_t>();
-                post["id"]         = id;
-                post["title"]      = row["title"].as<std::string>();
-                post["content"]    = row["content"].as<std::string>();
-                if (!row["content_html"].isNull())
-                    post["content_html"] = row["content_html"].as<std::string>();
-                post["created_at"]      = row["created_at"].as<std::string>();
-                post["updated_at"]      = row["updated_at"].as<std::string>();
-                post["reading_minutes"] = row["reading_minutes"].as<int>();
-                post["view_count"]      = row["view_count"].as<int64_t>();
-                if (!row["excerpt"].isNull())
-                    post["excerpt"] = row["excerpt"].as<std::string>();
-
-                post["tags"] = post_meta::tagsFromJson(
-                    row["tags_json"].as<std::string>());
-
-                if (!row["author_id"].isNull()) {
-                    post["author"]["id"]       = row["author_id"].as<int64_t>();
-                    post["author"]["username"] = row["author_username"].as<std::string>();
-                    if (!row["author_profile_image"].isNull()) {
-                        auto img = row["author_profile_image"].as<std::string>();
-                        if (!img.empty()) post["author"]["profile_image"] = img;
-                    }
-                }
-                ret["posts"].append(post);
+                ret["posts"].append(post_meta::feedRowJson(row));
             }
             callback(HttpResponse::newHttpJsonResponse(ret));
         },

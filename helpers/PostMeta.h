@@ -90,6 +90,16 @@ extern const char kTagsJsonColumn[];
 // tagsForPosts degrades when its query fails.
 Json::Value tagsFromJson(const std::string& text);
 
+// Serialise one "feed row" into the JSON shape every listing shares: id,
+// title, content, content_html (when present), created_at, updated_at,
+// reading_minutes, view_count, excerpt (when present), tags (from
+// kTagsJsonColumn), and the author block. The row must have been selected
+// with kFeedSelect()/kPostColumns() column names. Callers that carry extra
+// per-endpoint fields (published_at, bookmarked, shared_tags) add them to the
+// returned object. Single source of truth so the listings cannot drift into
+// emitting different post shapes.
+Json::Value feedRowJson(const drogon::orm::Row& row);
+
 // Whether a post is currently unpublished. Read back from the database
 // rather than tracked in the caller, so an edit that did not touch the
 // draft flag still reports the true state.
