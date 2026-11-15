@@ -78,7 +78,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # statically linked, so we only need the third-party shared deps.
 FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
         ca-certificates \
         libsodium23 libcurl4t64 libssl3t64 \
         libbrotli1 libjsoncpp25 libpq5 \

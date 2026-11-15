@@ -47,11 +47,17 @@ std::size_t publishDueNow()
                      << row["id"].as<int>();
         }
 
-        // Prune expired hourly view-deduplication buckets older than 48h so
-        // post_views stays bounded instead of growing indefinitely.
-        db->execSqlSync(
-            "DELETE FROM post_views "
-            " WHERE bucket < (EXTRACT(EPOCH FROM now())::bigint / 3600) - 48");
+        // Prune expired daily view-deduplication rows older than 7 days
+        // (`viewed_on` indexed by idx_post_views_day) so post_views stays
+        // bounded instead of growing indefinitely. Isolated in its own
+        // try/catch so a cleanup error never aborts scheduled publishing.
+        try {
+            db->execSqlSync(
+                "DELETE FROM post_views "
+                " WHERE viewed_on < CURRENT_DATE - 7");
+        } catch (const std::exception& e) {
+            LOG_ERROR << "scheduler: post_views prune failed: " << e.what();
+        }
 
         return r.size();
     } catch (const std::exception& e) {
