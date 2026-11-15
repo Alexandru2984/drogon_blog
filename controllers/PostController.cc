@@ -86,7 +86,9 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
     // monotonic (IDENTITY) so ordering by id DESC matches created_at DESC
     // and gives a stable cursor.
     const int  limit  = clampLimit(req->getParameter("limit"));
-    const int  cursor = parseCursor(req->getParameter("before"));
+    std::string cursorParam = req->getParameter("before");
+    if (cursorParam.empty()) cursorParam = req->getParameter("cursor");
+    const int  cursor = parseCursor(cursorParam);
 
     // Moderator-hidden posts leave the feed. Every read path needs this
     // predicate; one that misses it makes hiding cosmetic.
@@ -171,7 +173,7 @@ void PostController::getAllPosts(const HttpRequestPtr &req,
         if (nextCursor > 0) {
             char link[128];
             std::snprintf(link, sizeof(link),
-                "</posts?cursor=%lld&limit=%d>; rel=\"next\"",
+                "</posts?before=%lld&limit=%d>; rel=\"next\"",
                 static_cast<long long>(nextCursor), limit);
             resp->addHeader("Link", link);
         }
@@ -470,11 +472,13 @@ void PostController::getRelatedPosts(const HttpRequestPtr &req,
         "       u.profile_image AS author_profile_image, "
         "       count(*) AS shared, ") + post_meta::kTagsJsonColumn + " "
         "  FROM post_tags mine "
+        "  JOIN posts mine_p ON mine_p.id = mine.post_id "
         "  JOIN post_tags theirs ON theirs.tag_id = mine.tag_id "
         "                       AND theirs.post_id <> mine.post_id "
         "  JOIN posts p ON p.id = theirs.post_id "
         "  LEFT JOIN users u ON u.id = p.user_id "
         " WHERE mine.post_id = $1 "
+        "   AND mine_p.hidden_at IS NULL AND mine_p.published_at IS NOT NULL "
         "   AND p.hidden_at IS NULL AND p.published_at IS NOT NULL "
         " GROUP BY p.id, p.title, p.content, p.content_html, p.created_at, "
         "          p.updated_at, p.reading_minutes, p.excerpt, p.view_count, "
@@ -670,7 +674,7 @@ void PostController::getPost(const HttpRequestPtr &req,
     static const std::string kSql =
         std::string(
         "SELECT p.id, p.title, p.content, p.content_html, p.created_at, p.updated_at, "
-        "       p.published_at, p.reading_minutes, p.excerpt, p.view_count, p.user_id, "
+        "       p.published_at, p.scheduled_at, p.reading_minutes, p.excerpt, p.view_count, p.user_id, "
         "       u.id AS author_id, u.username AS author_username, "
         "       u.profile_image AS author_profile_image, ") + post_meta::kTagsJsonColumn + ", "
         // Whether *this* viewer saved it, so the bookmark control can render
@@ -721,6 +725,9 @@ void PostController::getPost(const HttpRequestPtr &req,
                             publishedAt   = row["published_at"].isNull()
                                               ? std::string{}
                                               : row["published_at"].as<std::string>(),
+                            scheduledAt   = row["scheduled_at"].isNull()
+                                              ? std::string{}
+                                              : row["scheduled_at"].as<std::string>(),
                             isDraft       = row["published_at"].isNull(),
                             readingMin    = row["reading_minutes"].as<int>(),
                             excerpt       = row["excerpt"].isNull()
@@ -740,16 +747,19 @@ void PostController::getPost(const HttpRequestPtr &req,
                                               ? std::string{}
                                               : row["author_profile_image"].as<std::string>()
                            ](long long views) {
-                // The view count is in the ETag, so a reader whose visit
-                // bumped it gets a fresh body rather than a 304 showing the
-                // old number.
+                // Include draft & viewer bookmark state in the ETag and key
+                // on Cookie so a shared proxy never caches an unpublished
+                // draft or serves another user's bookmark state.
                 const std::string etag = http_cache::makeWeakEtag({
                     "post", std::to_string(postId),
                     std::to_string(http_cache::parseTimestampMicros(updatedAt)),
                     std::to_string(views),
+                    isDraft ? "1" : "0",
+                    bookmarked ? "1" : "0",
                 });
+                constexpr std::string_view kVary = "Cookie";
                 if (http_cache::ifNoneMatchHit(req, etag)) {
-                    callback(http_cache::makeNotModified(etag));
+                    callback(http_cache::makeNotModified(etag, 0, kVary));
                     return;
                 }
 
@@ -762,6 +772,11 @@ void PostController::getPost(const HttpRequestPtr &req,
                 ret["updated_at"] = updatedAt;
                 ret["published_at"] = isDraft ? Json::nullValue
                                               : Json::Value(publishedAt);
+                if (!scheduledAt.empty()) {
+                    ret["scheduled_at"] = scheduledAt;
+                } else {
+                    ret["scheduled_at"] = Json::nullValue;
+                }
                 ret["is_draft"]        = isDraft;
                 ret["reading_minutes"] = readingMin;
                 ret["view_count"]      = static_cast<Json::Int64>(views);
@@ -776,7 +791,13 @@ void PostController::getPost(const HttpRequestPtr &req,
                         ret["author"]["profile_image"] = authorImage;
                 }
                 auto resp = HttpResponse::newHttpJsonResponse(ret);
-                http_cache::applyCacheHeaders(resp, etag);
+                if (isDraft) {
+                    resp->addHeader("ETag", etag);
+                    resp->addHeader("Cache-Control", "private, no-store");
+                    resp->addHeader("Vary", "Cookie");
+                } else {
+                    http_cache::applyCacheHeaders(resp, etag, 0, kVary);
+                }
                 callback(resp);
             };
 
@@ -839,6 +860,15 @@ void PostController::createPost(const HttpRequestPtr &req,
         return;
     }
 
+    if (!(*json)["title"].isString() || !(*json)["content"].isString()) {
+        Json::Value ret;
+        ret["error"] = "Title and content are required";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+
     std::string title = (*json)["title"].asString();
     std::string content = (*json)["content"].asString();
 
@@ -859,117 +889,105 @@ void PostController::createPost(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-
-    // Render markdown once at write-time and store both the raw source (so
-    // we can re-render if rendering policy changes) and the resulting safe
-    // HTML (so reads stay cheap).
-    const std::string contentHtml = markdown::renderToSafeHtml(content);
-
-    // Derived once here rather than per read, for the same reason: both are
-    // pure functions of the content.
-    const int         readingMinutes = post_meta::estimateReadingMinutes(content);
-    const std::string excerpt        = post_meta::makeExcerpt(content);
-    const auto        tags           = post_meta::parseTags((*json)["tags"]);
-
-    // Absent means publish — the overwhelming majority of writes, and the
-    // behaviour every existing client already depends on. Only an explicit
-    // `"draft": true` withholds it.
+    const auto tags = post_meta::parseTags((*json)["tags"]);
     const bool asDraft = (*json)["draft"].isBool() && (*json)["draft"].asBool();
-
-    // Optional future publish time. A scheduled post is stored as a draft
-    // (published_at NULL) carrying scheduled_at; helpers/Scheduler flips it
-    // live at that moment. Absent or empty means no schedule.
     const std::string publishAtRaw = (*json)["publish_at"].isString()
         ? (*json)["publish_at"].asString() : std::string{};
+    const int userId = userIdOpt.value();
 
-    try {
-        // Validate the schedule time against the database clock (the same one
-        // the scheduler compares against), before writing anything. A bad
-        // format is a 400, not a 500, and a time in the past is rejected
-        // rather than silently publishing now.
-        std::optional<std::string> scheduledAt;
-        if (!publishAtRaw.empty()) {
-            bool future = false;
-            try {
-                future = dbClient->execSqlSync(
-                    "SELECT $1::timestamptz > now() AS future",
-                    publishAtRaw)[0]["future"].as<bool>();
-            } catch (const DrogonDbException&) {
-                Json::Value ret;
-                ret["error"] = "Invalid publish_at timestamp";
-                auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k400BadRequest);
-                callback(resp);
-                return;
+    workers::offload(workers::Pool::Auth, callback,
+        [callback, userId, title = std::move(title), content = std::move(content),
+         tags, asDraft, publishAtRaw] {
+        auto dbClient = drogon::app().getDbClient();
+
+        // Render markdown once at write-time and store both the raw source (so
+        // we can re-render if rendering policy changes) and the resulting safe
+        // HTML (so reads stay cheap).
+        const std::string contentHtml = markdown::renderToSafeHtml(content);
+
+        // Derived once here rather than per read, for the same reason: both are
+        // pure functions of the content.
+        const int         readingMinutes = post_meta::estimateReadingMinutes(content);
+        const std::string excerpt        = post_meta::makeExcerpt(content);
+
+        try {
+            // Validate the schedule time against the database clock (the same one
+            // the scheduler compares against), before writing anything. A bad
+            // format is a 400, not a 500, and a time in the past is rejected
+            // rather than silently publishing now.
+            std::optional<std::string> scheduledAt;
+            if (!publishAtRaw.empty()) {
+                bool future = false;
+                try {
+                    future = dbClient->execSqlSync(
+                        "SELECT $1::timestamptz > now() AS future",
+                        publishAtRaw)[0]["future"].as<bool>();
+                } catch (const DrogonDbException&) {
+                    Json::Value ret;
+                    ret["error"] = "Invalid publish_at timestamp";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                if (!future) {
+                    Json::Value ret;
+                    ret["error"] = "publish_at must be in the future";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                scheduledAt = publishAtRaw;
             }
-            if (!future) {
-                Json::Value ret;
-                ret["error"] = "publish_at must be in the future";
-                auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k400BadRequest);
-                callback(resp);
-                return;
+
+            auto ins = dbClient->execSqlSync(
+                "INSERT INTO posts (user_id, title, content, content_html, "
+                "                   reading_minutes, excerpt, published_at, scheduled_at) "
+                "VALUES ($1, $2, $3, $4, $5::int, $6, "
+                "        CASE WHEN $7::bool OR $8::timestamptz IS NOT NULL "
+                "             THEN NULL ELSE now() END, "
+                "        $8::timestamptz) "
+                "RETURNING id, created_at, published_at, scheduled_at",
+                userId, title, content, contentHtml,
+                readingMinutes, excerpt, asDraft, scheduledAt);
+
+            const int  newId         = ins[0]["id"].as<int>();
+            const bool isDraftResult = ins[0]["published_at"].isNull();
+            const bool scheduled     = !ins[0]["scheduled_at"].isNull();
+            post_meta::syncPostTags(dbClient, newId, tags);
+
+            if (!isDraftResult) {
+                notifications::emitNewPostToFollowers(dbClient, userId, newId);
             }
-            scheduledAt = publishAtRaw;
+
+            Json::Value ret;
+            ret["message"] = scheduled     ? "Post scheduled"
+                           : isDraftResult ? "Draft saved"
+                                           : "Post created successfully";
+            ret["post"]["id"]              = newId;
+            ret["post"]["title"]           = title;
+            ret["post"]["content"]         = content;
+            ret["post"]["content_html"]    = contentHtml;
+            ret["post"]["reading_minutes"] = readingMinutes;
+            ret["post"]["excerpt"]         = excerpt;
+            ret["post"]["is_draft"]        = isDraftResult;
+            if (scheduled)
+                ret["post"]["scheduled_at"] = ins[0]["scheduled_at"].as<std::string>();
+            ret["post"]["tags"]            = post_meta::tagsForPost(dbClient, newId);
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k201Created);
+            callback(resp);
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error: " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to create post";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
         }
-
-        // Raw SQL rather than the ORM mapper: the generated model predates
-        // this migration and has no accessor for published_at, and
-        // regenerating every model file to add one column is a much larger
-        // diff than the feature warrants.
-        //
-        // published_at is withheld (draft) when explicitly a draft OR when a
-        // schedule is set; scheduled_at carries the future time in that case.
-        auto ins = dbClient->execSqlSync(
-            "INSERT INTO posts (user_id, title, content, content_html, "
-            "                   reading_minutes, excerpt, published_at, scheduled_at) "
-            "VALUES ($1, $2, $3, $4, $5::int, $6, "
-            "        CASE WHEN $7::bool OR $8::timestamptz IS NOT NULL "
-            "             THEN NULL ELSE now() END, "
-            "        $8::timestamptz) "
-            "RETURNING id, created_at, published_at, scheduled_at",
-            userIdOpt.value(), title, content, contentHtml,
-            readingMinutes, excerpt, asDraft, scheduledAt);
-
-        const int  newId         = ins[0]["id"].as<int>();
-        const bool isDraftResult = ins[0]["published_at"].isNull();
-        const bool scheduled     = !ins[0]["scheduled_at"].isNull();
-        post_meta::syncPostTags(dbClient, newId, tags);
-
-        // Followers hear about a post when it actually goes live, not when it
-        // is saved as a draft or scheduled. The scheduler emits the follower
-        // notification at publish time for scheduled posts.
-        if (!isDraftResult) {
-            notifications::emitNewPostToFollowers(dbClient, userIdOpt.value(), newId);
-        }
-
-        Json::Value ret;
-        ret["message"] = scheduled     ? "Post scheduled"
-                       : isDraftResult ? "Draft saved"
-                                       : "Post created successfully";
-        ret["post"]["id"]              = newId;
-        ret["post"]["title"]           = title;
-        ret["post"]["content"]         = content;
-        ret["post"]["content_html"]    = contentHtml;
-        ret["post"]["reading_minutes"] = readingMinutes;
-        ret["post"]["excerpt"]         = excerpt;
-        ret["post"]["is_draft"]        = isDraftResult;
-        if (scheduled)
-            ret["post"]["scheduled_at"] = ins[0]["scheduled_at"].as<std::string>();
-        ret["post"]["tags"]            = post_meta::tagsForPost(dbClient, newId);
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k201Created);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to create post";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+    });
 }
 
 void PostController::uploadPostImage(const HttpRequestPtr &req,
@@ -1104,6 +1122,13 @@ void PostController::updatePost(const HttpRequestPtr &req,
         return;
     }
 
+    if (auto rl = security::rateLimitOr429(
+            "post_update", "uid:" + std::to_string(userIdOpt.value()),
+            20.0, 20.0 / 60.0)) {
+        callback(rl);
+        return;
+    }
+
     auto json = req->getJsonObject();
     if (!json) {
         auto resp = HttpResponse::newHttpJsonResponse(
@@ -1113,129 +1138,205 @@ void PostController::updatePost(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback,
+        [callback, json, postId, userId] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
-    try {
-        auto post = mapper.findByPrimaryKey(postId);
+        try {
+            auto post = mapper.findByPrimaryKey(postId);
 
-        // Check if user owns the post
-        if (post.getValueOfUserId() != userIdOpt.value()) {
-            Json::Value ret;
-            ret["error"] = "Unauthorized";
-            auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k403Forbidden);
-            callback(resp);
-            return;
-        }
-
-        // Whether anything the generated model knows about changed. The
-        // ORM builds "UPDATE posts SET <dirty columns> WHERE id = ?" and
-        // emits a syntactically invalid empty SET when nothing is dirty —
-        // so a PUT that only flips the draft flag or replaces the tags,
-        // both of which live outside the model, must not reach update().
-        bool modelChanged = false;
-
-        if (json->isMember("title")) {
-            const std::string newTitle = (*json)["title"].asString();
-            if (newTitle.size() > kMaxTitleBytes) {
+            // Check if user owns the post
+            if (post.getValueOfUserId() != userId) {
                 Json::Value ret;
-                ret["error"] = "Title too long";
+                ret["error"] = "Unauthorized";
                 auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k413RequestEntityTooLarge);
+                resp->setStatusCode(k403Forbidden);
                 callback(resp);
                 return;
             }
-            post.setTitle(newTitle);
-            modelChanged = true;
-        }
-        if (json->isMember("content")) {
-            const std::string newContent = (*json)["content"].asString();
-            if (newContent.size() > kMaxContentBytes) {
-                Json::Value ret;
-                ret["error"] = "Content too long";
-                auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k413RequestEntityTooLarge);
-                callback(resp);
-                return;
+
+            // Validate optional publish_at before mutating the row.
+            const bool hasPublishAt = json->isMember("publish_at");
+            const std::string publishAtRaw =
+                (hasPublishAt && (*json)["publish_at"].isString())
+                    ? (*json)["publish_at"].asString()
+                    : std::string{};
+            std::optional<std::string> scheduledAt;
+            if (!publishAtRaw.empty()) {
+                bool future = false;
+                try {
+                    future = dbClient->execSqlSync(
+                        "SELECT $1::timestamptz > now() AS future",
+                        publishAtRaw)[0]["future"].as<bool>();
+                } catch (const DrogonDbException&) {
+                    Json::Value ret;
+                    ret["error"] = "Invalid publish_at timestamp";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                if (!future) {
+                    Json::Value ret;
+                    ret["error"] = "publish_at must be in the future";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                scheduledAt = publishAtRaw;
             }
-            post.setContent(newContent);
-            post.setContentHtml(markdown::renderToSafeHtml(newContent));
-            modelChanged = true;
-        }
 
-        if (modelChanged) mapper.update(post);
+            bool modelChanged = false;
 
-        // The columns added in 0013 are not on the generated model, so they
-        // are written separately. Reading time and excerpt are recomputed
-        // only when the content actually changed — a title-only edit should
-        // not rewrite them.
-        if (json->isMember("content")) {
-            const std::string& c = post.getValueOfContent();
-            dbClient->execSqlSync(
-                "UPDATE posts SET reading_minutes = $2::int, excerpt = $3 WHERE id = $1",
-                postId, post_meta::estimateReadingMinutes(c),
-                post_meta::makeExcerpt(c));
-        }
+            if (json->isMember("title")) {
+                if (!(*json)["title"].isString()) {
+                    Json::Value ret;
+                    ret["error"] = "Title must be a string";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                const std::string newTitle = (*json)["title"].asString();
+                if (newTitle.empty()) {
+                    Json::Value ret;
+                    ret["error"] = "Title cannot be empty";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                if (newTitle.size() > kMaxTitleBytes) {
+                    Json::Value ret;
+                    ret["error"] = "Title too long";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k413RequestEntityTooLarge);
+                    callback(resp);
+                    return;
+                }
+                post.setTitle(newTitle);
+                modelChanged = true;
+            }
+            if (json->isMember("content")) {
+                if (!(*json)["content"].isString()) {
+                    Json::Value ret;
+                    ret["error"] = "Content must be a string";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                const std::string newContent = (*json)["content"].asString();
+                if (newContent.empty()) {
+                    Json::Value ret;
+                    ret["error"] = "Content cannot be empty";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                if (newContent.size() > kMaxContentBytes) {
+                    Json::Value ret;
+                    ret["error"] = "Content too long";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k413RequestEntityTooLarge);
+                    callback(resp);
+                    return;
+                }
+                post.setContent(newContent);
+                post.setContentHtml(markdown::renderToSafeHtml(newContent));
+                modelChanged = true;
+            }
 
-        // Publishing a draft stamps published_at once and never again:
-        // re-publishing an already-live post must not reset its date and
-        // shuffle it back to the top of the feed. Unpublishing (back to
-        // draft) is allowed and clears it.
-        bool isDraft = post_meta::isDraft(dbClient, postId);
-        if (json->isMember("draft")) {
-            const bool wantDraft = (*json)["draft"].asBool();
-            if (wantDraft && !isDraft) {
+            if (modelChanged) mapper.update(post);
+
+            if (json->isMember("content")) {
+                const std::string& c = post.getValueOfContent();
                 dbClient->execSqlSync(
-                    "UPDATE posts SET published_at = NULL WHERE id = $1", postId);
+                    "UPDATE posts SET reading_minutes = $2::int, excerpt = $3 WHERE id = $1",
+                    postId, post_meta::estimateReadingMinutes(c),
+                    post_meta::makeExcerpt(c));
+            }
+
+            bool isDraft = post_meta::isDraft(dbClient, postId);
+            if (scheduledAt.has_value()) {
+                dbClient->execSqlSync(
+                    "UPDATE posts SET published_at = NULL, scheduled_at = $2::timestamptz "
+                    "WHERE id = $1",
+                    postId, *scheduledAt);
                 isDraft = true;
-            } else if (!wantDraft && isDraft) {
-                dbClient->execSqlSync(
-                    "UPDATE posts SET published_at = COALESCE(published_at, now()) "
-                    "WHERE id = $1", postId);
-                isDraft = false;
-                // The draft-to-published transition is the moment followers
-                // should hear about it. Guarded by `isDraft` so re-sending
-                // draft:false on an already-public post does not notify
-                // everyone a second time.
-                notifications::emitNewPostToFollowers(
-                    dbClient, userIdOpt.value(), postId);
+            } else {
+                if (hasPublishAt) {
+                    dbClient->execSqlSync(
+                        "UPDATE posts SET scheduled_at = NULL WHERE id = $1",
+                        postId);
+                }
+                if (json->isMember("draft") && (*json)["draft"].isBool()) {
+                    const bool wantDraft = (*json)["draft"].asBool();
+                    if (wantDraft && !isDraft) {
+                        dbClient->execSqlSync(
+                            "UPDATE posts SET published_at = NULL, scheduled_at = NULL "
+                            "WHERE id = $1", postId);
+                        isDraft = true;
+                    } else if (!wantDraft && isDraft) {
+                        dbClient->execSqlSync(
+                            "UPDATE posts SET published_at = COALESCE(published_at, now()), "
+                            "                 scheduled_at = NULL "
+                            "WHERE id = $1", postId);
+                        isDraft = false;
+                        notifications::emitNewPostToFollowers(
+                            dbClient, userId, postId);
+                    }
+                }
             }
+
+            if (json->isMember("tags")) {
+                post_meta::syncPostTags(dbClient, postId,
+                                        post_meta::parseTags((*json)["tags"]));
+            }
+
+            const auto stateRow = dbClient->execSqlSync(
+                "SELECT published_at, scheduled_at FROM posts WHERE id = $1",
+                postId);
+            std::string curScheduledAt;
+            if (!stateRow.empty() && !stateRow[0]["scheduled_at"].isNull()) {
+                curScheduledAt = stateRow[0]["scheduled_at"].as<std::string>();
+            }
+
+            Json::Value ret;
+            ret["message"] = "Post updated successfully";
+            ret["post"]["id"]           = post.getValueOfId();
+            ret["post"]["title"]        = post.getValueOfTitle();
+            ret["post"]["content"]      = post.getValueOfContent();
+            ret["post"]["content_html"] = post.getValueOfContentHtml();
+            ret["post"]["is_draft"]     = isDraft;
+            if (!curScheduledAt.empty()) {
+                ret["post"]["scheduled_at"] = curScheduledAt;
+            } else {
+                ret["post"]["scheduled_at"] = Json::nullValue;
+            }
+            ret["post"]["tags"]         = post_meta::tagsForPost(dbClient, postId);
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            callback(resp);
+        } catch (const UnexpectedRows &) {
+            Json::Value ret;
+            ret["error"] = "Post not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error: " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to update post";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
         }
-
-        // Absent `tags` means "leave them alone"; an empty array means
-        // "remove them all". Treating absent as empty would silently strip
-        // the tags off any post edited by a client that does not know about
-        // them yet.
-        if (json->isMember("tags")) {
-            post_meta::syncPostTags(dbClient, postId,
-                                    post_meta::parseTags((*json)["tags"]));
-        }
-
-        Json::Value ret;
-        ret["message"] = "Post updated successfully";
-        ret["post"]["id"]       = post.getValueOfId();
-        ret["post"]["title"]    = post.getValueOfTitle();
-        ret["post"]["content"]  = post.getValueOfContent();
-        ret["post"]["is_draft"] = isDraft;
-        ret["post"]["tags"]     = post_meta::tagsForPost(dbClient, postId);
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const UnexpectedRows &) {
-        Json::Value ret;
-        ret["error"] = "Post not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to update post";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+    });
 }
 
 void PostController::deletePost(const HttpRequestPtr &req,
@@ -1254,49 +1355,53 @@ void PostController::deletePost(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
+    const int userId = userIdOpt.value();
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, postId, userId, userIdOpt] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
 
-    try {
-        auto post = mapper.findByPrimaryKey(postId);
+        try {
+            auto post = mapper.findByPrimaryKey(postId);
 
-        // Check if user owns the post
-        if (post.getValueOfUserId() != userIdOpt.value()) {
+            // Check if user owns the post
+            if (post.getValueOfUserId() != userId) {
+                Json::Value ret;
+                ret["error"] = "Unauthorized";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k403Forbidden);
+                callback(resp);
+                return;
+            }
+
+            mapper.deleteByPrimaryKey(postId);
+
+            Json::Value meta;
+            meta["title"] = post.getValueOfTitle();
+            audit_log::record(req, {"post.delete", userIdOpt,
+                                    std::string{"post"},
+                                    static_cast<std::int64_t>(postId),
+                                    std::move(meta)});
+
             Json::Value ret;
-            ret["error"] = "Unauthorized";
+            ret["message"] = "Post deleted successfully";
             auto resp = HttpResponse::newHttpJsonResponse(ret);
-            resp->setStatusCode(k403Forbidden);
             callback(resp);
-            return;
+        } catch (const UnexpectedRows &) {
+            Json::Value ret;
+            ret["error"] = "Post not found";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k404NotFound);
+            callback(resp);
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error: " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to delete post";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
         }
-
-        mapper.deleteByPrimaryKey(postId);
-
-        Json::Value meta;
-        meta["title"] = post.getValueOfTitle();
-        audit_log::record(req, {"post.delete", userIdOpt,
-                                std::string{"post"},
-                                static_cast<std::int64_t>(postId),
-                                std::move(meta)});
-
-        Json::Value ret;
-        ret["message"] = "Post deleted successfully";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const UnexpectedRows &) {
-        Json::Value ret;
-        ret["error"] = "Post not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to delete post";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+    });
 }
 
 void PostController::getUserPosts(const HttpRequestPtr &req,
@@ -1304,58 +1409,37 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
                                  int userId)
 {
     auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Posts> mapper(dbClient);
-
-    // Cursor pagination, same shape as getAllPosts: this used to return every
-    // post a user had ever written in one unbounded findBy — slow and a memory
-    // hog for prolific authors. `before` is the oldest id the client already
-    // holds; ids are monotonic so id DESC matches created_at DESC.
-    using Cols = drogon_model::blog_db::Posts::Cols;
     const int limit  = clampLimit(req->getParameter("limit"));
-    const int cursor = parseCursor(req->getParameter("before"));
+    std::string cursorParam = req->getParameter("before");
+    if (cursorParam.empty()) cursorParam = req->getParameter("cursor");
+    const int cursor = parseCursor(cursorParam);
 
-    try {
-        Criteria crit(Cols::_user_id, CompareOperator::EQ, userId);
-        // A profile listing is a read path like any other, so it drops
-        // moderator-hidden posts too.
-        //
-        // The column is named as a string rather than through Cols::, which
-        // is generated from the schema by drogon_ctl and therefore does not
-        // know about columns added by a later migration. Regenerating the
-        // models to gain one constant would rewrite every model file for no
-        // other benefit; Criteria accepts a column name directly.
-        crit = crit && Criteria(std::string("hidden_at"),
-                                CompareOperator::IsNull);
-        // …and unpublished ones. A profile is a public listing: it is reached
-        // without a session and its response carries the full `content` of
-        // every row it returns, so a missing draft filter here hands out
-        // unpublished bodies verbatim rather than the fragment /posts/search
-        // would leak. The author reads their own drafts through
-        // /posts/drafts, which is session-scoped and returns is_draft.
-        crit = crit && Criteria(std::string("published_at"),
-                                CompareOperator::IsNotNull);
-        if (cursor > 0)
-            crit = crit && Criteria(Cols::_id, CompareOperator::LT, cursor);
-        auto posts = mapper.orderBy(Cols::_id, SortOrder::DESC)
-                           .limit(static_cast<std::size_t>(limit))
-                           .findBy(crit);
+    static const std::string kSqlWithCursor =
+        kFeedSelect() +
+        "WHERE p.user_id = $1 AND p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "  AND p.id < $2 "
+        "ORDER BY p.id DESC "
+        "LIMIT $3";
+    static const std::string kSqlFirstPage =
+        kFeedSelect() +
+        "WHERE p.user_id = $1 AND p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "ORDER BY p.id DESC "
+        "LIMIT $2";
 
-        // ETag tracks (user_id, page keys, count, max(updated_at)). Adding /
-        // removing / editing one of this user's posts changes one of those;
-        // other users' posts don't affect it.
+    auto onOk = [callback, req, userId, limit, cursor](const Result& r) {
         std::int64_t maxTs = 0;
         std::int64_t minId = 0;
-        for (const auto& p : posts) {
-            const auto id = static_cast<std::int64_t>(p.getValueOfId());
+        for (const auto& row : r) {
+            const auto id = row["id"].as<int64_t>();
             if (minId == 0 || id < minId) minId = id;
             const auto ts = http_cache::parseTimestampMicros(
-                                p.getValueOfUpdatedAt().toDbStringLocal());
+                                row["updated_at"].as<std::string>());
             if (ts > maxTs) maxTs = ts;
         }
         const std::string etag = http_cache::makeWeakEtag({
             "user-posts", std::to_string(userId),
             std::to_string(maxTs),
-            std::to_string(static_cast<int>(posts.size())),
+            std::to_string(static_cast<int>(r.size())),
             std::to_string(cursor),
             std::to_string(limit),
         });
@@ -1366,29 +1450,34 @@ void PostController::getUserPosts(const HttpRequestPtr &req,
 
         Json::Value ret;
         ret["posts"] = Json::Value(Json::arrayValue);
-
-        for (const auto &post : posts) {
-            Json::Value postJson;
-            postJson["id"] = post.getValueOfId();
-            postJson["title"] = post.getValueOfTitle();
-            postJson["content"] = post.getValueOfContent();
-            postJson["created_at"] = post.getValueOfCreatedAt().toDbStringLocal();
-            ret["posts"].append(postJson);
+        for (const auto& row : r) {
+            Json::Value post = post_meta::feedRowJson(row);
+            if (!row["published_at"].isNull())
+                post["published_at"] = row["published_at"].as<std::string>();
+            ret["posts"].append(post);
         }
 
-        ret["next_cursor"] = (static_cast<int>(posts.size()) == limit && minId > 0)
+        ret["next_cursor"] = (static_cast<int>(r.size()) == limit && minId > 0)
             ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         http_cache::applyCacheHeaders(resp, etag);
         callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
+    };
+    auto onErr = [callback](const DrogonDbException &e) {
+        LOG_ERROR << "DB Error (getUserPosts): " << e.base().what();
         Json::Value ret;
         ret["error"] = "Failed to fetch posts";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k500InternalServerError);
         callback(resp);
+    };
+
+    const auto lim64 = static_cast<std::int64_t>(limit);
+    if (cursor > 0) {
+        dbClient->execSqlAsync(kSqlWithCursor, onOk, onErr, userId, cursor, lim64);
+    } else {
+        dbClient->execSqlAsync(kSqlFirstPage, onOk, onErr, userId, lim64);
     }
 }
 
@@ -1541,70 +1630,53 @@ void PostController::getLikesCount(const HttpRequestPtr &req,
                                   std::function<void(const HttpResponsePtr &)> &&callback,
                                   int postId)
 {
-    // Anonymous readers get the count only. For a signed-in reader we also
-    // report whether *they* have liked it, because without that the client
-    // cannot render a like control that knows its own state — the UI used to
-    // show a Like button beside an Unlike button and guess.
     auto session = req->session();
-    const auto userIdOpt = session ? session->getOptional<int>("user_id")
-                                   : std::optional<int>{};
+    const int viewerId = session ? session->getOptional<int>("user_id").value_or(0) : 0;
 
     auto dbClient = drogon::app().getDbClient();
+    static const std::string kSql =
+        "SELECT count(l.*) AS n, "
+        "       bool_or(l.user_id = $2::int) AS liked "
+        "  FROM likes l "
+        "  JOIN posts p ON p.id = l.post_id "
+        " WHERE l.post_id = $1 "
+        "   AND p.hidden_at IS NULL "
+        "   AND (p.published_at IS NOT NULL OR p.user_id = $2::int)";
 
-    try {
-        // count(*) instead of materialising every like row just to call
-        // .size() — a viral post would otherwise pull thousands of rows
-        // across the wire to produce a single integer.
-        //
-        // The membership test rides along in the same round trip. $2 is the
-        // viewer id, or 0 for an anonymous reader — no user has id 0, so the
-        // EXISTS is simply false. The explicit ::int cast pins the parameter
-        // type: Postgres otherwise infers it from context, and a mismatch
-        // against Drogon's int32 bind fails at the binary protocol level.
-        auto r = dbClient->execSqlSync(
-            "SELECT count(*) AS n,"
-            "       bool_or(user_id = $2::int) AS liked"
-            "  FROM likes WHERE post_id = $1",
-            postId, userIdOpt.value_or(0));
-        const long long count = r[0]["n"].as<long long>();
-        // bool_or over an empty set is NULL, not false.
-        const bool liked = !r[0]["liked"].isNull() && r[0]["liked"].as<bool>();
+    dbClient->execSqlAsync(
+        kSql,
+        [callback, req, postId](const Result& r) {
+            const long long count = r.empty() ? 0 : r[0]["n"].as<long long>();
+            const bool liked = !r.empty() && !r[0]["liked"].isNull() && r[0]["liked"].as<bool>();
 
-        // ETag = (post_id, count, viewer's own like). likes is just a join row
-        // that gets created/dropped by like/unlike — count is nearly the
-        // entire payload, so any change yields a new ETag without further
-        // state. The viewer's own flag has to be in the key as well, or two
-        // readers with the same count would share a cache entry that
-        // disagrees about which of them pressed the button.
-        const std::string etag = http_cache::makeWeakEtag({
-            "likes-count", std::to_string(postId),
-            std::to_string(count),
-            liked ? "1" : "0",
-        });
-        // The body now varies per viewer, so Vary: Cookie — which also makes
-        // applyCacheHeaders downgrade Cache-Control from public to private,
-        // keeping shared caches from holding it at all.
-        constexpr std::string_view kVary = "Cookie";
+            const std::string etag = http_cache::makeWeakEtag({
+                "likes-count", std::to_string(postId),
+                std::to_string(count),
+                liked ? "1" : "0",
+            });
+            constexpr std::string_view kVary = "Cookie";
 
-        if (http_cache::ifNoneMatchHit(req, etag)) {
-            callback(http_cache::makeNotModified(etag, 0, kVary));
-            return;
-        }
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag, 0, kVary));
+                return;
+            }
 
-        Json::Value ret;
-        ret["post_id"] = postId;
-        ret["likes_count"] = static_cast<Json::Int64>(count);
-        ret["liked"] = liked;
+            Json::Value ret;
+            ret["post_id"] = postId;
+            ret["likes_count"] = static_cast<Json::Int64>(count);
+            ret["liked"] = liked;
 
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        http_cache::applyCacheHeaders(resp, etag, 0, kVary);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to get likes count";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag, 0, kVary);
+            callback(resp);
+        },
+        [callback](const DrogonDbException &e) {
+            LOG_ERROR << "DB Error (getLikesCount): " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to get likes count";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
+        },
+        postId, viewerId);
 }

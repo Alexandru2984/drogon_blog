@@ -1,6 +1,7 @@
 #include "SocialController.h"
 #include "../helpers/Notifications.h"
 #include "../helpers/PostMeta.h"
+#include "../helpers/Roles.h"
 #include "../helpers/Security.h"
 #include "../helpers/Workers.h"
 
@@ -251,6 +252,12 @@ void SocialController::follow(const HttpRequestPtr &req,
     workers::offload(workers::Pool::Auth, callback, [me, userId, callback] {
         auto db = drogon::app().getDbClient();
         try {
+            if (roles::isErased(userId)) {
+                Json::Value ret;
+                ret["error"] = "User not found";
+                callback(jsonWith(ret, k404NotFound));
+                return;
+            }
             auto r = db->execSqlSync(
                 "INSERT INTO follows (follower_id, followee_id) VALUES ($1, $2) "
                 "ON CONFLICT DO NOTHING RETURNING 1",

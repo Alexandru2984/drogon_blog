@@ -143,6 +143,10 @@ std::string safeFilenamePart(const std::string& raw)
 bool reauthenticate(int userId, const std::string& password,
                     std::string& usernameOut, HttpResponsePtr& err)
 {
+    if (password.size() > 256) {
+        err = jsonError(k403Forbidden, "Password is incorrect");
+        return false;
+    }
     auto db = drogon::app().getDbClient();
     const auto rows = db->execSqlSync(
         "SELECT password_hash, username FROM users "

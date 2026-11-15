@@ -61,7 +61,14 @@ void emitNewPostToFollowers(const DbClientPtr& db, int authorUserId, int postId)
         db->execSqlSync(
             "INSERT INTO notifications (user_id, actor_id, kind, post_id) "
             "SELECT f.follower_id, $1, 'new_post', $2 "
-            "  FROM follows f WHERE f.followee_id = $1",
+            "  FROM follows f "
+            " WHERE f.followee_id = $1 "
+            "   AND NOT EXISTS ("
+            "       SELECT 1 FROM notifications n "
+            "        WHERE n.user_id = f.follower_id "
+            "          AND n.kind = 'new_post' "
+            "          AND n.post_id = $2"
+            "   )",
             authorUserId, postId);
     } catch (const DrogonDbException& e) {
         LOG_ERROR << "DB Error (notifications::emitNewPostToFollowers, author="

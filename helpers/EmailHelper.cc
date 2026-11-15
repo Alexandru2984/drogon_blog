@@ -203,7 +203,9 @@ void EmailHelper::sendVerificationEmail(const std::string& email,
                                         const std::string& username,
                                         const std::string& token)
 {
-    const std::string link = "https://blog.micutu.com/#/verify-email?token=" + token;
+    std::string origin = env("BLOG_SITE_ORIGIN", "https://blog.micutu.com");
+    if (!origin.empty() && origin.back() == '/') origin.pop_back();
+    const std::string link = origin + "/#/verify-email?token=" + token;
     std::ostringstream body;
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"
@@ -295,7 +297,9 @@ void EmailHelper::sendPasswordResetEmail(const std::string& email,
                                          const std::string& username,
                                          const std::string& token)
 {
-    const std::string link = "https://blog.micutu.com/#/reset-password?token=" + token;
+    std::string origin = env("BLOG_SITE_ORIGIN", "https://blog.micutu.com");
+    if (!origin.empty() && origin.back() == '/') origin.pop_back();
+    const std::string link = origin + "/#/reset-password?token=" + token;
     std::ostringstream body;
     body << "<!DOCTYPE html><html><body style='font-family:Arial,sans-serif;'>"
          << "<div style='max-width:600px;margin:0 auto;padding:20px;'>"

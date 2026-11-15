@@ -33,6 +33,7 @@ std::size_t publishDueNow()
             "UPDATE posts "
             "   SET published_at = now(), scheduled_at = NULL "
             " WHERE published_at IS NULL "
+            "   AND hidden_at IS NULL "
             "   AND scheduled_at IS NOT NULL "
             "   AND scheduled_at <= now() "
             "RETURNING id, user_id");
@@ -45,6 +46,13 @@ std::size_t publishDueNow()
             LOG_INFO << "scheduler: published scheduled post "
                      << row["id"].as<int>();
         }
+
+        // Prune expired hourly view-deduplication buckets older than 48h so
+        // post_views stays bounded instead of growing indefinitely.
+        db->execSqlSync(
+            "DELETE FROM post_views "
+            " WHERE bucket < (EXTRACT(EPOCH FROM now())::bigint / 3600) - 48");
+
         return r.size();
     } catch (const std::exception& e) {
         // A failed sweep is not fatal: the rows stay scheduled and the next

@@ -69,12 +69,18 @@ void AuthController::changePassword(
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
-    const std::string currentPassword = (*json)["current_password"].asString();
-    const std::string newPassword     = (*json)["new_password"].asString();
+    const std::string currentPassword =
+        (*json)["current_password"].isString() ? (*json)["current_password"].asString() : std::string{};
+    const std::string newPassword =
+        (*json)["new_password"].isString() ? (*json)["new_password"].asString() : std::string{};
 
     if (currentPassword.empty() || newPassword.empty()) {
         callback(jsonError(k400BadRequest,
                            "Current and new password are required"));
+        return;
+    }
+    if (currentPassword.size() > kMaxPasswordLen) {
+        callback(jsonError(k403Forbidden, "Current password is incorrect"));
         return;
     }
     if (newPassword.size() < kMinPasswordLen ||

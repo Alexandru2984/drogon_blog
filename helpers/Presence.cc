@@ -31,6 +31,9 @@ constexpr int kTtlSeconds = 30;
 // pod stops re-adding) — see refreshTick().
 constexpr const char* kOnlineSet = "blog:online_users";
 
+std::mutex                  g_mu;
+std::unordered_set<int>     g_localUsers;
+
 #ifdef BLOG_HAS_REDIS
 
 // Single shared synchronous connection. The hub pushes presence
@@ -38,14 +41,8 @@ constexpr const char* kOnlineSet = "blog:online_users";
 // mutex-guarded sync client is acceptable. Future scale would move
 // this to libhiredis-async wired into the Drogon event loop — for
 // now, simplicity wins.
-std::mutex                  g_mu;
 redisContext*               g_ctx = nullptr;
 std::string                 g_url;
-
-// Users this pod has live WS connections for. Refreshed by the
-// heartbeat. Protected by g_mu alongside g_ctx because the heartbeat
-// reads it while WS callbacks write to it.
-std::unordered_set<int>     g_localUsers;
 
 std::atomic<bool>           g_running{false};
 std::thread                 g_heartbeat;
@@ -206,34 +203,31 @@ bool install()
 
 void markOnline(int userId)
 {
-#ifdef BLOG_HAS_REDIS
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_ctx) return;
     g_localUsers.insert(userId);
+#ifdef BLOG_HAS_REDIS
+    if (!g_ctx) return;
     runCmd("SETEX user:%d:online %d 1", userId, kTtlSeconds);
     runCmd("SADD %s %d",                 kOnlineSet, userId);
-#else
-    (void)userId;
 #endif
 }
 
 void markOffline(int userId)
 {
-#ifdef BLOG_HAS_REDIS
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_ctx) return;
     g_localUsers.erase(userId);
+#ifdef BLOG_HAS_REDIS
+    if (!g_ctx) return;
     runCmd("DEL user:%d:online", userId);
     runCmd("SREM %s %d",           kOnlineSet, userId);
-#else
-    (void)userId;
 #endif
 }
 
 bool isOnline(int userId)
 {
-#ifdef BLOG_HAS_REDIS
     std::lock_guard<std::mutex> lk(g_mu);
+    if (g_localUsers.count(userId) != 0) return true;
+#ifdef BLOG_HAS_REDIS
     if (!g_ctx) return false;
     auto* reply = static_cast<redisReply*>(
         redisCommand(g_ctx, "EXISTS user:%d:online", userId));
@@ -242,24 +236,23 @@ bool isOnline(int userId)
     freeReplyObject(reply);
     return exists;
 #else
-    (void)userId;
     return false;
 #endif
 }
 
 long onlineCountGlobal()
 {
-#ifdef BLOG_HAS_REDIS
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_ctx) return -1;
+#ifdef BLOG_HAS_REDIS
+    if (!g_ctx) return static_cast<long>(g_localUsers.size());
     auto* reply = static_cast<redisReply*>(
         redisCommand(g_ctx, "SCARD %s", kOnlineSet));
-    if (!reply) { reconnectLocked(); return -1; }
+    if (!reply) { reconnectLocked(); return static_cast<long>(g_localUsers.size()); }
     long n = (reply->type == REDIS_REPLY_INTEGER) ? reply->integer : -1;
     freeReplyObject(reply);
     return n;
 #else
-    return -1;
+    return static_cast<long>(g_localUsers.size());
 #endif
 }
 
@@ -268,10 +261,19 @@ void stop()
 #ifdef BLOG_HAS_REDIS
     g_running.store(false, std::memory_order_release);
     if (g_heartbeat.joinable()) g_heartbeat.join();
-    std::lock_guard<std::mutex> lk(g_mu);
-    if (g_ctx) { redisFree(g_ctx); g_ctx = nullptr; }
-    g_localUsers.clear();
 #endif
+    std::lock_guard<std::mutex> lk(g_mu);
+#ifdef BLOG_HAS_REDIS
+    if (g_ctx) {
+        for (int uid : g_localUsers) {
+            runCmd("DEL user:%d:online", uid);
+            runCmd("SREM %s %d",           kOnlineSet, uid);
+        }
+        redisFree(g_ctx);
+        g_ctx = nullptr;
+    }
+#endif
+    g_localUsers.clear();
 }
 
 } // namespace presence

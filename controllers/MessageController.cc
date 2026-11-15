@@ -2,6 +2,8 @@
 #include "../models/Messages.h"
 #include "../models/Users.h"
 #include "../helpers/HttpCache.h"
+#include "../helpers/Presence.h"
+#include "../helpers/Roles.h"
 #include "../helpers/Security.h"
 #include "../helpers/Workers.h"
 #include <drogon/orm/Mapper.h>
@@ -301,8 +303,11 @@ void MessageController::getConversation(const HttpRequestPtr &req,
 
             Json::Value ret;
             ret["messages"] = Json::Value(Json::arrayValue);
+            std::int64_t minId = 0;
 
             for (const auto &message : messages) {
+                const auto mid = static_cast<std::int64_t>(message.getValueOfId());
+                if (minId == 0 || mid < minId) minId = mid;
                 Json::Value msgJson;
                 msgJson["id"] = message.getValueOfId();
                 msgJson["content"] = message.getValueOfContent();
@@ -314,14 +319,24 @@ void MessageController::getConversation(const HttpRequestPtr &req,
                 ret["messages"].append(msgJson);
             }
 
+            ret["next_cursor"] =
+                (static_cast<int>(messages.size()) == page.limit && minId > 0)
+                    ? Json::Value(static_cast<Json::Int64>(minId))
+                    : Json::nullValue;
+
             // Best-effort peer enrichment; the conversation rows still come back
             // even if the other user was deleted concurrently.
             try {
-                auto otherUser = userMapper.findByPrimaryKey(otherUserId);
-                ret["other_user"]["id"] = otherUser.getValueOfId();
-                ret["other_user"]["username"] = otherUser.getValueOfUsername();
-                if (!otherUser.getValueOfProfileImage().empty()) {
-                    ret["other_user"]["profile_image"] = otherUser.getValueOfProfileImage();
+                if (!roles::isErased(otherUserId)) {
+                    auto otherUser = userMapper.findByPrimaryKey(otherUserId);
+                    ret["other_user"]["id"] = otherUser.getValueOfId();
+                    ret["other_user"]["username"] = otherUser.getValueOfUsername();
+                    if (!otherUser.getValueOfProfileImage().empty()) {
+                        ret["other_user"]["profile_image"] = otherUser.getValueOfProfileImage();
+                    }
+                    if (presence::isOnline(otherUserId)) {
+                        ret["other_user"]["online"] = true;
+                    }
                 }
             } catch (const DrogonDbException& e) {
                 LOG_DEBUG << "other_user lookup for " << otherUserId
@@ -376,12 +391,20 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
         return;
     }
 
-    int receiverId = (*json)["receiver_id"].asInt();
-    std::string content = (*json)["content"].asString();
+    int receiverId = (*json)["receiver_id"].isInt() ? (*json)["receiver_id"].asInt() : 0;
+    std::string content = (*json)["content"].isString() ? (*json)["content"].asString() : std::string{};
 
     if (receiverId <= 0 || content.empty()) {
         Json::Value ret;
         ret["error"] = "Receiver ID and content are required";
+        auto resp = HttpResponse::newHttpJsonResponse(ret);
+        resp->setStatusCode(k400BadRequest);
+        callback(resp);
+        return;
+    }
+    if (receiverId == userIdOpt.value()) {
+        Json::Value ret;
+        ret["error"] = "You cannot message yourself";
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k400BadRequest);
         callback(resp);
@@ -409,10 +432,12 @@ void MessageController::sendMessage(const HttpRequestPtr &req,
         newMessage.setIsRead(0);
 
         try {
-            // Confirm the recipient exists so messaging a missing/deleted user
-            // returns a clean 404 instead of letting the FK constraint surface
-            // as a 500.
-            if (dbClient->execSqlSync("SELECT 1 FROM users WHERE id = $1", receiverId).empty()) {
+            // Confirm the recipient exists and is not erased so messaging a
+            // missing/deleted user returns a clean 404 instead of letting the
+            // FK constraint surface as a 500 or delivering to a tombstone.
+            if (dbClient->execSqlSync(
+                    "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+                    receiverId).empty()) {
                 Json::Value ret;
                 ret["error"] = "Recipient not found";
                 auto resp = HttpResponse::newHttpJsonResponse(ret);

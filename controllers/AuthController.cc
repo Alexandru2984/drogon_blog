@@ -511,59 +511,48 @@ void AuthController::getCurrentUser(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
-    try {
-        auto user = mapper.findByPrimaryKey(userIdOpt.value());
+        try {
+            auto user = mapper.findByPrimaryKey(userIdOpt.value());
 
-        // ETag derives from (id, updated_at). Any profile mutation goes
-        // through users.updated_at (BEFORE-UPDATE trigger from 0001_init);
-        // the CSRF cookie rehydration below does not change the response
-        // body, only Set-Cookie, so it doesn't need to invalidate.
-        //
-        // Vary: Cookie is the load-bearing header here: /auth/me returns
-        // identity scoped to the session cookie. Without Vary, any cache
-        // (browser back/forward cache, future Cloudflare-edge cache,
-        // intermediate corporate proxy) could serve one user's response
-        // to the next request from a different cookie.
-        const std::string etag = http_cache::makeWeakEtag({
-            std::to_string(user.getValueOfId()),
-            std::to_string(http_cache::parseTimestampMicros(
-                user.getValueOfUpdatedAt().toDbStringLocal())),
-        });
-        constexpr std::string_view kVary = "Cookie";
+            const std::string etag = http_cache::makeWeakEtag({
+                std::to_string(user.getValueOfId()),
+                std::to_string(http_cache::parseTimestampMicros(
+                    user.getValueOfUpdatedAt().toDbStringLocal())),
+            });
+            constexpr std::string_view kVary = "Cookie";
 
-        if (http_cache::ifNoneMatchHit(req, etag)) {
-            callback(http_cache::makeNotModified(etag, 0, kVary));
-            return;
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag, 0, kVary));
+                return;
+            }
+
+            Json::Value ret;
+            ret["id"]             = user.getValueOfId();
+            ret["username"]       = user.getValueOfUsername();
+            ret["email"]          = user.getValueOfEmail();
+            ret["email_verified"] = user.getValueOfEmailVerified() != 0;
+            ret["bio"]            = user.getValueOfBio();
+            if (!user.getValueOfProfileImage().empty()) {
+                ret["profile_image"] = user.getValueOfProfileImage();
+            }
+            if (auto role = roles::of(req)) {
+                ret["role"] = roles::name(*role);
+            }
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            issueCsrfCookie(req, resp);
+            http_cache::applyCacheHeaders(resp, etag, 0, kVary);
+            callback(resp);
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error (me): " << e.base().what();
+            callback(jsonError(k404NotFound, "User not found"));
         }
-
-        Json::Value ret;
-        ret["id"]       = user.getValueOfId();
-        ret["username"] = user.getValueOfUsername();
-        ret["email"]    = user.getValueOfEmail();
-        ret["bio"]      = user.getValueOfBio();
-        if (!user.getValueOfProfileImage().empty()) {
-            ret["profile_image"] = user.getValueOfProfileImage();
-        }
-        // Not part of the ORM model (see models/model.json / helpers/Roles.cc
-        // for why role reads go through a raw query instead). The frontend
-        // uses this only to decide whether to show the moderation surface at
-        // all; every privileged endpoint re-checks the role server-side
-        // regardless of what this response said.
-        if (auto role = roles::of(req)) {
-            ret["role"] = roles::name(*role);
-        }
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        issueCsrfCookie(req, resp);             // rehydrate CSRF on session bootstrap
-        http_cache::applyCacheHeaders(resp, etag, 0, kVary);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error (me): " << e.base().what();
-        callback(jsonError(k404NotFound, "User not found"));
-    }
+    });
 }
 
 void AuthController::verifyEmail(const HttpRequestPtr &req,
@@ -726,24 +715,18 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
     // The final statement below repeats the validity check and is still the
     // authority in case two requests race after both pass this cheap probe.
     const std::string tokenHash = security::sha256Hex(token);
-    auto finishReset = [newPassword, tokenHash, callback, req] {
+    auto finishReset = [newPassword, tokenHash, callback, req](
+                           const std::string& username,
+                           const std::string& email) {
         try {
-            // The reset flow knows the user only through a token, so the
-            // context checks have no username or email to compare against;
-            // the blocklist and breach checks still apply.
             if (auto why = password_policy::validate(
-                    newPassword, "", ""); !why.empty())
+                    newPassword, username, email); !why.empty())
             {
                 callback(jsonError(k400BadRequest, why));
                 return;
             }
             const std::string hash = hashPassword(newPassword);
 
-            // One PostgreSQL statement is the transaction boundary for all
-            // three security effects: consume the one-time token, update the
-            // password, and revoke every existing session. If any part fails
-            // the statement rolls back, so there is no state where the token
-            // is gone but the old password or a stolen session remains usable.
             auto db = drogon::app().getDbClient();
             const auto rows = db->execSqlSync(
                 "WITH consumed AS ("
@@ -804,18 +787,23 @@ void AuthController::resetPassword(const HttpRequestPtr &req,
 
     auto dbClient = drogon::app().getDbClient();
     dbClient->execSqlAsync(
-        "SELECT 1 FROM password_reset_tokens"
-        " WHERE token = $1 AND expires_at > NOW()",
+        "SELECT u.username, u.email "
+        "  FROM password_reset_tokens t "
+        "  JOIN users u ON u.id = t.user_id "
+        " WHERE t.token = $1 AND t.expires_at > NOW()",
         [callback, finishReset](const Result& probe) {
             if (probe.empty()) {
                 callback(jsonError(k400BadRequest,
                                    "Invalid or expired token"));
                 return;
             }
+            const std::string username = probe[0]["username"].as<std::string>();
+            const std::string email    = probe[0]["email"].as<std::string>();
 
-            // Policy validation and hashing are blocking, so they belong on
-            // the bounded auth pool rather than a Drogon IO or DB thread.
-            workers::offload(workers::Pool::Auth, callback, finishReset);
+            workers::offload(workers::Pool::Auth, callback,
+                [finishReset, username, email] {
+                    finishReset(username, email);
+                });
         },
         [callback](const DrogonDbException& e) {
             LOG_ERROR << "DB Error (password reset probe): "
@@ -832,54 +820,47 @@ void AuthController::resendVerification(const HttpRequestPtr &req,
     auto json = req->getJsonObject();
     if (!json) { callback(jsonError(k400BadRequest, "Invalid JSON")); return; }
 
-    std::string email = (*json)["email"].asString();
+    std::string email = (*json)["email"].isString() ? (*json)["email"].asString() : std::string{};
     if (email.empty() || email.size() > kMaxEmailLen ||
         !emailLooksValid(email))
     {
-        // Defence-in-depth: registration already filters CR/LF / space
-        // before any value lands in users.email, so the DB lookup below
-        // can never match a header-injection attempt. Validating here
-        // still catches obviously-malformed inputs early and keeps the
-        // SMTP To: header safe even if a future write path skips the
-        // registration gate.
         callback(jsonError(k400BadRequest, "Email is required"));
         return;
     }
 
-    // Uniform response shape: don't leak whether the account exists or is
-    // already verified.
     auto okResp = []() {
         Json::Value ret;
         ret["message"] = "If a matching unverified account exists, a verification email has been sent.";
         return HttpResponse::newHttpJsonResponse(ret);
     };
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
+    workers::offload(workers::Pool::Auth, callback,
+        [callback, email, okResp] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
-    try {
-        auto users = mapper.findBy(
-            Criteria(drogon_model::blog_db::Users::Cols::_email,
-                     CompareOperator::EQ, email));
+        try {
+            auto users = mapper.findBy(
+                Criteria(drogon_model::blog_db::Users::Cols::_email,
+                         CompareOperator::EQ, email));
 
-        if (users.empty() || users[0].getValueOfEmailVerified() == 1) {
+            if (users.empty() || users[0].getValueOfEmailVerified() == 1) {
+                callback(okResp());
+                return;
+            }
+
+            auto user = users[0];
+            const std::string verificationToken = EmailHelper::generateToken();
+            user.setEmailVerificationToken(security::sha256Hex(verificationToken));
+            user.setEmailVerificationExpires(trantor::Date::now().after(24 * 3600));
+            mapper.update(user);
+
+            EmailHelper::sendVerificationEmail(email, user.getValueOfUsername(),
+                                               verificationToken);
             callback(okResp());
-            return;
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error (resend): " << e.base().what();
+            callback(okResp());
         }
-
-        auto user = users[0];
-        // Same hash-at-rest pattern as registerUser. Plaintext only
-        // crosses the wire to the user's mailbox.
-        const std::string verificationToken = EmailHelper::generateToken();
-        user.setEmailVerificationToken(security::sha256Hex(verificationToken));
-        user.setEmailVerificationExpires(trantor::Date::now().after(24 * 3600));
-        mapper.update(user);
-
-        EmailHelper::sendVerificationEmail(email, user.getValueOfUsername(),
-                                           verificationToken);
-        callback(okResp());
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error (resend): " << e.base().what();
-        callback(okResp());
-    }
+    });
 }

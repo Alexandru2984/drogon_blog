@@ -23,73 +23,57 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
                                    std::function<void(const HttpResponsePtr &)> &&callback,
                                    int userId)
 {
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userId] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
-    try {
-        auto user = mapper.findByPrimaryKey(userId);
+        try {
+            auto user = mapper.findByPrimaryKey(userId);
 
-        // An erased account still has a row — tombstoned comments in other
-        // people's threads reference it — but there is no profile behind it
-        // any more. 404, the same answer as an id that never existed:
-        // "deleted" and "never here" should be indistinguishable from
-        // outside, because the difference is a fact about a person who
-        // asked to be gone.
-        if (roles::isErased(userId)) {
+            if (roles::isErased(userId)) {
+                Json::Value ret;
+                ret["error"] = "User not found";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k404NotFound);
+                callback(resp);
+                return;
+            }
+
+            const std::string etag = http_cache::makeWeakEtag({
+                std::to_string(user.getValueOfId()),
+                std::to_string(http_cache::parseTimestampMicros(
+                    user.getValueOfUpdatedAt().toDbStringLocal())),
+            });
+            if (http_cache::ifNoneMatchHit(req, etag)) {
+                callback(http_cache::makeNotModified(etag));
+                return;
+            }
+
+            Json::Value ret;
+            ret["id"] = user.getValueOfId();
+            ret["username"] = user.getValueOfUsername();
+            ret["bio"] = user.getValueOfBio();
+            ret["created_at"] = user.getValueOfCreatedAt().toDbStringLocal();
+
+            if (!user.getValueOfProfileImage().empty()) {
+                ret["profile_image"] = user.getValueOfProfileImage();
+            }
+            if (presence::isOnline(user.getValueOfId())) {
+                ret["online"] = true;
+            }
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            http_cache::applyCacheHeaders(resp, etag);
+            callback(resp);
+        } catch (const DrogonDbException &) {
             Json::Value ret;
             ret["error"] = "User not found";
             auto resp = HttpResponse::newHttpJsonResponse(ret);
             resp->setStatusCode(k404NotFound);
             callback(resp);
-            return;
         }
-
-        // Public profile — same data for every viewer, so ETag is keyed
-        // only on (id, updated_at) and no Vary is needed. updated_at
-        // moves on every profile mutation via the BEFORE-UPDATE trigger.
-        const std::string etag = http_cache::makeWeakEtag({
-            std::to_string(user.getValueOfId()),
-            std::to_string(http_cache::parseTimestampMicros(
-                user.getValueOfUpdatedAt().toDbStringLocal())),
-        });
-        if (http_cache::ifNoneMatchHit(req, etag)) {
-            callback(http_cache::makeNotModified(etag));
-            return;
-        }
-
-        Json::Value ret;
-        ret["id"] = user.getValueOfId();
-        ret["username"] = user.getValueOfUsername();
-        // NB: email is deliberately NOT exposed here. /users/{id} is a public,
-        // unauthenticated endpoint — returning the address leaked PII and aided
-        // account enumeration. The owner sees their own email via /auth/me
-        // (session-scoped) and /users/profile.
-        ret["bio"] = user.getValueOfBio();
-        ret["created_at"] = user.getValueOfCreatedAt().toDbStringLocal();
-
-        if (!user.getValueOfProfileImage().empty()) {
-            ret["profile_image"] = user.getValueOfProfileImage();
-        }
-        // Online flag is read AFTER ETag derivation on purpose:
-        // presence is volatile (5-30 s TTL window), and including
-        // it in the cache key would invalidate the entry every time
-        // a heartbeat ticks. We accept that a 304 may show a stale
-        // online flag — clients that care can drop their cache and
-        // re-fetch.
-        if (presence::isOnline(user.getValueOfId())) {
-            ret["online"] = true;
-        }
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        http_cache::applyCacheHeaders(resp, etag);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        Json::Value ret;
-        ret["error"] = "User not found";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k404NotFound);
-        callback(resp);
-    }
+    });
 }
 
 void UserController::updateProfile(const HttpRequestPtr &req,
@@ -104,6 +88,13 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         auto resp = HttpResponse::newHttpJsonResponse(ret);
         resp->setStatusCode(k401Unauthorized);
         callback(resp);
+        return;
+    }
+
+    if (auto rl = security::rateLimitOr429(
+            "profile_update", "uid:" + std::to_string(userIdOpt.value()),
+            15.0, 15.0 / 300.0)) {
+        callback(rl);
         return;
     }
 
@@ -131,17 +122,24 @@ void UserController::updateProfile(const HttpRequestPtr &req,
         // The address to warn if the email changes — captured before the
         // change is applied so the notice reaches the previous owner.
         std::string emailChangedFrom;
+        std::string newEmailToVerify;
+        std::string verificationToken;
 
         // Changing the email is privileged: an attacker who hijacks a live
         // session could otherwise pivot the account by retargeting password
         // recovery. Require the current password and re-issue verification.
         if (json->isMember("email")) {
+            if (!(*json)["email"].isString()) {
+                Json::Value ret;
+                ret["error"] = "Invalid email address";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k400BadRequest);
+                callback(resp);
+                return;
+            }
             const std::string newEmail = (*json)["email"].asString();
             if (newEmail != user.getValueOfEmail()) {
                 if (!security::emailLooksValid(newEmail)) {
-                    // Same SMTP-header-injection guard as /auth/register:
-                    // the new address lands in EmailHelper's To: header
-                    // when the verification mail goes out.
                     Json::Value ret;
                     ret["error"] = "Invalid email address";
                     auto resp = HttpResponse::newHttpJsonResponse(ret);
@@ -149,9 +147,18 @@ void UserController::updateProfile(const HttpRequestPtr &req,
                     callback(resp);
                     return;
                 }
+                if (auto rl = security::rateLimitOr429(
+                        "email_change", "uid:" + std::to_string(userIdOpt.value()),
+                        3.0, 3.0 / 900.0)) {
+                    callback(rl);
+                    return;
+                }
                 const std::string currentPassword =
-                    (*json)["current_password"].asString();
+                    (*json)["current_password"].isString()
+                        ? (*json)["current_password"].asString()
+                        : std::string{};
                 if (currentPassword.empty() ||
+                    currentPassword.size() > 256 ||
                     !security::verifyPassword(user.getValueOfPasswordHash(),
                                               currentPassword))
                 {
@@ -162,36 +169,44 @@ void UserController::updateProfile(const HttpRequestPtr &req,
                     callback(resp);
                     return;
                 }
+
+                // Check email uniqueness before mutating or dispatching mail,
+                // so a collision does not trigger a 500 or send mail to an
+                // address owned by someone else.
+                const auto existing = dbClient->execSqlSync(
+                    "SELECT 1 FROM users WHERE email = $1 AND id <> $2",
+                    newEmail, userIdOpt.value());
+                if (!existing.empty()) {
+                    Json::Value ret;
+                    ret["error"] = "Could not update email address";
+                    auto resp = HttpResponse::newHttpJsonResponse(ret);
+                    resp->setStatusCode(k409Conflict);
+                    callback(resp);
+                    return;
+                }
+
                 emailChangedFrom = user.getValueOfEmail();
-                Json::Value meta;
-                meta["old_email"] = user.getValueOfEmail();
-                meta["new_email"] = newEmail;
-                audit_log::record(req, {"profile.email.change",
-                                        userIdOpt,
-                                        std::string{"user"},
-                                        static_cast<std::int64_t>(userIdOpt.value()),
-                                        std::move(meta)});
+                newEmailToVerify = newEmail;
+                verificationToken = EmailHelper::generateToken();
 
                 user.setEmail(newEmail);
                 user.setEmailVerified(0);
-                // Hash the verification token at rest, same as registerUser
-                // and resendVerification (D-audit fix G+H). The previous
-                // version stored the plaintext here.
-                const std::string verificationToken = EmailHelper::generateToken();
                 user.setEmailVerificationToken(
                     security::sha256Hex(verificationToken));
                 user.setEmailVerificationExpires(
                     trantor::Date::now().after(24 * 3600));
-
-                EmailHelper::sendVerificationEmail(
-                    newEmail, user.getValueOfUsername(), verificationToken);
             }
         }
         if (json->isMember("bio")) {
+            if (!(*json)["bio"].isString()) {
+                Json::Value ret;
+                ret["error"] = "Invalid bio";
+                auto resp = HttpResponse::newHttpJsonResponse(ret);
+                resp->setStatusCode(k400BadRequest);
+                callback(resp);
+                return;
+            }
             const std::string newBio = (*json)["bio"].asString();
-            // 8 KiB is generous for a blog bio; protects the users.bio
-            // column from being weaponised as DB-bloat storage by an
-            // authenticated client looping PUT /users/profile.
             if (newBio.size() > std::size_t{8} * 1024) {
                 Json::Value ret;
                 ret["error"] = "Bio too long";
@@ -205,11 +220,19 @@ void UserController::updateProfile(const HttpRequestPtr &req,
 
         mapper.update(user);
 
-        // Only after the change has committed: tell the previous address, so a
-        // takeover by someone who already has the password is not silent to the
-        // real owner. Sending the new verification mail alone would leave the
-        // old address — the one place the owner is still reachable — dark.
+        // Only after the database update succeeds: record the audit entry and
+        // notify both the new address (verification link) and the previous one.
         if (!emailChangedFrom.empty()) {
+            Json::Value meta;
+            meta["old_email"] = emailChangedFrom;
+            meta["new_email"] = newEmailToVerify;
+            audit_log::record(req, {"profile.email.change",
+                                    userIdOpt,
+                                    std::string{"user"},
+                                    static_cast<std::int64_t>(userIdOpt.value()),
+                                    std::move(meta)});
+            EmailHelper::sendVerificationEmail(
+                newEmailToVerify, user.getValueOfUsername(), verificationToken);
             EmailHelper::sendEmailChangedNotice(emailChangedFrom,
                                                 user.getValueOfUsername());
         }
@@ -420,97 +443,77 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
         return;
     }
 
-    auto dbClient = drogon::app().getDbClient();
-    Mapper<drogon_model::blog_db::Users> mapper(dbClient);
+    workers::offload(workers::Pool::Auth, callback,
+        [req, callback, userIdOpt] {
+        auto dbClient = drogon::app().getDbClient();
+        Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
-    try {
-        // Bounded directory listing. findAll() returned every row, which is
-        // unbounded enumeration + a DoS vector as the user count grows. Cap at
-        // 100 rows ordered by id, with an optional `?q=` username prefix search
-        // for the SPA's "start a conversation" picker. `before` pages further.
-        using Cols = drogon_model::blog_db::Users::Cols;
-        constexpr int kMaxUserPage = 100;
-        int limit = kMaxUserPage;
-        const auto l = req->getParameter("limit");
-        if (!l.empty()) { try { const int v = std::stoi(l); if (v > 0 && v < kMaxUserPage) limit = v; } catch (...) {} }
+        try {
+            using Cols = drogon_model::blog_db::Users::Cols;
+            constexpr int kMaxUserPage = 100;
+            int limit = kMaxUserPage;
+            const auto l = req->getParameter("limit");
+            if (!l.empty()) { try { const int v = std::stoi(l); if (v > 0 && v < kMaxUserPage) limit = v; } catch (...) {} }
 
-        Criteria crit(Cols::_id, CompareOperator::GE, 1);   // always-true base
-        const auto q = req->getParameter("q");
-        if (!q.empty() && q.size() <= 64) {
-            // Treat the query as a literal prefix, not a LIKE pattern. Without
-            // escaping, a `%` matched every user and `_` matched any char, so
-            // "start a conversation" search doubled as a wildcard enumeration
-            // of the directory. Postgres LIKE uses backslash as its default
-            // escape, so escaping \ % _ in the term makes them literal.
-            std::string prefix;
-            prefix.reserve(q.size() + 4);
-            for (char c : q) {
-                if (c == '\\' || c == '%' || c == '_') prefix.push_back('\\');
-                prefix.push_back(c);
+            Criteria crit(Cols::_id, CompareOperator::GE, 1);
+            const auto q = req->getParameter("q");
+            if (!q.empty() && q.size() <= 64) {
+                std::string prefix;
+                prefix.reserve(q.size() + 4);
+                for (char c : q) {
+                    if (c == '\\' || c == '%' || c == '_') prefix.push_back('\\');
+                    prefix.push_back(c);
+                }
+                crit = crit && Criteria(Cols::_username,
+                                        CompareOperator::Like, prefix + "%");
             }
-            crit = crit && Criteria(Cols::_username,
-                                    CompareOperator::Like, prefix + "%");
-        }
-        const auto before = req->getParameter("before");
-        if (!before.empty()) {
-            try { const long long v = std::stoll(before); if (v > 0)
-                crit = crit && Criteria(Cols::_id, CompareOperator::LT, v); }
-            catch (...) {}
-        }
-
-        auto users = mapper.orderBy(Cols::_id, SortOrder::DESC)
-                           .limit(static_cast<std::size_t>(limit))
-                           .findBy(crit);
-
-        // Erased accounts keep a row so tombstoned comments have something
-        // to point at, but they are not people you can start a conversation
-        // with. One query rather than a per-row check: the partial index
-        // makes it cheap and the set is tiny, whereas asking per user would
-        // be a hundred round trips to build one page.
-        //
-        // Filtered here rather than in the Criteria above because
-        // deleted_at is not on the ORM model — the same reason banned_until
-        // is handled with raw SQL.
-        std::unordered_set<std::int64_t> erased;
-        for (const auto& row : dbClient->execSqlSync(
-                 "SELECT id FROM users WHERE deleted_at IS NOT NULL"))
-            erased.insert(row["id"].as<std::int64_t>());
-
-        Json::Value ret;
-        ret["users"] = Json::Value(Json::arrayValue);
-        std::int64_t minId = 0;
-
-        for (const auto &user : users) {
-            const auto uid = user.getValueOfId();
-            if (minId == 0 || uid < minId) minId = uid;
-            // Don't include current user
-            if (uid == userIdOpt.value()) {
-                continue;
-            }
-            if (erased.count(uid)) continue;
-
-            Json::Value userJson;
-            userJson["id"] = user.getValueOfId();
-            userJson["username"] = user.getValueOfUsername();
-            
-            if (!user.getValueOfProfileImage().empty()) {
-                userJson["profile_image"] = user.getValueOfProfileImage();
+            const auto before = req->getParameter("before");
+            if (!before.empty()) {
+                try { const long long v = std::stoll(before); if (v > 0)
+                    crit = crit && Criteria(Cols::_id, CompareOperator::LT, v); }
+                catch (...) {}
             }
 
-            ret["users"].append(userJson);
+            auto users = mapper.orderBy(Cols::_id, SortOrder::DESC)
+                               .limit(static_cast<std::size_t>(limit))
+                               .findBy(crit);
+
+            std::unordered_set<std::int64_t> erased;
+            for (const auto& row : dbClient->execSqlSync(
+                     "SELECT id FROM users WHERE deleted_at IS NOT NULL"))
+                erased.insert(row["id"].as<std::int64_t>());
+
+            Json::Value ret;
+            ret["users"] = Json::Value(Json::arrayValue);
+            std::int64_t minId = 0;
+
+            for (const auto &user : users) {
+                const auto uid = user.getValueOfId();
+                if (minId == 0 || uid < minId) minId = uid;
+                if (uid == userIdOpt.value()) continue;
+                if (erased.count(uid)) continue;
+
+                Json::Value userJson;
+                userJson["id"] = user.getValueOfId();
+                userJson["username"] = user.getValueOfUsername();
+                if (!user.getValueOfProfileImage().empty()) {
+                    userJson["profile_image"] = user.getValueOfProfileImage();
+                }
+                ret["users"].append(userJson);
+            }
+
+            ret["next_cursor"] = (static_cast<int>(users.size()) == limit && minId > 0)
+                ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
+
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            callback(resp);
+        } catch (const DrogonDbException &e) {
+            LOG_ERROR << "DB Error: " << e.base().what();
+            Json::Value ret;
+            ret["error"] = "Failed to fetch users";
+            auto resp = HttpResponse::newHttpJsonResponse(ret);
+            resp->setStatusCode(k500InternalServerError);
+            callback(resp);
         }
-
-        ret["next_cursor"] = (static_cast<int>(users.size()) == limit && minId > 0)
-            ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
-
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        callback(resp);
-    } catch (const DrogonDbException &e) {
-        LOG_ERROR << "DB Error: " << e.base().what();
-        Json::Value ret;
-        ret["error"] = "Failed to fetch users";
-        auto resp = HttpResponse::newHttpJsonResponse(ret);
-        resp->setStatusCode(k500InternalServerError);
-        callback(resp);
-    }
+    });
 }

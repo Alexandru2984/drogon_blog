@@ -3,6 +3,8 @@
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
 
+#include <algorithm>
+#include <cctype>
 #include <shared_mutex>
 #include <unordered_set>
 
@@ -25,7 +27,10 @@ std::unordered_set<int>    g_banned;
 // already refuses them and the pending state would otherwise linger.
 bool exemptPath(const std::string& path)
 {
-    return path.rfind("/auth/", 0) == 0;
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower.rfind("/auth/", 0) == 0;
 }
 
 } // namespace
@@ -148,8 +153,32 @@ drogon::HttpResponsePtr blockIfBanned(int userId)
 
 bool isBanned(int userId)
 {
-    std::shared_lock<std::shared_mutex> lk(g_bannedMu);
-    return g_banned.count(userId) != 0;
+    {
+        std::shared_lock<std::shared_mutex> lk(g_bannedMu);
+        if (g_banned.count(userId) == 0) return false;
+    }
+
+    // Fast path matched an in-memory ban. Re-verify against PostgreSQL so a
+    // temporary suspension (banned_until <= NOW()) lifts automatically as soon
+    // as its deadline passes, even without an explicit UPDATE / NOTIFY event.
+    try {
+        auto db = drogon::app().getDbClient();
+        if (!db) return true;
+        const auto r = db->execSqlSync(
+            "SELECT (banned_until IS NOT NULL AND banned_until > NOW()) AS active "
+            "  FROM users WHERE id = $1",
+            userId);
+        const bool stillBanned =
+            !r.empty() && !r[0]["active"].isNull() && r[0]["active"].as<bool>();
+        if (!stillBanned) {
+            std::unique_lock<std::shared_mutex> lk(g_bannedMu);
+            g_banned.erase(userId);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR << "ban expiry check failed: " << e.what();
+    }
+    return true;
 }
 
 bool isErased(int userId)

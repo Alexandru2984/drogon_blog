@@ -376,26 +376,29 @@ void AuthController::status2fa(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
-    auto db = drogon::app().getDbClient();
-    bool totpEnabled = false;
-    {
-        auto r = db->execSqlSync(
-            "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
-        if (!r.empty()) totpEnabled = r[0]["enabled"].as<bool>();
-    }
-    int passkeys = db->execSqlSync(
-        "SELECT count(*) AS n FROM user_webauthn_credentials WHERE user_id = $1",
-        *userIdOpt)[0]["n"].as<int>();
-    int recoveryLeft = db->execSqlSync(
-        "SELECT count(*) AS n FROM user_recovery_codes "
-        "WHERE user_id = $1 AND used_at IS NULL",
-        *userIdOpt)[0]["n"].as<int>();
+    workers::offload(workers::Pool::Auth, callback,
+        [callback, userIdOpt] {
+        auto db = drogon::app().getDbClient();
+        bool totpEnabled = false;
+        {
+            auto r = db->execSqlSync(
+                "SELECT enabled FROM user_totp_secrets WHERE user_id = $1", *userIdOpt);
+            if (!r.empty()) totpEnabled = r[0]["enabled"].as<bool>();
+        }
+        int passkeys = db->execSqlSync(
+            "SELECT count(*) AS n FROM user_webauthn_credentials WHERE user_id = $1",
+            *userIdOpt)[0]["n"].as<int>();
+        int recoveryLeft = db->execSqlSync(
+            "SELECT count(*) AS n FROM user_recovery_codes "
+            "WHERE user_id = $1 AND used_at IS NULL",
+            *userIdOpt)[0]["n"].as<int>();
 
-    Json::Value ret;
-    ret["totp_enabled"]       = totpEnabled;
-    ret["passkeys_count"]     = passkeys;
-    ret["recovery_codes_left"]= recoveryLeft;
-    callback(noStoreJson(ret));
+        Json::Value ret;
+        ret["totp_enabled"]       = totpEnabled;
+        ret["passkeys_count"]     = passkeys;
+        ret["recovery_codes_left"]= recoveryLeft;
+        callback(noStoreJson(ret));
+    });
 }
 
 // =========================================================================
@@ -972,26 +975,29 @@ void AuthController::webauthnList(const HttpRequestPtr& req,
     auto userIdOpt = currentUserId(req);
     if (!userIdOpt) { callback(jsonError(k401Unauthorized, "Not authenticated")); return; }
 
-    auto db = drogon::app().getDbClient();
-    auto rows = db->execSqlSync(
-        "SELECT id, nickname, created_at, last_used_at "
-        "FROM user_webauthn_credentials WHERE user_id = $1 "
-        "ORDER BY created_at",
-        *userIdOpt);
-    Json::Value list(Json::arrayValue);
-    for (const auto& row : rows) {
-        Json::Value e;
-        e["id"]         = row["id"].as<std::int64_t>();
-        e["nickname"]   = row["nickname"].as<std::string>();
-        e["created_at"] = row["created_at"].as<std::string>();
-        e["last_used_at"] = row["last_used_at"].isNull()
-                            ? Json::Value(Json::nullValue)
-                            : Json::Value(row["last_used_at"].as<std::string>());
-        list.append(e);
-    }
-    Json::Value ret;
-    ret["credentials"] = list;
-    callback(noStoreJson(ret));
+    workers::offload(workers::Pool::Auth, callback,
+        [callback, userIdOpt] {
+        auto db = drogon::app().getDbClient();
+        auto rows = db->execSqlSync(
+            "SELECT id, nickname, created_at, last_used_at "
+            "FROM user_webauthn_credentials WHERE user_id = $1 "
+            "ORDER BY created_at",
+            *userIdOpt);
+        Json::Value list(Json::arrayValue);
+        for (const auto& row : rows) {
+            Json::Value e;
+            e["id"]         = row["id"].as<std::int64_t>();
+            e["nickname"]   = row["nickname"].as<std::string>();
+            e["created_at"] = row["created_at"].as<std::string>();
+            e["last_used_at"] = row["last_used_at"].isNull()
+                                ? Json::Value(Json::nullValue)
+                                : Json::Value(row["last_used_at"].as<std::string>());
+            list.append(e);
+        }
+        Json::Value ret;
+        ret["credentials"] = list;
+        callback(noStoreJson(ret));
+    });
 }
 
 // =========================================================================
@@ -1040,6 +1046,22 @@ void AuthController::webauthnRemove(const HttpRequestPtr& req,
                     callback(jsonError(k404NotFound, "Passkey not found"));
                     return;
                 }
+
+                // If removing this passkey left the account with zero second
+                // factors (no enabled TOTP and no remaining passkeys), clean
+                // up any orphaned recovery codes as well.
+                db->execSqlSync(
+                    "DELETE FROM user_recovery_codes "
+                    " WHERE user_id = $1 "
+                    "   AND NOT EXISTS ("
+                    "       SELECT 1 FROM user_totp_secrets "
+                    "        WHERE user_id = $1 AND enabled = TRUE"
+                    "   ) "
+                    "   AND NOT EXISTS ("
+                    "       SELECT 1 FROM user_webauthn_credentials "
+                    "        WHERE user_id = $1"
+                    "   )",
+                    *userIdOpt);
 
                 audit_log::record(req, {"2fa.webauthn.remove", userIdOpt,
                                         std::string{"webauthn_credential"},

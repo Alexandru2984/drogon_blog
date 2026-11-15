@@ -142,8 +142,8 @@ void start()
     // costs memory linearly.
     g_auth.name = "auth";
     g_auth.spawn(static_cast<std::size_t>(envInt("BLOG_AUTH_WORKERS",
-                                                 std::min(4, hw), 1, 64)),
-                 64);
+                                                 std::min(8, hw), 1, 64)),
+                 128);
 
     // Media: libvips parallelises inside a single job, so extra workers
     // mostly contend rather than add throughput. The backlog is short
@@ -173,7 +173,36 @@ bool offload(Pool pool,
              const std::function<void(const drogon::HttpResponsePtr&)>& callback,
              std::function<void()> job)
 {
-    if (submit(pool, std::move(job))) return true;
+    auto wrapped = [callback, job = std::move(job), pool]() mutable {
+        try {
+            job();
+        } catch (const Json::Exception& e) {
+            LOG_WARN << "worker pool '" << poolName(pool)
+                     << "' invalid JSON field type in job: " << e.what();
+            Json::Value body;
+            body["error"] = "Invalid JSON payload";
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+            resp->setStatusCode(drogon::k400BadRequest);
+            callback(resp);
+        } catch (const std::exception& e) {
+            LOG_ERROR << "worker pool '" << poolName(pool)
+                      << "' unhandled exception in job: " << e.what();
+            Json::Value body;
+            body["error"] = "Internal server error";
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+            resp->setStatusCode(drogon::k500InternalServerError);
+            callback(resp);
+        } catch (...) {
+            LOG_ERROR << "worker pool '" << poolName(pool)
+                      << "' unhandled unknown exception in job";
+            Json::Value body;
+            body["error"] = "Internal server error";
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+            resp->setStatusCode(drogon::k500InternalServerError);
+            callback(resp);
+        }
+    };
+    if (submit(pool, std::move(wrapped))) return true;
 
     LOG_WARN << "worker pool '" << poolName(pool)
              << "' saturated; shedding request";
