@@ -221,7 +221,7 @@ const isStaff = computed(() => user.value?.role === 'moderator' || user.value?.r
       </form>
 
       <div class="nav-links">
-        <router-link to="/">{{ $t('nav.feed') }}</router-link>
+        <router-link to="/" active-class="" exact-active-class="router-link-active">{{ $t('nav.feed') }}</router-link>
         <router-link :to="{ name: 'tags' }">{{ $t('nav.tags') }}</router-link>
         <template v-if="isAuthed">
           <!-- Only the destinations a reader moves between often stay on the
@@ -268,6 +268,7 @@ const isStaff = computed(() => user.value?.role === 'moderator' || user.value?.r
         @click="drawerOpen = !drawerOpen"
       >
         <span aria-hidden="true">☰</span>
+        <span v-if="isAuthed && (unread + unreadNotifs) > 0" class="nav-toggle-dot" aria-hidden="true"></span>
       </button>
     </div>
   </nav>
@@ -294,7 +295,7 @@ const isStaff = computed(() => user.value?.role === 'moderator' || user.value?.r
         />
       </form>
       <hr />
-      <router-link to="/">{{ $t('nav.feed') }}</router-link>
+      <router-link to="/" active-class="" exact-active-class="router-link-active">{{ $t('nav.feed') }}</router-link>
       <router-link :to="{ name: 'tags' }">{{ $t('nav.tags') }}</router-link>
       <template v-if="isAuthed">
         <router-link to="/posts/new">{{ $t('nav.new_post') }}</router-link>
@@ -342,18 +343,27 @@ const isStaff = computed(() => user.value?.role === 'moderator' || user.value?.r
        for a logged-out visitor the feed is the whole app, and a one-item
        bar would just eat screen height. -->
   <nav v-if="isAuthed" class="tabbar" :aria-label="$t('a11y.mobile_navigation')">
-    <router-link to="/">
-      <span class="ico" aria-hidden="true">🏠</span>{{ $t('nav.feed') }}
+    <router-link to="/" active-class="" exact-active-class="router-link-active">
+      <span class="ico" aria-hidden="true">🏠</span>
+      <span class="tab-label">{{ $t('nav.feed') }}</span>
     </router-link>
     <router-link to="/posts/new">
-      <span class="ico" aria-hidden="true">✍️</span>{{ $t('nav.new_post') }}
+      <span class="ico" aria-hidden="true">✍️</span>
+      <span class="tab-label">{{ $t('nav.new_post') }}</span>
+    </router-link>
+    <router-link :to="{ name: 'notifications' }" :aria-label="$t('nav.notifications')">
+      <span class="ico" aria-hidden="true">🔔</span>
+      <span class="tab-label">{{ $t('nav.alerts') }}</span>
+      <span v-if="unreadNotifs" class="nav-badge">{{ unreadNotifs > 99 ? '99+' : unreadNotifs }}</span>
     </router-link>
     <router-link to="/messages">
-      <span class="ico" aria-hidden="true">💬</span>{{ $t('nav.messages') }}
-      <span v-if="unread" class="nav-badge">{{ unread }}</span>
+      <span class="ico" aria-hidden="true">💬</span>
+      <span class="tab-label">{{ $t('nav.messages') }}</span>
+      <span v-if="unread" class="nav-badge">{{ unread > 99 ? '99+' : unread }}</span>
     </router-link>
     <router-link :to="{ name: 'profile', params: { id: user!.id } }">
-      <span class="ico" aria-hidden="true">👤</span>{{ user!.username }}
+      <span class="ico" aria-hidden="true">👤</span>
+      <span class="tab-label">{{ user!.username }}</span>
     </router-link>
   </nav>
 

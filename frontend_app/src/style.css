@@ -825,6 +825,11 @@ input[type="checkbox"], input[type="radio"] {
   font-size: var(--step-1);
 }
 .drawer > a:hover, .drawer > button:hover { background: var(--bg-elev2); text-decoration: none; }
+.drawer > a.router-link-active {
+  background: var(--bg-elev2);
+  color: var(--accent);
+  font-weight: 600;
+}
 .drawer .row { padding: var(--sp-2) var(--sp-3); }
 .drawer hr { margin: var(--sp-2) 0; }
 
@@ -990,6 +995,9 @@ footer {
 .post-body pre[data-lang]::before {
   content: attr(data-lang);
   display: block;
+  width: fit-content;
+  position: sticky;
+  left: 0;
   margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
   color: var(--text-faint);
   font-size: 0.72rem;
@@ -1032,6 +1040,7 @@ footer {
   .nav-links { display: none; }
   .nav-search { display: none; }
   .nav-toggle {
+    position: relative;
     display: inline-flex;
     margin-left: auto;
     background: transparent;
@@ -1040,6 +1049,16 @@ footer {
     min-width: 2.75rem;
     min-height: 2.75rem;
     padding-inline: var(--sp-3);
+  }
+  .nav-toggle-dot {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.45rem;
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg-elev);
   }
 
   .container { padding-block: var(--sp-4) var(--sp-6); }
@@ -1079,6 +1098,7 @@ footer {
     align-items: center;
     justify-content: center;
     gap: 2px;
+    padding: 0 2px;
     color: var(--text-faint);
     font-size: 0.68rem;
     font-weight: 550;
@@ -1087,14 +1107,26 @@ footer {
     min-width: 0;
   }
   .tabbar a .ico { font-size: 1.15rem; line-height: 1; }
+  .tabbar .tab-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+  }
   .tabbar a.router-link-active { color: var(--accent); }
   .tabbar a:hover { text-decoration: none; }
   .tabbar .nav-badge {
     position: absolute;
-    top: 0.35rem;
-    left: 55%;
+    top: 0.25rem;
+    left: 54%;
     margin: 0;
   }
+}
+
+.report.open {
+  flex: 1 0 100%;
+  max-width: 100%;
 }
 
 /* Very small phones: reclaim the horizontal gutter. */

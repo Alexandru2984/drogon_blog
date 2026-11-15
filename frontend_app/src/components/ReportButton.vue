@@ -48,7 +48,7 @@ async function submit() {
 </script>
 
 <template>
-  <div class="report">
+  <div class="report" :class="{ open }">
     <button v-if="!open" class="quiet sm" @click="start">
       <span aria-hidden="true">🚩</span> Report
     </button>
