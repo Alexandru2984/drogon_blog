@@ -596,3 +596,82 @@ DROGON_TEST(Notifications_ReplyNotifiesTheParentAuthorOnce)
         });
     });
 }
+
+// Only the sender may delete a DM: a recipient attempting DELETE /messages/{id}
+// gets 403 Forbidden instead of erasing the shared history row.
+DROGON_TEST(Messages_OnlySenderCanDelete)
+{
+    auto sender   = std::make_shared<Client>(testBaseUrl());
+    auto receiver = std::make_shared<Client>(testBaseUrl());
+
+    makeUser(sender, "dmsnd_" + uniq(), [TEST_CTX, sender, receiver] {
+        makeUser(receiver, "dmrcv_" + uniq(), [TEST_CTX, sender, receiver] {
+            Json::Value msg;
+            msg["receiver_id"] = receiver->id;
+            msg["content"]     = "Audit message to unsend.";
+            sender->http->sendRequest(sender->json("/messages", Post, msg),
+              [TEST_CTX, sender, receiver](ReqResult, const HttpResponsePtr& r1) {
+                REQUIRE(r1->getStatusCode() == k201Created);
+                auto j = r1->getJsonObject();
+                REQUIRE(j != nullptr);
+                const int msgId = (*j)["msg"]["id"].asInt();
+                REQUIRE(msgId > 0);
+                const std::string path = "/messages/" + std::to_string(msgId);
+
+                receiver->http->sendRequest(receiver->del(path),
+                  [TEST_CTX, sender, path](ReqResult, const HttpResponsePtr& r2) {
+                    CHECK(r2->getStatusCode() == k403Forbidden);
+
+                    sender->http->sendRequest(sender->del(path),
+                      [TEST_CTX](ReqResult, const HttpResponsePtr& r3) {
+                        CHECK(r3->getStatusCode() == k200OK);
+                      });
+                  });
+              });
+        });
+    });
+}
+
+// /preview/posts/{id} rejects out-of-range/non-numeric ids with 400 and emits
+// canonical + JSON-LD + og:url + meta refresh with script-safe escaping.
+DROGON_TEST(PublicPreview_CanonicalJsonLdAndBadId)
+{
+    auto anon = HttpClient::newHttpClient(testBaseUrl());
+    for (const char* bad : {"0", "-1", "999999999999", "12abc"}) {
+        auto req = HttpRequest::newHttpRequest();
+        req->setMethod(Get);
+        req->setPath(std::string("/preview/posts/") + bad);
+        anon->sendRequest(req, [TEST_CTX](ReqResult, const HttpResponsePtr& r) {
+            CHECK(r->getStatusCode() == k400BadRequest);
+        });
+    }
+
+    auto author = std::make_shared<Client>(testBaseUrl());
+    makeUser(author, "prev_" + uniq(), [TEST_CTX, author, anon] {
+        Json::Value p;
+        p["title"]   = "Preview </script> JSON-LD";
+        p["content"] = "# Heading\n\nBody text for crawler.";
+        author->http->sendRequest(author->json("/posts", Post, p),
+          [TEST_CTX, anon](ReqResult, const HttpResponsePtr& r1) {
+            REQUIRE(r1->getStatusCode() == k201Created);
+            const int postId = (*r1->getJsonObject())["post"]["id"].asInt();
+            const std::string previewPath = "/preview/posts/" + std::to_string(postId);
+
+            auto req = HttpRequest::newHttpRequest();
+            req->setMethod(Get);
+            req->setPath(previewPath);
+            anon->sendRequest(req, [TEST_CTX, postId, previewPath](ReqResult, const HttpResponsePtr& r2) {
+                REQUIRE(r2->getStatusCode() == k200OK);
+                const std::string body{r2->getBody()};
+                CHECK(body.find("rel=\"canonical\"") != std::string::npos);
+                CHECK(body.find(previewPath + "\"") != std::string::npos);
+                CHECK(body.find("property=\"og:url\"") != std::string::npos);
+                CHECK(body.find("/#/posts/" + std::to_string(postId)) != std::string::npos);
+                CHECK(body.find("http-equiv=\"refresh\"") != std::string::npos);
+                CHECK(body.find("application/ld+json") != std::string::npos);
+                CHECK(body.find("BlogPosting") != std::string::npos);
+                CHECK(body.find("Preview \\u003c/script") != std::string::npos);
+            });
+          });
+    });
+}

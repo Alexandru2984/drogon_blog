@@ -12,7 +12,7 @@
  * ever; bumping the name on activate clears them in one step.
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `blog-shell-${VERSION}`;
 const OFFLINE_URL = '/offline.html';
 

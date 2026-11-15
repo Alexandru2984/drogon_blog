@@ -100,7 +100,7 @@ COPY --from=backend  /src/openapi    /app/openapi
 COPY --from=backend  /src/config.json /app/config.json
 COPY --from=frontend /app/../public/ /app/public/
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh && chown -R blog:blog /app && mkdir -p /app/uploads && chown blog:blog /app/uploads
+RUN chmod +x /app/entrypoint.sh && chown -R blog:blog /app && mkdir -p /app/uploads && chown blog:blog /app/uploads && rm -rf /app/public/uploads && ln -s ../uploads /app/public/uploads && chown -h blog:blog /app/public/uploads
 
 USER blog
 EXPOSE 8092

@@ -1,9 +1,13 @@
 #include "PublicPages.h"
+#include "PostMeta.h"
 
 #include <drogon/drogon.h>
+#include <json/json.h>
 #include <trantor/utils/Logger.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -48,22 +52,22 @@ std::string cdataSafe(const std::string& s)
     return out;
 }
 
-// First N chars of the raw markdown, trimmed, with newlines collapsed to
-// spaces — fine for og:description / Twitter card descriptions.
-std::string excerpt(const std::string& s, std::size_t maxLen = 200)
+// Serialise JSON-LD cleanly for inline <script type="application/ld+json">
+// blocks: escaping `<`, `>`, and `&` prevents closing the script tag or
+// breaking HTML parsing without altering decoded JSON strings.
+std::string jsonScriptSafe(const Json::Value& v)
 {
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    const std::string raw = Json::writeString(w, v);
     std::string out;
-    out.reserve(std::min(maxLen, s.size()) + 1);
-    bool lastSpace = false;
-    for (char c : s) {
-        if (out.size() >= maxLen) break;
-        if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-        if (c == ' ' && lastSpace) continue;
-        lastSpace = (c == ' ');
-        out.push_back(c);
+    out.reserve(raw.size() + 16);
+    for (char c : raw) {
+        if (c == '<')      out += "\\u003c";
+        else if (c == '>') out += "\\u003e";
+        else if (c == '&') out += "\\u0026";
+        else               out.push_back(c);
     }
-    while (!out.empty() && out.back() == ' ') out.pop_back();
-    if (s.size() > maxLen) out += "…";
     return out;
 }
 
@@ -278,19 +282,36 @@ void install(const std::string& siteOrigin)
         [origin](const HttpRequestPtr&,
                  std::function<void(const HttpResponsePtr&)>&& cb,
                  const std::string& idStr) {
-            int64_t postId = 0;
-            try { postId = std::stoll(idStr); }
-            catch (...) {
+            auto badId = [&]() {
                 auto resp = HttpResponse::newHttpResponse();
                 resp->setStatusCode(k400BadRequest);
                 resp->setBody("bad id");
                 cb(resp);
+            };
+            if (idStr.empty() ||
+                !std::all_of(idStr.begin(), idStr.end(), [](unsigned char c) {
+                    return c >= '0' && c <= '9';
+                })) {
+                badId();
+                return;
+            }
+            int64_t postId = 0;
+            try {
+                postId = std::stoll(idStr);
+            } catch (...) {
+                badId();
+                return;
+            }
+            if (postId < 1 || postId > std::numeric_limits<int>::max()) {
+                badId();
                 return;
             }
 
             auto db = app().getDbClient();
             static const char* kSql =
-                "SELECT p.title, p.content, u.username AS author "
+                "SELECT p.title, p.content, p.content_html, "
+                "       p.created_at, p.updated_at, p.published_at, "
+                "       u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
                 // A guessed id must not turn the social-card preview into a
@@ -308,13 +329,38 @@ void install(const std::string& siteOrigin)
                         cb(resp);
                         return;
                     }
-                    const auto title       = r[0]["title"].as<std::string>();
-                    const auto content     = r[0]["content"].as<std::string>();
+                    const auto title   = r[0]["title"].as<std::string>();
+                    const auto content = r[0]["content"].as<std::string>();
+                    const std::string contentHtml = r[0]["content_html"].isNull()
+                        ? std::string{} : r[0]["content_html"].as<std::string>();
                     const std::string author = r[0]["author"].isNull()
                         ? std::string{} : r[0]["author"].as<std::string>();
+                    const std::string publishedRaw = r[0]["published_at"].isNull()
+                        ? r[0]["created_at"].as<std::string>()
+                        : r[0]["published_at"].as<std::string>();
+                    const std::string updatedRaw = r[0]["updated_at"].isNull()
+                        ? publishedRaw
+                        : r[0]["updated_at"].as<std::string>();
+                    const std::string publishedIso = toIso8601(publishedRaw);
+                    const std::string updatedIso   = toIso8601(updatedRaw);
 
-                    const std::string spaUrl = origin + "/#/posts/" + std::to_string(postId);
-                    const std::string desc   = excerpt(content);
+                    const std::string previewUrl = origin + "/preview/posts/" + std::to_string(postId);
+                    const std::string spaUrl     = origin + "/#/posts/" + std::to_string(postId);
+                    const std::string desc       = post_meta::makeExcerpt(content);
+
+                    Json::Value ld(Json::objectValue);
+                    ld["@context"] = "https://schema.org";
+                    ld["@type"] = "BlogPosting";
+                    ld["headline"] = title;
+                    ld["description"] = desc;
+                    ld["url"] = previewUrl;
+                    ld["mainEntityOfPage"] = previewUrl;
+                    ld["datePublished"] = publishedIso;
+                    ld["dateModified"] = updatedIso;
+                    if (!author.empty()) {
+                        ld["author"]["@type"] = "Person";
+                        ld["author"]["name"] = author;
+                    }
 
                     std::ostringstream h;
                     h << "<!DOCTYPE html>\n"
@@ -322,7 +368,10 @@ void install(const std::string& siteOrigin)
                       << "<head>\n"
                       << "  <meta charset=\"utf-8\">\n"
                       << "  <title>" << xmlEscape(title) << " — Micu's Blog</title>\n"
-                      << "  <link rel=\"canonical\" href=\"" << xmlEscape(spaUrl) << "\">\n"
+                      << "  <link rel=\"canonical\" href=\"" << xmlEscape(previewUrl) << "\">\n"
+                      << "  <link rel=\"alternate\" type=\"application/atom+xml\" "
+                         "title=\"Micu's Blog — Atom Feed\" href=\""
+                      <<      xmlEscape(origin) << "/feed.xml\">\n"
                       << "  <meta name=\"description\" content=\""
                       <<      xmlEscape(desc) << "\">\n"
                       << "  <meta property=\"og:type\" content=\"article\">\n"
@@ -332,7 +381,11 @@ void install(const std::string& siteOrigin)
                       << "  <meta property=\"og:description\" content=\""
                       <<      xmlEscape(desc) << "\">\n"
                       << "  <meta property=\"og:url\" content=\""
-                      <<      xmlEscape(spaUrl) << "\">\n";
+                      <<      xmlEscape(spaUrl) << "\">\n"
+                      << "  <meta property=\"article:published_time\" content=\""
+                      <<      xmlEscape(publishedIso) << "\">\n"
+                      << "  <meta property=\"article:modified_time\" content=\""
+                      <<      xmlEscape(updatedIso) << "\">\n";
                     if (!author.empty()) {
                         h << "  <meta property=\"article:author\" content=\""
                           <<      xmlEscape(author) << "\">\n";
@@ -342,17 +395,27 @@ void install(const std::string& siteOrigin)
                       <<      xmlEscape(title) << "\">\n"
                       << "  <meta name=\"twitter:description\" content=\""
                       <<      xmlEscape(desc) << "\">\n"
+                      << "  <script type=\"application/ld+json\">"
+                      <<      jsonScriptSafe(ld) << "</script>\n"
                       << "  <meta http-equiv=\"refresh\" content=\"0;url="
                       <<      xmlEscape(spaUrl) << "\">\n"
                       << "</head>\n"
                       << "<body>\n"
-                      << "  <h1>" << xmlEscape(title) << "</h1>\n";
+                      << "  <main>\n"
+                      << "    <article>\n"
+                      << "      <h1>" << xmlEscape(title) << "</h1>\n";
                     if (!author.empty()) {
-                        h << "  <p>by " << xmlEscape(author) << "</p>\n";
+                        h << "      <p>by " << xmlEscape(author) << "</p>\n";
                     }
-                    h << "  <p>" << xmlEscape(desc) << "</p>\n"
-                      << "  <p>If you are not redirected, <a href=\""
+                    if (!contentHtml.empty()) {
+                        h << "      <div>" << contentHtml << "</div>\n";
+                    } else {
+                        h << "      <p>" << xmlEscape(desc) << "</p>\n";
+                    }
+                    h << "    </article>\n"
+                      << "    <p>If you are not redirected, <a href=\""
                       <<      xmlEscape(spaUrl) << "\">open the post</a>.</p>\n"
+                      << "  </main>\n"
                       << "</body></html>\n";
 
                     auto resp = HttpResponse::newHttpResponse();
