@@ -52,7 +52,7 @@ async function submitRecovery() {
   try {
     const res = await twoFactorApi.verifyRecovery(recoveryCode.value.trim())
     auth.finalizeAfter2fa(res.user)
-    toasts.push('Signed in with recovery code. Generate a fresh set under Profile.', 'ok')
+    toasts.push('Signed in with recovery code. Generate a fresh set under Two-factor (2FA).', 'ok')
     router.push(safeNext(route.query.next))
   } catch (e: any) {
     error.value = e?.response?.data?.error ?? 'Invalid recovery code'

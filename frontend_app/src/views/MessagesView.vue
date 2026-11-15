@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import Avatar from '@/components/Avatar.vue'
+import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore }     from '@/stores/auth'
@@ -56,13 +58,8 @@ function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-function fmtTime(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
-}
-function isoTime(s: string) {
-  const d = new Date(s.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
-}
+function fmtTime(s: string) { return formatDateTime(s) }
+function isoTime(s: string) { return toIsoDate(s) }
 
 onMounted(async () => {
   if (!auth.isAuthed) { loadingInbox.value = false; return }
@@ -133,9 +130,7 @@ watch(
         :aria-current="c.peer.id === selectedId ? 'true' : undefined"
         @click="pickPeer(c.peer.id)"
       >
-        <span class="avatar"
-              :style="c.peer.profile_image ? `background-image: url(${c.peer.profile_image})` : ''"
-              aria-hidden="true"></span>
+        <Avatar :image-url="c.peer.profile_image" :username="c.peer.username" />
         <span class="mlist-meta">
           <span class="mlist-name">
             {{ c.peer.username ?? `User #${c.peer.id}` }}
@@ -152,9 +147,7 @@ watch(
           <button class="quiet sm mchat-back" @click="backToList">
             <span aria-hidden="true">←</span> Back
           </button>
-          <span class="avatar"
-                :style="activeConversation.peer.profile_image ? `background-image: url(${activeConversation.peer.profile_image})` : ''"
-                aria-hidden="true"></span>
+          <Avatar :image-url="activeConversation.peer.profile_image" :username="activeConversation.peer.username" />
           <strong class="mchat-peer">
             {{ activeConversation.peer.username ?? `User #${activeConversation.peer.id}` }}
           </strong>

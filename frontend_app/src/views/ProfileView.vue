@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import Avatar from '@/components/Avatar.vue'
 import { ref, computed, onMounted, watch } from 'vue'
 import { usersApi } from '@/api/users'
 import { postsApi, type Post } from '@/api/posts'
@@ -140,11 +141,7 @@ async function onFileChange(ev: Event) {
 
   <template v-else-if="user">
     <header class="card profile-head">
-      <span
-        class="avatar lg"
-        :style="user.profile_image ? `background-image: url(${user.profile_image})` : ''"
-        aria-hidden="true"
-      ></span>
+      <Avatar size="lg" :image-url="user.profile_image" :username="user.username" />
       <div class="profile-ident">
         <h1 class="profile-name">{{ user.username }}</h1>
         <div v-if="user.email" class="muted profile-email">{{ user.email }}</div>

@@ -1,5 +1,13 @@
-import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHashHistory, type RouteLocationNormalized, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+
+function validPositiveId(to: RouteLocationNormalized) {
+  const raw = String(to.params.id ?? '')
+  const n = Number(raw)
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < 1) {
+    return { name: 'not-found' }
+  }
+}
 
 const routes: RouteRecordRaw[] = [
   { path: '/',                  name: 'home',          component: () => import('@/views/HomeView.vue'), meta: { titleKey: 'feed.heading' } },
@@ -12,6 +20,7 @@ const routes: RouteRecordRaw[] = [
   // markdown and its preview side by side above 900 px, and two panes do not
   // fit in the 44rem reading measure the rest of the app uses.
   { path: '/posts/new',         name: 'create-post',   component: () => import('@/views/CreatePostView.vue'), meta: { auth: true, wide: true, titleKey: 'nav.new_post' } },
+  { path: '/posts/:id/edit',    name: 'edit-post',     component: () => import('@/views/CreatePostView.vue'), beforeEnter: validPositiveId, props: r => ({ editId: Number(r.params.id) }), meta: { auth: true, wide: true, titleKey: 'pages.edit_post' } },
   { path: '/search',            name: 'search',        component: () => import('@/views/SearchView.vue'), meta: { titleKey: 'pages.search' } },
   { path: '/tags',              name: 'tags',          component: () => import('@/views/TagsView.vue'), meta: { titleKey: 'nav.tags' } },
   { path: '/tags/:slug',        name: 'tag',           component: () => import('@/views/TagView.vue'), props: true, meta: { titleKey: 'pages.tag' } },
@@ -21,8 +30,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/bookmarks',         name: 'bookmarks',     component: () => import('@/views/BookmarksView.vue'), meta: { auth: true, titleKey: 'nav.saved' } },
   { path: '/notifications',     name: 'notifications', component: () => import('@/views/NotificationsView.vue'), meta: { auth: true, titleKey: 'nav.notifications' } },
   { path: '/messages',          name: 'messages',      component: () => import('@/views/MessagesView.vue'), meta: { auth: true, titleKey: 'nav.messages' } },
-  { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'pages.post' } },
-  { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'nav.profile' } },
+  { path: '/posts/:id',         name: 'post',          component: () => import('@/views/PostView.vue'), beforeEnter: validPositiveId, props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'pages.post' } },
+  { path: '/profile/:id',       name: 'profile',       component: () => import('@/views/ProfileView.vue'), beforeEnter: validPositiveId, props: r => ({ id: Number(r.params.id) }), meta: { titleKey: 'nav.profile' } },
   { path: '/login/2fa',         name: 'verify-2fa',    component: () => import('@/views/Verify2FAView.vue'), meta: { titleKey: 'pages.verify_2fa' } },
   { path: '/account/security',  name: 'security-2fa',  component: () => import('@/views/Security2FAView.vue'), meta: { auth: true, titleKey: 'pages.account_security' } },
   { path: '/account/data',      name: 'account-data',  component: () => import('@/views/AccountDataView.vue'), meta: { auth: true, titleKey: 'nav.your_data' } },
@@ -39,7 +48,12 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHashHistory(),
   routes,
-  scrollBehavior() { return { top: 0 } },
+  scrollBehavior(to) {
+    if (to.hash) {
+      return { el: to.hash, behavior: 'smooth' }
+    }
+    return { top: 0 }
+  },
 })
 
 // Wait for the auth store's first /auth/me probe to land before the guard

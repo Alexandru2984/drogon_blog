@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { moderationApi, type Report, type ReportStatus } from '@/api/moderation'
 import { useToastStore } from '@/stores/toast'
+import { formatDateTime as when } from '@/lib/date'
 
 const toasts = useToastStore()
 
@@ -95,10 +96,6 @@ async function takeAction(r: Report) {
   } finally {
     busyId.value = null
   }
-}
-
-function when(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
 }
 
 // --- Manual overrides -----------------------------------------------------

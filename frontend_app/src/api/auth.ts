@@ -8,6 +8,7 @@ export interface User {
   email: string
   bio?: string
   profile_image?: string
+  email_verified?: boolean
   // Absent only if the /auth/me role lookup itself failed server-side; treat
   // a missing value the same as 'user' (least privilege).
   role?: Role
@@ -28,6 +29,9 @@ export const authApi = {
   },
   verifyEmail(token: string) {
     return api.post('/auth/verify-email', { token }).then(r => r.data)
+  },
+  resendVerification() {
+    return api.post<{ message: string }>('/auth/resend-verification').then(r => r.data)
   },
   requestReset(email: string) {
     return api.post('/auth/request-reset', { email }).then(r => r.data)

@@ -5,6 +5,7 @@ import { twoFactorApi, webauthnRegister, type Passkey, type Status2fa }
   from '@/api/twofactor'
 import { accountApi, type SessionEntry } from '@/api/account'
 import { useToastStore } from '@/stores/toast'
+import { formatDateTime as formatWhen, formatDateShort } from '@/lib/date'
 
 const toasts = useToastStore()
 
@@ -137,13 +138,6 @@ function describeAgent(ua: string): string {
     /Windows/.test(ua)                      ? 'Windows' :
     /Linux/.test(ua)                        ? 'Linux'   : ''
   return os ? `${browser} on ${os}` : browser
-}
-
-function formatWhen(ts: string): string {
-  // Postgres hands back "2026-07-28 17:22:42.970854" with no zone marker;
-  // it is UTC, so say so before Date parses it as local time.
-  const d = new Date(ts.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? ts : d.toLocaleString()
 }
 
 async function startTotp() {
@@ -409,7 +403,7 @@ function copyCodes() {
         <li v-for="p in passkeys" :key="p.id" class="session-row">
           <div class="session-meta">
             <strong>{{ p.nickname || 'Unnamed passkey' }}</strong>
-            <div class="muted">added {{ new Date(p.created_at).toLocaleDateString() }}</div>
+            <div class="muted">added {{ formatDateShort(p.created_at) }}</div>
           </div>
           <button :disabled="!managementPw" @click="removePasskey(p.id)"
                   class="ghost sm danger-text">Remove</button>

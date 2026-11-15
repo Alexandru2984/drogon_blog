@@ -3,6 +3,8 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { postsApi, type SearchHit } from '@/api/posts'
 import { sanitizeHtml } from '@/lib/sanitize'
+import { formatDateTime as formatDate, isoDate } from '@/lib/date'
+import Avatar from '@/components/Avatar.vue'
 
 const route  = useRoute()
 const router = useRouter()
@@ -40,14 +42,6 @@ async function run(query: string) {
 function submit() {
   const next = input.value.trim()
   router.push({ name: 'search', query: next ? { q: next } : {} })
-}
-
-function formatDate(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
-}
-function isoDate(s: string) {
-  const d = new Date(s.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
 }
 
 onMounted(() => {
@@ -112,11 +106,11 @@ watch(q, (v) => {
 
   <article v-for="h in hits" :key="h.id" class="card hit">
     <header class="row tight hit-head">
-      <span
-        class="avatar sm"
-        :style="h.author?.profile_image ? `background-image: url(${h.author.profile_image})` : ''"
-        aria-hidden="true"
-      ></span>
+      <Avatar
+        size="sm"
+        :image-url="h.author?.profile_image"
+        :username="h.author?.username"
+      />
       <div class="hit-meta">
         <router-link
           v-if="h.author"

@@ -3,6 +3,8 @@ import type { Post } from '@/api/posts'
 import { computed } from 'vue'
 import TagList from '@/components/TagList.vue'
 import PostMeta from '@/components/PostMeta.vue'
+import Avatar from '@/components/Avatar.vue'
+import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
 
 const props = defineProps<{ post: Post; clamp?: boolean }>()
 
@@ -19,28 +21,18 @@ const excerpt = computed(() => {
     : props.post.content
 })
 
-function formatDate(s: string) {
-  if (!s) return ''
-  return new Date(s.replace(' ', 'T') + 'Z').toLocaleString()
-}
-
-// Machine-readable timestamp for <time datetime>. The displayed string is
-// locale-formatted and useless to a parser or an assistive technology
-// trying to say "three days ago".
-const isoDate = computed(() => {
-  const d = new Date(props.post.created_at.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
-})
+const formatDate = formatDateTime
+const isoDate = computed(() => toIsoDate(props.post.created_at))
 </script>
 
 <template>
   <article class="card post-card">
     <header class="row tight">
-      <span
-        class="avatar sm"
-        :style="post.author?.profile_image ? `background-image: url(${post.author.profile_image})` : ''"
-        aria-hidden="true"
-      ></span>
+      <Avatar
+        size="sm"
+        :image-url="post.author?.profile_image"
+        :username="post.author?.username"
+      />
       <div class="post-card-meta">
         <router-link
           v-if="post.author"

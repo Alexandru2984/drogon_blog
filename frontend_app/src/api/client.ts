@@ -16,7 +16,12 @@ export const api = axios.create({
 function readCookie(name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + escaped + '=([^;]+)'))
-  return m ? decodeURIComponent(m[1]) : null
+  if (!m) return null
+  try {
+    return decodeURIComponent(m[1])
+  } catch {
+    return m[1]
+  }
 }
 
 // The backend names the CSRF cookie `__Host-csrf_token` when it is serving
@@ -39,5 +44,28 @@ api.interceptors.request.use((config) => {
   }
   return config
 })
+
+let onUnauthorizedSession: (() => void) | null = null
+
+export function setUnauthorizedSessionHandler(fn: () => void) {
+  onUnauthorizedSession = fn
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const errMsg = error?.response?.data?.error
+    if (
+      status === 401 &&
+      (errMsg === 'Authentication required' ||
+       errMsg === 'Not authenticated' ||
+       errMsg === 'Session expired or revoked')
+    ) {
+      onUnauthorizedSession?.()
+    }
+    return Promise.reject(error)
+  },
+)
 
 export type ApiError = { error?: string; message?: string }

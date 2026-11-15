@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authApi } from '@/api/auth'
 import { useToastStore } from '@/stores/toast'
@@ -8,13 +8,22 @@ const route = useRoute()
 const router = useRouter()
 const toasts = useToastStore()
 
-const token = computed(() => String(route.query.token ?? ''))
+const token = ref(String(route.query.token ?? ''))
 const password = ref('')
 const confirm = ref('')
 const loading = ref(false)
 const error = ref('')
 
-onMounted(() => { if (!token.value) error.value = 'Missing reset token' })
+onMounted(() => {
+  if (!token.value) {
+    error.value = 'Missing reset token'
+    return
+  }
+  // Scrub token from the address bar while keeping /#/reset-password intact.
+  if (route.query.token) {
+    router.replace({ name: 'reset', query: {} }).catch(() => {})
+  }
+})
 
 async function submit() {
   if (password.value !== confirm.value) { error.value = 'Passwords do not match'; return }

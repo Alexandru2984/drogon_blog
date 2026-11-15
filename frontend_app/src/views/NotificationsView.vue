@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
 import { onMounted, computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useNotificationsStore } from '@/stores/notifications'
@@ -47,13 +48,8 @@ function target(n: AppNotification) {
   return { name: 'home' }
 }
 
-function when(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
-}
-function iso(s: string) {
-  const d = new Date(s.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
-}
+function when(s: string) { return formatDateTime(s) }
+function iso(s: string) { return toIsoDate(s) }
 </script>
 
 <template>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import Avatar from '@/components/Avatar.vue'
+import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { postsApi, type Post } from '@/api/posts'
@@ -142,13 +144,8 @@ watch(
   }
 )
 
-function formatDate(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
-}
-function isoDate(s: string) {
-  const d = new Date(s.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
-}
+function formatDate(s: string) { return formatDateTime(s) }
+function isoDate(s: string) { return toIsoDate(s) }
 
 // One toggle rather than a Like button next to an Unlike button. The pair
 // was not just noisy: neither knew the current state, so pressing Like
@@ -303,11 +300,7 @@ async function deletePost() {
   <template v-else-if="post">
     <article class="card">
       <header class="row tight post-head">
-        <span
-          class="avatar"
-          :style="post.author?.profile_image ? `background-image: url(${post.author.profile_image})` : ''"
-          aria-hidden="true"
-        ></span>
+        <Avatar :image-url="post.author?.profile_image" :username="post.author?.username" />
         <div class="post-head-meta">
           <router-link
             v-if="post.author"

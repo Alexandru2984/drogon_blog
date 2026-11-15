@@ -11,7 +11,8 @@ export interface MessageRow {
 
 export interface ConversationPayload {
   messages: MessageRow[]
-  other_user?: { id: number; username: string; profile_image?: string }
+  next_cursor?: number | null
+  other_user?: { id: number; username: string; profile_image?: string; online?: boolean }
 }
 
 export interface InboxItem {
@@ -19,30 +20,39 @@ export interface InboxItem {
   content: string
   is_read: number
   created_at: string
-  sender?: { id: number; username: string; profile_image?: string }
-  receiver?: { id: number; username: string; profile_image?: string }
+  sender?: { id: number; username: string; profile_image?: string; online?: boolean }
+  receiver?: { id: number; username: string; profile_image?: string; online?: boolean }
 }
 
 export const messagesApi = {
-  received() {
-    return api.get<{ messages: InboxItem[] }>('/messages/received')
-      .then(r => r.data.messages)
+  received(before?: number, limit = 50) {
+    return api.get<{ messages: InboxItem[]; next_cursor?: number | null }>(
+      '/messages/received',
+      { params: { ...(before ? { before } : {}), limit } },
+    ).then(r => r.data.messages)
   },
-  sent() {
-    return api.get<{ messages: InboxItem[] }>('/messages/sent')
-      .then(r => r.data.messages)
+  sent(before?: number, limit = 50) {
+    return api.get<{ messages: InboxItem[]; next_cursor?: number | null }>(
+      '/messages/sent',
+      { params: { ...(before ? { before } : {}), limit } },
+    ).then(r => r.data.messages)
   },
-  conversation(userId: number) {
-    return api.get<ConversationPayload>(`/messages/conversation/${userId}`)
-      .then(r => r.data)
+  conversation(userId: number, before?: number, limit = 50) {
+    return api.get<ConversationPayload>(
+      `/messages/conversation/${userId}`,
+      { params: { ...(before ? { before } : {}), limit } },
+    ).then(r => r.data)
   },
   send(receiverId: number, content: string) {
     return api.post<{ message: string; msg: MessageRow }>(
       '/messages',
-      { receiver_id: receiverId, content }
+      { receiver_id: receiverId, content },
     ).then(r => r.data.msg)
   },
   markRead(id: number) {
     return api.put(`/messages/${id}/read`).then(r => r.data)
+  },
+  remove(id: number) {
+    return api.delete<{ message: string }>(`/messages/${id}`).then(r => r.data)
   },
 }

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi, type User } from '@/api/auth'
-import { api } from '@/api/client'
+import { api, setUnauthorizedSessionHandler } from '@/api/client'
 
 interface LoginResponse {
   message?:      string
@@ -74,6 +74,10 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     ready.value = true
   }
+
+  setUnauthorizedSessionHandler(() => {
+    clearSession()
+  })
 
   return { user, ready, isAuthed, pending2fa, needs2fa,
            fetchMe, login, register, logout, patchUser, finalizeAfter2fa,

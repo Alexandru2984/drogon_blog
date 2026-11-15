@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
 import { computed, ref } from 'vue'
 import type { Comment } from '@/api/comments'
 import { useAuthStore } from '@/stores/auth'
@@ -115,13 +116,8 @@ function remove(c: Comment) {
   if (confirm(msg)) emit('remove', c.id)
 }
 
-function when(s: string) {
-  return s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : ''
-}
-function iso(s: string) {
-  const d = new Date(s.replace(' ', 'T') + 'Z')
-  return isNaN(d.getTime()) ? '' : d.toISOString()
-}
+function when(s: string) { return formatDateTime(s) }
+function iso(s: string) { return toIsoDate(s) }
 </script>
 
 <template>
