@@ -51,7 +51,8 @@
     "post": "Post",
     "verify_2fa": "Two-factor verification",
     "account_security": "Account security",
-    "not_found": "Page not found"
+    "not_found": "Page not found",
+    "edit_post": "Edit post"
   },
   "common": {
     "submit": "Submit",
@@ -66,7 +67,14 @@
   "feed": {
     "heading": "Feed",
     "empty": "No posts yet. Be the first to publish.",
-    "load_more": "Load more"
+    "load_more": "Load more",
+    "tab_latest": "Latest",
+    "tab_following": "Following",
+    "mode_aria": "Feed view",
+    "popular_tags": "Topics",
+    "all_tags": "All tags",
+    "following_empty": "Posts from people you follow will appear here.",
+    "browse_latest": "Browse latest posts"
   },
   "auth": {
     "login_heading": "Sign in",

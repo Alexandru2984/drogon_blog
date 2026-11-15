@@ -85,6 +85,12 @@ export const postsApi = {
   byUser(userId: number) {
     return api.get<{ posts: Post[] }>(`/posts/user/${userId}`).then(r => r.data.posts)
   },
+  byUserPage(userId: number, opts: { before?: number; limit?: number } = {}) {
+    const params: Record<string, string> = {}
+    if (opts.before) params.before = String(opts.before)
+    if (opts.limit)  params.limit  = String(opts.limit)
+    return api.get<FeedPage>(`/posts/user/${userId}`, { params }).then(r => r.data)
+  },
   listTags() {
     return api.get<{ tags: TagSummary[] }>('/tags').then(r => r.data.tags)
   },
@@ -128,11 +134,14 @@ export const postsApi = {
       .then(r => r.data.url)
   },
   // Omitting `tags` leaves them untouched; passing an empty array clears
-  // them. Omitting `draft` leaves the published state alone.
+  // them. Omitting `draft` leaves the published state alone. `publish_at`:
+  // an ISO instant schedules the post (and makes it a draft until then);
+  // null clears an existing schedule.
   update(id: number, payload: {
     title?: string; content?: string; tags?: string[]; draft?: boolean
+    publish_at?: string | null
   }) {
-    return api.put(`/posts/${id}`, payload).then(r => r.data)
+    return api.put<{ message: string; post: Post }>(`/posts/${id}`, payload).then(r => r.data)
   },
   remove(id: number) {
     return api.delete(`/posts/${id}`).then(r => r.data)

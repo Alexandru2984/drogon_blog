@@ -359,6 +359,23 @@ void SocialController::followingFeed(const HttpRequestPtr &req,
     const auto me = viewer(req);
     if (!me) { callback(unauthenticated()); return; }
 
+    int limit = 50;
+    const auto l = req->getParameter("limit");
+    if (!l.empty()) {
+        try {
+            const int v = std::stoi(l);
+            if (v > 0) limit = std::min(v, 50);
+        } catch (...) {}
+    }
+    long long before = 0;
+    const auto b = req->getParameter("before");
+    if (!b.empty()) {
+        try {
+            const long long v = std::stoll(b);
+            if (v > 0) before = v;
+        } catch (...) {}
+    }
+
     auto db = drogon::app().getDbClient();
     const std::string sql =
         std::string("SELECT ") + kPostColumns() +
@@ -366,14 +383,23 @@ void SocialController::followingFeed(const HttpRequestPtr &req,
         "  JOIN follows f ON f.followee_id = p.user_id AND f.follower_id = $1 "
         "  LEFT JOIN users u ON u.id = p.user_id "
         " WHERE p.hidden_at IS NULL AND p.published_at IS NOT NULL "
+        "   AND ($2::bigint = 0 OR p.id < $2::bigint) "
         " ORDER BY p.id DESC "
-        " LIMIT 50";
+        " LIMIT $3::int";
 
     db->execSqlAsync(
         sql,
-        [callback](const Result& r) {
+        [callback, limit](const Result& r) {
+            std::int64_t minId = 0;
+            for (const auto& row : r) {
+                const auto id = row["id"].as<std::int64_t>();
+                if (minId == 0 || id < minId) minId = id;
+            }
             Json::Value ret;
             ret["posts"] = postList(r);
+            ret["next_cursor"] = (static_cast<int>(r.size()) == limit && minId > 0)
+                ? Json::Value(static_cast<Json::Int64>(minId))
+                : Json::nullValue;
             auto resp = HttpResponse::newHttpJsonResponse(ret);
             resp->addHeader("Cache-Control", "private, no-store");
             callback(resp);
@@ -382,7 +408,7 @@ void SocialController::followingFeed(const HttpRequestPtr &req,
             LOG_ERROR << "DB Error (followingFeed): " << e.base().what();
             callback(serverError("Failed to load feed"));
         },
-        me.value());
+        me.value(), before, limit);
 }
 
 // ======================================================= notifications
@@ -397,6 +423,8 @@ void SocialController::listNotifications(const HttpRequestPtr &req,
     try { before = std::stoll(req->getParameter("before")); } catch (...) { before = 0; }
     int limit = 50;
     try { limit = std::stoi(req->getParameter("limit")); } catch (...) { limit = 50; }
+    if (limit < 1) limit = 1;
+    if (limit > 100) limit = 100;
 
     // Two synchronous queries, one of them a join across four tables. The
     // notification bell polls this, so it was also the most frequent way an
@@ -404,11 +432,17 @@ void SocialController::listNotifications(const HttpRequestPtr &req,
     workers::offload(workers::Pool::Auth, callback,
         [me, limit, before, callback] {
             auto db = drogon::app().getDbClient();
-            Json::Value ret;
-            ret["notifications"] =
+            const Json::Value list =
                 notifications::list(db, me.value(), limit, before);
+            Json::Value ret;
+            ret["notifications"] = list;
             ret["unread"] = static_cast<Json::Int64>(
                                 notifications::unreadCount(db, me.value()));
+            if (static_cast<int>(list.size()) == limit && !list.empty()) {
+                ret["next_cursor"] = list[list.size() - 1]["id"];
+            } else {
+                ret["next_cursor"] = Json::nullValue;
+            }
 
             auto resp = HttpResponse::newHttpJsonResponse(ret);
             resp->addHeader("Cache-Control", "private, no-store");

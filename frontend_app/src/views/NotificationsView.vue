@@ -4,17 +4,15 @@ import { onMounted, computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { AppNotification } from '@/api/social'
+import Avatar from '@/components/Avatar.vue'
 
 const store = useNotificationsStore()
-const { items, unread, loading } = storeToRefs(store)
+const { items, unread, loading, loadingMore, nextCursor } = storeToRefs(store)
 
 onMounted(() => store.load())
 
 const hasUnread = computed(() => unread.value > 0)
 
-// One sentence per kind. Written out rather than assembled from fragments
-// because the word order differs between them and a template like
-// "{actor} {verb} {target}" produces English that reads like a robot.
 function summary(n: AppNotification): string {
   const who = n.actor?.username ?? 'Someone'
   switch (n.kind) {
@@ -38,13 +36,16 @@ function icon(kind: AppNotification['kind']): string {
   }
 }
 
-// Where clicking takes you. A follow has no post, so it goes to the
-// follower's profile; everything else goes to the post it is about.
 function target(n: AppNotification) {
   if (n.kind === 'follow' && n.actor) {
     return { name: 'profile', params: { id: n.actor.id } }
   }
-  if (n.post_id) return { name: 'post', params: { id: n.post_id } }
+  if (n.post_id) {
+    const hash = (n.kind === 'comment' || n.kind === 'reply') && n.comment_id
+      ? `#comment-${n.comment_id}`
+      : undefined
+    return { name: 'post', params: { id: n.post_id }, ...(hash ? { hash } : {}) }
+  }
   return { name: 'home' }
 }
 
@@ -54,7 +55,7 @@ function iso(s: string) { return toIsoDate(s) }
 
 <template>
   <header class="row tight notif-head">
-    <h1 class="page-title" style="margin: 0;">Notifications</h1>
+    <h1 class="page-title" style="margin: 0;">{{ $t('nav.notifications') }}</h1>
     <span class="spacer"></span>
     <button v-if="hasUnread" class="ghost sm" @click="store.markAllRead()">
       Mark all read
@@ -77,32 +78,41 @@ function iso(s: string) { return toIsoDate(s) }
     <p>Nothing yet. Replies, follows and likes show up here.</p>
   </div>
 
-  <ul v-else class="notif-list">
-    <li v-for="n in items" :key="n.id">
-      <router-link
-        :to="target(n)"
-        class="card notif"
-        :class="{ unread: !n.read }"
-        @click="store.markRead(n.id)"
-      >
-        <span class="notif-icon" aria-hidden="true">{{ icon(n.kind) }}</span>
-        <span class="notif-body">
-          <span class="notif-summary">
-            {{ summary(n) }}
-            <!-- The dot carries meaning, so it needs a text equivalent for
-                 anyone who cannot see it. -->
-            <span v-if="!n.read" class="notif-dot" aria-hidden="true"></span>
-            <span v-if="!n.read" class="visually-hidden">(unread)</span>
+  <template v-else>
+    <ul class="notif-list">
+      <li v-for="n in items" :key="n.id">
+        <router-link
+          :to="target(n)"
+          class="card notif"
+          :class="{ unread: !n.read }"
+          @click="store.markRead(n.id)"
+        >
+          <span class="notif-avatar-wrap">
+            <Avatar size="sm" :image-url="n.actor?.profile_image" :username="n.actor?.username" />
+            <span class="notif-icon-badge" aria-hidden="true">{{ icon(n.kind) }}</span>
           </span>
-          <span v-if="n.post_title" class="notif-target">{{ n.post_title }}</span>
-          <span v-if="n.comment_preview" class="notif-preview">{{ n.comment_preview }}</span>
-          <time v-if="iso(n.created_at)" :datetime="iso(n.created_at)" class="notif-when">
-            {{ when(n.created_at) }}
-          </time>
-        </span>
-      </router-link>
-    </li>
-  </ul>
+          <span class="notif-body">
+            <span class="notif-summary">
+              {{ summary(n) }}
+              <span v-if="!n.read" class="notif-dot" aria-hidden="true"></span>
+              <span v-if="!n.read" class="visually-hidden">(unread)</span>
+            </span>
+            <span v-if="n.post_title" class="notif-target">{{ n.post_title }}</span>
+            <span v-if="n.comment_preview" class="notif-preview">{{ n.comment_preview }}</span>
+            <time v-if="iso(n.created_at)" :datetime="iso(n.created_at)" class="notif-when">
+              {{ when(n.created_at) }}
+            </time>
+          </span>
+        </router-link>
+      </li>
+    </ul>
+
+    <div v-if="nextCursor != null" class="load-more-wrap">
+      <button type="button" class="ghost" :disabled="loadingMore" @click="store.loadMore()">
+        {{ loadingMore ? $t('common.loading') : $t('feed.load_more') }}
+      </button>
+    </div>
+  </template>
 </template>
 
 <style scoped>
@@ -119,11 +129,26 @@ function iso(s: string) { return toIsoDate(s) }
   text-decoration: none;
 }
 .notif:hover { border-color: var(--accent); text-decoration: none; }
-/* An unread row is marked by a border as well as the dot, so the state does
-   not rest on colour alone. */
 .notif.unread { border-left: 3px solid var(--accent); }
 
-.notif-icon { font-size: 1.15rem; line-height: 1.5; flex: 0 0 auto; }
+.notif-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+}
+.notif-icon-badge {
+  position: absolute;
+  right: -0.35rem;
+  bottom: -0.25rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0.12rem;
+}
+
 .notif-body { display: flex; flex-direction: column; gap: 0.15em; min-width: 0; }
 .notif-summary { font-weight: 550; }
 
@@ -148,4 +173,5 @@ function iso(s: string) { return toIsoDate(s) }
   overflow-wrap: anywhere;
 }
 .notif-when { color: var(--text-faint); font-size: 0.72rem; }
+.load-more-wrap { display: flex; justify-content: center; margin-top: var(--sp-4); }
 </style>

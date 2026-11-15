@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import Avatar from '@/components/Avatar.vue'
-import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
+import { formatDateTime, isoDate as toIsoDate, parseApiDate } from '@/lib/date'
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { postsApi, type Post } from '@/api/posts'
@@ -82,7 +82,88 @@ watch(bodyHtml, async (html) => {
     // A chunk that fails to load leaves plain monospace code. That is a
     // worse-looking article, not a broken one.
   }
+  addCopyButtons(bodyEl.value)
+  updateProgress()
 }, { immediate: true })
+
+// One-click copy on every code block. Injected as real DOM nodes after the
+// sanitized HTML is mounted (never through v-html), so the sanitizer's
+// output is not widened to allow <button>.
+function addCopyButtons(root: HTMLElement | null) {
+  if (!root) return
+  for (const pre of Array.from(root.querySelectorAll('pre'))) {
+    if (pre.querySelector(':scope > .code-copy')) continue
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'code-copy'
+    btn.textContent = 'Copy'
+    btn.setAttribute('aria-label', 'Copy code to clipboard')
+    btn.addEventListener('click', async () => {
+      const code = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
+      try {
+        await navigator.clipboard.writeText(code.replace(/\n$/, ''))
+        btn.textContent = 'Copied ✓'
+        btn.classList.add('done')
+      } catch {
+        btn.textContent = 'Press Ctrl+C'
+      }
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('done') }, 1800)
+    })
+    pre.appendChild(btn)
+  }
+}
+
+// --- Reading progress ---------------------------------------------------
+const progress = ref(0)
+let progressRaf = 0
+function updateProgress() {
+  cancelAnimationFrame(progressRaf)
+  progressRaf = requestAnimationFrame(() => {
+    const el = bodyEl.value
+    if (!el) { progress.value = 0; return }
+    const rect = el.getBoundingClientRect()
+    const total = rect.height - window.innerHeight * 0.6
+    if (total <= 0) { progress.value = rect.top < window.innerHeight ? 100 : 0; return }
+    const done = Math.min(Math.max(-rect.top + window.innerHeight * 0.2, 0), total)
+    progress.value = Math.round((done / total) * 100)
+  })
+}
+onMounted(() => {
+  window.addEventListener('scroll', updateProgress, { passive: true })
+  window.addEventListener('resize', updateProgress, { passive: true })
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', updateProgress)
+  window.removeEventListener('resize', updateProgress)
+  cancelAnimationFrame(progressRaf)
+})
+
+// --- Share --------------------------------------------------------------
+// The /preview/posts/{id} page carries server-rendered Open Graph tags, so a
+// link pasted into a chat app unfurls with the real title and excerpt, then
+// forwards human visitors to the SPA route.
+const shareUrl = computed(() => `${window.location.origin}/preview/posts/${props.id}`)
+async function sharePost() {
+  if (!post.value) return
+  const data = { title: post.value.title, text: post.value.excerpt ?? post.value.title, url: shareUrl.value }
+  if (typeof navigator.share === 'function') {
+    try { await navigator.share(data); return } catch (e: any) {
+      if (e?.name === 'AbortError') return
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(shareUrl.value)
+    toasts.push('Link copied to clipboard', 'ok')
+  } catch {
+    toasts.push(shareUrl.value, 'ok')
+  }
+}
+
+const wasEdited = computed(() => {
+  const c = parseApiDate(post.value?.created_at)
+  const u = parseApiDate(post.value?.updated_at)
+  return !!c && !!u && u.getTime() - c.getTime() > 60_000
+})
 
 async function load() {
   loading.value = true
@@ -272,6 +353,9 @@ async function deletePost() {
 </script>
 
 <template>
+  <div v-if="post && !loading && !error" class="read-progress" aria-hidden="true">
+    <span :style="{ transform: `scaleX(${progress / 100})` }"></span>
+  </div>
   <!-- Skeleton rather than a "Loading…" line: the article is tall, so
        swapping a one-line placeholder for it moved everything below by
        most of a screen. -->
@@ -310,8 +394,13 @@ async function deletePost() {
           <time v-if="isoDate(post.created_at)" :datetime="isoDate(post.created_at)" class="muted">
             {{ formatDate(post.created_at) }}
           </time>
+          <span v-if="wasEdited" class="faint edited-mark" :title="formatDate(post.updated_at)">
+            edited {{ formatDate(post.updated_at) }}
+          </span>
         </div>
         <span class="spacer"></span>
+        <router-link v-if="isOwner" :to="{ name: 'edit-post', params: { id: post.id } }"
+                     class="btn ghost sm">✏️ Edit</router-link>
         <button v-if="isOwner" class="ghost sm danger-text" @click="deletePost">Delete</button>
       </header>
 
@@ -368,6 +457,9 @@ async function deletePost() {
           {{ bookmarked ? 'Saved' : 'Save' }}
         </button>
         <span class="muted">{{ likes }} like{{ likes === 1 ? '' : 's' }}</span>
+        <button v-if="!post.is_draft" type="button" class="ghost" @click="sharePost">
+          <span aria-hidden="true">🔗</span> Share
+        </button>
         <span class="spacer"></span>
         <ReportButton v-if="auth.isAuthed && !isOwner" target-type="post" :target-id="post.id" />
       </div>
@@ -419,6 +511,28 @@ async function deletePost() {
 </template>
 
 <style scoped>
+.read-progress {
+  position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 40;
+  pointer-events: none;
+}
+.read-progress > span {
+  display: block; height: 100%; background: var(--accent);
+  transform-origin: 0 50%; transition: transform 80ms linear;
+}
+@media (prefers-reduced-motion: reduce) { .read-progress > span { transition: none; } }
+.edited-mark { font-size: 0.75rem; }
+.post-body :deep(pre) { position: relative; }
+.post-body :deep(.code-copy) {
+  position: absolute; top: var(--sp-2); right: var(--sp-2);
+  padding: 0.15rem 0.55rem; font-size: 0.72rem; font-family: var(--font-sans, inherit);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--bg-elev); color: var(--text-dim); box-shadow: none;
+  opacity: 0; transition: opacity var(--dur, 150ms);
+}
+.post-body :deep(pre:hover .code-copy),
+.post-body :deep(pre:focus-within .code-copy),
+.post-body :deep(.code-copy.done) { opacity: 1; }
+@media (hover: none) { .post-body :deep(.code-copy) { opacity: 1; } }
 .post-skeleton { display: flex; flex-direction: column; gap: var(--sp-3); }
 
 .post-head { margin-bottom: var(--sp-4); }

@@ -6,6 +6,7 @@ export interface Comment {
   user_id: number
   content: string
   created_at: string
+  updated_at?: string
   // Null for a top-level comment. The client nests by this; the server sends
   // a flat list so the collection's ETag stays a function of the contents
   // rather than of the tree shape.

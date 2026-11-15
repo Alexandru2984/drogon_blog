@@ -51,7 +51,8 @@
     "post": "Articol",
     "verify_2fa": "Verificare în doi pași",
     "account_security": "Securitatea contului",
-    "not_found": "Pagina nu a fost găsită"
+    "not_found": "Pagina nu a fost găsită",
+    "edit_post": "Editează articolul"
   },
   "common": {
     "submit": "Trimite",
@@ -66,7 +67,14 @@
   "feed": {
     "heading": "Flux",
     "empty": "Nu există articole încă. Fii primul care publică.",
-    "load_more": "Încarcă mai multe"
+    "load_more": "Încarcă mai multe",
+    "tab_latest": "Recente",
+    "tab_following": "Urmăriți",
+    "mode_aria": "Mod flux",
+    "popular_tags": "Subiecte",
+    "all_tags": "Toate etichetele",
+    "following_empty": "Articolele autorilor pe care îi urmărești vor apărea aici.",
+    "browse_latest": "Vezi articolele recente"
   },
   "auth": {
     "login_heading": "Autentificare",

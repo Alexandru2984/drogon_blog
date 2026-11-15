@@ -54,15 +54,21 @@ export const socialApi = {
     return api.get<FollowStats>(`/users/${userId}/follow-stats`).then(r => r.data)
   },
   followingFeed() {
-    return api.get<{ posts: Post[] }>('/feed/following').then(r => r.data.posts)
+    return api.get<{ posts: Post[]; next_cursor?: number | null }>('/feed/following').then(r => r.data.posts)
+  },
+  followingFeedPage(opts: { before?: number; limit?: number } = {}) {
+    const params: Record<string, string> = {}
+    if (opts.before) params.before = String(opts.before)
+    if (opts.limit)  params.limit  = String(opts.limit)
+    return api.get<{ posts: Post[]; next_cursor?: number | null }>('/feed/following', { params }).then(r => r.data)
   },
 
   // ---- notifications ----
-  notifications(before?: number) {
-    const params: Record<string, string> = {}
+  notifications(before?: number, limit = 50) {
+    const params: Record<string, string> = { limit: String(limit) }
     if (before) params.before = String(before)
     return api
-      .get<{ notifications: AppNotification[]; unread: number }>('/notifications', { params })
+      .get<{ notifications: AppNotification[]; unread: number; next_cursor?: number | null }>('/notifications', { params })
       .then(r => r.data)
   },
   unreadCount() {

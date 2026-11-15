@@ -5,13 +5,13 @@ import { useAuthStore } from './auth'
 
 // Notification state lives in a store rather than in the bell component
 // because two places need it: the navigation badge, which is mounted for the
-// whole session, and the notification list, which is not. Keeping the count
-// in the component that renders the list would blank the badge the moment
-// the reader navigated away from it.
+// whole session, and the notification list, which is not.
 export const useNotificationsStore = defineStore('notifications', () => {
-  const items   = ref<AppNotification[]>([])
-  const unread  = ref(0)
-  const loading = ref(false)
+  const items       = ref<AppNotification[]>([])
+  const unread      = ref(0)
+  const loading     = ref(false)
+  const loadingMore = ref(false)
+  const nextCursor  = ref<number | null>(null)
 
   const auth = useAuthStore()
 
@@ -28,19 +28,37 @@ export const useNotificationsStore = defineStore('notifications', () => {
     if (!auth.isAuthed) return
     loading.value = true
     try {
-      const res = await socialApi.notifications()
-      items.value  = res.notifications
-      unread.value = res.unread
+      const res = await socialApi.notifications(undefined, 30)
+      items.value      = res.notifications
+      unread.value     = res.unread
+      nextCursor.value = res.next_cursor ?? null
     } finally {
       loading.value = false
+    }
+  }
+
+  async function loadMore() {
+    if (!auth.isAuthed || loadingMore.value || !nextCursor.value) return
+    loadingMore.value = true
+    try {
+      const res = await socialApi.notifications(nextCursor.value, 30)
+      const seen = new Set(items.value.map(n => n.id))
+      for (const n of res.notifications) {
+        if (!seen.has(n.id)) {
+          items.value.push(n)
+          seen.add(n.id)
+        }
+      }
+      unread.value     = res.unread
+      nextCursor.value = res.next_cursor ?? null
+    } finally {
+      loadingMore.value = false
     }
   }
 
   async function markRead(id: number) {
     const n = items.value.find(x => x.id === id)
     if (!n || n.read) return
-    // Optimistic: the row is already on screen and the round trip would make
-    // the unread dot linger after the click that dismissed it.
     n.read = true
     unread.value = Math.max(0, unread.value - 1)
     try {
@@ -66,7 +84,11 @@ export const useNotificationsStore = defineStore('notifications', () => {
   function clear() {
     items.value = []
     unread.value = 0
+    nextCursor.value = null
   }
 
-  return { items, unread, loading, refreshCount, load, markRead, markAllRead, clear }
+  return {
+    items, unread, loading, loadingMore, nextCursor,
+    refreshCount, load, loadMore, markRead, markAllRead, clear,
+  }
 })

@@ -14,7 +14,6 @@
 #include <trantor/utils/Logger.h>
 #include <filesystem>
 #include <fstream>
-#include <unordered_set>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -40,10 +39,12 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
                 return;
             }
 
+            const bool online = presence::isOnline(user.getValueOfId());
             const std::string etag = http_cache::makeWeakEtag({
                 std::to_string(user.getValueOfId()),
                 std::to_string(http_cache::parseTimestampMicros(
                     user.getValueOfUpdatedAt().toDbStringLocal())),
+                online ? "1" : "0",
             });
             if (http_cache::ifNoneMatchHit(req, etag)) {
                 callback(http_cache::makeNotModified(etag));
@@ -59,7 +60,7 @@ void UserController::getUserProfile(const HttpRequestPtr &req,
             if (!user.getValueOfProfileImage().empty()) {
                 ret["profile_image"] = user.getValueOfProfileImage();
             }
-            if (presence::isOnline(user.getValueOfId())) {
+            if (online) {
                 ret["online"] = true;
             }
 
@@ -446,63 +447,71 @@ void UserController::getAllUsers(const HttpRequestPtr &req,
     workers::offload(workers::Pool::Auth, callback,
         [req, callback, userIdOpt] {
         auto dbClient = drogon::app().getDbClient();
-        Mapper<drogon_model::blog_db::Users> mapper(dbClient);
 
         try {
-            using Cols = drogon_model::blog_db::Users::Cols;
             constexpr int kMaxUserPage = 100;
-            int limit = kMaxUserPage;
+            int limit = 50;
             const auto l = req->getParameter("limit");
-            if (!l.empty()) { try { const int v = std::stoi(l); if (v > 0 && v < kMaxUserPage) limit = v; } catch (...) {} }
+            if (!l.empty()) { try { const int v = std::stoi(l); if (v > 0) limit = std::min(v, kMaxUserPage); } catch (...) {} }
 
-            Criteria crit(Cols::_id, CompareOperator::GE, 1);
+            // Case-insensitive username prefix search. LIKE metacharacters in
+            // the user's input are escaped so "a_%" matches literally.
+            std::string pattern;
             const auto q = req->getParameter("q");
             if (!q.empty() && q.size() <= 64) {
-                std::string prefix;
-                prefix.reserve(q.size() + 4);
+                pattern.reserve(q.size() + 4);
                 for (char c : q) {
-                    if (c == '\\' || c == '%' || c == '_') prefix.push_back('\\');
-                    prefix.push_back(c);
+                    if (c == '\\' || c == '%' || c == '_') pattern.push_back('\\');
+                    pattern.push_back(c);
                 }
-                crit = crit && Criteria(Cols::_username,
-                                        CompareOperator::Like, prefix + "%");
+                pattern.push_back('%');
             }
-            const auto before = req->getParameter("before");
-            if (!before.empty()) {
-                try { const long long v = std::stoll(before); if (v > 0)
-                    crit = crit && Criteria(Cols::_id, CompareOperator::LT, v); }
-                catch (...) {}
-            }
+            long long before = 0;
+            const auto b = req->getParameter("before");
+            if (!b.empty()) { try { before = std::max(0LL, std::stoll(b)); } catch (...) {} }
 
-            auto users = mapper.orderBy(Cols::_id, SortOrder::DESC)
-                               .limit(static_cast<std::size_t>(limit))
-                               .findBy(crit);
-
-            std::unordered_set<std::int64_t> erased;
-            for (const auto& row : dbClient->execSqlSync(
-                     "SELECT id FROM users WHERE deleted_at IS NOT NULL"))
-                erased.insert(row["id"].as<std::int64_t>());
+            // Tombstoned accounts are filtered in SQL. The previous version
+            // loaded every erased user id into memory on each request, which
+            // grows without bound and turned this endpoint into a cheap way to
+            // make the server do O(all deleted users) work.
+            const auto rows = dbClient->execSqlSync(
+                "SELECT id, username, COALESCE(profile_image, '') AS profile_image, "
+                "       COALESCE(bio, '') AS bio "
+                "FROM users "
+                "WHERE deleted_at IS NULL AND id <> $1 "
+                "  AND ($2 = '' OR username ILIKE $2 ESCAPE '\\') "
+                "  AND ($3::bigint = 0 OR id < $3::bigint) "
+                "ORDER BY id DESC LIMIT $4::int",
+                userIdOpt.value(), pattern, before, limit);
 
             Json::Value ret;
             ret["users"] = Json::Value(Json::arrayValue);
             std::int64_t minId = 0;
-
-            for (const auto &user : users) {
-                const auto uid = user.getValueOfId();
+            for (const auto& row : rows) {
+                const auto uid = row["id"].as<std::int64_t>();
                 if (minId == 0 || uid < minId) minId = uid;
-                if (uid == userIdOpt.value()) continue;
-                if (erased.count(uid)) continue;
-
                 Json::Value userJson;
-                userJson["id"] = user.getValueOfId();
-                userJson["username"] = user.getValueOfUsername();
-                if (!user.getValueOfProfileImage().empty()) {
-                    userJson["profile_image"] = user.getValueOfProfileImage();
+                userJson["id"] = static_cast<Json::Int64>(uid);
+                userJson["username"] = row["username"].as<std::string>();
+                const auto img = row["profile_image"].as<std::string>();
+                if (!img.empty()) userJson["profile_image"] = img;
+                const auto bio = row["bio"].as<std::string>();
+                if (!bio.empty()) {
+                    if (bio.size() <= 160) {
+                        userJson["bio"] = bio;
+                    } else {
+                        std::size_t end = 160;
+                        while (end > 0 && (static_cast<unsigned char>(bio[end]) & 0xC0) == 0x80) {
+                            --end;
+                        }
+                        userJson["bio"] = bio.substr(0, end) + "…";
+                    }
                 }
+                userJson["online"] = presence::isOnline(static_cast<int>(uid));
                 ret["users"].append(userJson);
             }
 
-            ret["next_cursor"] = (static_cast<int>(users.size()) == limit && minId > 0)
+            ret["next_cursor"] = (static_cast<int>(rows.size()) == limit && minId > 0)
                 ? Json::Value(static_cast<Json::Int64>(minId)) : Json::nullValue;
 
             auto resp = HttpResponse::newHttpJsonResponse(ret);

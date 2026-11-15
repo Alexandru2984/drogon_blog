@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { formatDateTime, isoDate as toIsoDate } from '@/lib/date'
+import { formatDateTime, isoDate as toIsoDate, parseApiDate } from '@/lib/date'
 import { computed, ref } from 'vue'
 import type { Comment } from '@/api/comments'
 import { useAuthStore } from '@/stores/auth'
+import Avatar from '@/components/Avatar.vue'
 import ReportButton from '@/components/ReportButton.vue'
 
 const auth = useAuthStore()
@@ -30,18 +31,12 @@ interface Node extends Comment {
   depth: number
 }
 
-// Depth is capped rather than unbounded. Past a few levels the indent eats
-// the whole width of a phone, and the thing being replied to is far enough
-// up the page that the nesting has stopped conveying it anyway. Deeper
-// replies are still shown — they just stop indenting further.
 const MAX_DEPTH = 4
 
 const tree = computed<Node[]>(() => {
   const byId = new Map<number, Node>()
   const roots: Node[] = []
 
-  // The list is ordered by id, so a parent is always seen before its
-  // children and one pass is enough.
   for (const c of props.comments) {
     byId.set(c.id, { ...c, children: [], depth: 0 })
   }
@@ -52,17 +47,12 @@ const tree = computed<Node[]>(() => {
       node.depth = Math.min(parent.depth + 1, MAX_DEPTH)
       parent.children.push(node)
     } else {
-      // A reply whose parent is missing from this list (hidden by a
-      // moderator, say) is shown at the top level rather than dropped —
-      // losing it entirely would silently rewrite the conversation.
       roots.push(node)
     }
   }
   return roots
 })
 
-// Flatten for rendering: a recursive component would need a separate file
-// and gains nothing here, since depth is already computed and capped.
 const flat = computed<Node[]>(() => {
   const out: Node[] = []
   const walk = (nodes: Node[]) => {
@@ -86,7 +76,6 @@ function send(parentId: number) {
   draft.value = ''
 }
 
-// Only the author may edit or delete, and a tombstone is nobody's to touch.
 function isMine(c: Comment) {
   return auth.isAuthed && !c.deleted && c.author?.id === auth.user!.id
 }
@@ -107,13 +96,18 @@ function saveEdit(id: number) {
 }
 
 function remove(c: Comment) {
-  // A comment with replies stays behind as "[deleted]" so the thread under
-  // it still reads; saying so up front avoids a surprise.
   const hasReplies = props.comments.some(o => o.parent_id === c.id)
   const msg = hasReplies
     ? 'Delete this comment? It has replies, so it will stay in the thread as "deleted".'
     : 'Delete this comment?'
   if (confirm(msg)) emit('remove', c.id)
+}
+
+function isEdited(c: Comment): boolean {
+  if (c.deleted || !c.updated_at) return false
+  const created = parseApiDate(c.created_at)
+  const updated = parseApiDate(c.updated_at)
+  return !!created && !!updated && updated.getTime() - created.getTime() > 5_000
 }
 
 function when(s: string) { return formatDateTime(s) }
@@ -124,16 +118,31 @@ function iso(s: string) { return toIsoDate(s) }
   <div class="thread">
     <article
       v-for="c in flat"
+      :id="`comment-${c.id}`"
       :key="c.id"
       class="card comment"
       :style="{ marginLeft: `calc(${c.depth} * var(--thread-indent))` }"
     >
       <header class="row tight comment-head">
-        <strong v-if="c.author">{{ c.author.username }}</strong>
+        <Avatar
+          size="sm"
+          :image-url="c.author?.profile_image"
+          :username="c.author?.username"
+        />
+        <router-link
+          v-if="c.author"
+          :to="{ name: 'profile', params: { id: c.author.id } }"
+          class="comment-author meta-link"
+        >{{ c.author.username }}</router-link>
         <span v-else class="muted">{{ c.deleted ? 'deleted' : 'unknown' }}</span>
         <time v-if="iso(c.created_at)" :datetime="iso(c.created_at)" class="muted">
           {{ when(c.created_at) }}
         </time>
+        <span v-if="isEdited(c)" class="faint comment-edited" :title="when(c.updated_at!)">
+          (edited)
+        </span>
+        <span class="spacer"></span>
+        <a :href="`#comment-${c.id}`" class="faint comment-anchor" :aria-label="`Link to comment ${c.id}`">#</a>
       </header>
 
       <p v-if="c.deleted" class="muted comment-body comment-deleted">This comment was deleted.</p>
@@ -149,7 +158,7 @@ function iso(s: string) { return toIsoDate(s) }
       </form>
       <p v-else class="post-content comment-body">{{ c.content }}</p>
 
-      <div v-if="auth.isAuthed && !c.deleted && editingId !== c.id" class="row tight">
+      <div v-if="auth.isAuthed && !c.deleted && editingId !== c.id" class="row tight comment-actions">
         <button
           v-if="canReply && replyingTo !== c.id"
           class="quiet sm"
@@ -190,26 +199,31 @@ function iso(s: string) { return toIsoDate(s) }
 
 <style scoped>
 .thread {
-  /* One knob for the indent, halved on a phone where the content column is
-     narrow enough that a full step per level would squeeze the text to a
-     couple of words per line by the third reply. */
   --thread-indent: 1.75rem;
 }
 @media (max-width: 48rem) {
   .thread { --thread-indent: 0.9rem; }
 }
 
-.comment { margin-top: var(--sp-3); }
-.comment-head { margin-bottom: var(--sp-2); }
+.comment { margin-top: var(--sp-3); scroll-margin-top: calc(var(--nav-h, 3.5rem) + 1rem); }
+.comment:target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.comment-head { margin-bottom: var(--sp-2); flex-wrap: wrap; }
+.comment-author { font-weight: 600; }
 .comment-head time { font-size: 0.78rem; }
+.comment-edited { font-size: 0.72rem; }
+.comment-anchor { font-size: 0.8rem; text-decoration: none; padding: 0 0.25rem; }
+.comment-anchor:hover { color: var(--accent); }
 .comment-body { margin: 0 0 var(--sp-2); }
+.comment-actions { flex-wrap: wrap; }
 
 .reply-form { margin-top: var(--sp-3); }
 .reply-form textarea { min-height: 5rem; }
 
 .comment-deleted { font-style: italic; }
 
-/* Same treatment as the post's Delete: quiet until hovered. */
 .danger-text { color: var(--danger); }
 .danger-text:hover { background: var(--danger-soft); color: var(--danger); }
 </style>

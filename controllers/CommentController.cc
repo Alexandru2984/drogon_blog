@@ -97,6 +97,10 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                 commentJson["id"] = row["id"].as<int>();
                 commentJson["content"] = row["content"].as<std::string>();
                 commentJson["created_at"] = row["created_at"].as<std::string>();
+                const bool tombstoned = !row["deleted_at"].isNull();
+                if (!tombstoned && !row["updated_at"].isNull()) {
+                    commentJson["updated_at"] = row["updated_at"].as<std::string>();
+                }
                 // Null for a top-level comment. The client builds the tree;
                 // sending a nested structure would make the ETag depend on
                 // the shape rather than the contents.
@@ -107,7 +111,6 @@ void CommentController::getPostComments(const HttpRequestPtr &req,
                 // A tombstone (see deleteComment) keeps its place so the
                 // replies under it still have a parent, but names nobody:
                 // its author asked for it to be gone.
-                const bool tombstoned = !row["deleted_at"].isNull();
                 if (tombstoned) commentJson["deleted"] = true;
                 if (!tombstoned && !row["author_id"].isNull()) {
                     commentJson["author"]["id"] = row["author_id"].as<int>();

@@ -562,13 +562,18 @@ void MessageController::deleteMessage(const HttpRequestPtr &req,
         try {
             auto message = mapper.findByPrimaryKey(messageId);
 
-            // Check if user is sender or receiver
-            if (message.getValueOfSenderId() != userIdOpt.value() &&
-                message.getValueOfReceiverId() != userIdOpt.value()) {
+            // Only the sender may unsend. The row is shared by both parties,
+            // so letting the receiver hard-delete it would let them erase the
+            // other side's copy too — including evidence of abuse that a
+            // report or moderator might later need.
+            if (message.getValueOfSenderId() != userIdOpt.value()) {
                 Json::Value ret;
-                ret["error"] = "Unauthorized";
+                ret["error"] = message.getValueOfReceiverId() == userIdOpt.value()
+                    ? "Only the sender can delete a message"
+                    : "Message not found";
                 auto resp = HttpResponse::newHttpJsonResponse(ret);
-                resp->setStatusCode(k403Forbidden);
+                resp->setStatusCode(message.getValueOfReceiverId() == userIdOpt.value()
+                    ? k403Forbidden : k404NotFound);
                 callback(resp);
                 return;
             }

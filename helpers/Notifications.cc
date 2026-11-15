@@ -8,6 +8,19 @@ using namespace drogon::orm;
 
 namespace notifications {
 
+namespace {
+// Trim to at most maxBytes without splitting a multi-byte UTF-8 sequence.
+std::string utf8Truncate(const std::string& s, std::size_t maxBytes)
+{
+    if (s.size() <= maxBytes) return s;
+    std::size_t end = maxBytes;
+    while (end > 0 && (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) {
+        --end;
+    }
+    return s.substr(0, end) + "…";
+}
+} // namespace
+
 const char* kindName(Kind k)
 {
     switch (k) {
@@ -128,9 +141,8 @@ Json::Value list(const DbClientPtr& db, int userId, int limit, long long beforeI
                 // A one-line preview. The full comment is one click away and
                 // a notification list that reproduces entire comments stops
                 // being scannable.
-                auto text = row["comment_content"].as<std::string>();
-                if (text.size() > 120) text = text.substr(0, 120) + "…";
-                n["comment_preview"] = text;
+                n["comment_preview"] =
+                    utf8Truncate(row["comment_content"].as<std::string>(), 120);
             }
             out.append(n);
         }

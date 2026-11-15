@@ -106,8 +106,11 @@ function iso(s: string) { return toIsoDate(s) }
 
     <div class="row tight">
       <button :disabled="busyId === d.id" @click="publish(d)">
-        {{ busyId === d.id ? 'Publishing…' : 'Publish' }}
+        {{ busyId === d.id ? 'Publishing…' : (d.scheduled_at ? 'Publish now' : 'Publish') }}
       </button>
+      <router-link :to="{ name: 'edit-post', params: { id: d.id } }" class="btn ghost sm">
+        ✏️ Edit
+      </router-link>
       <button class="ghost sm danger-text" :disabled="busyId === d.id" @click="discard(d)">
         Delete
       </button>
