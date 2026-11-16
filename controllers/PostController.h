@@ -13,6 +13,7 @@ class PostController : public drogon::HttpController<PostController>
     // Full-text search across title + content (must be registered before the
     // /posts/{id} pattern so "/posts/search" doesn't get routed to getPost).
     ADD_METHOD_TO(PostController::searchPosts, "/posts/search", Get);
+    ADD_METHOD_TO(PostController::discoverPosts, "/posts/discover", Get);
     // The signed-in author's own unpublished posts. Must also precede
     // /posts/{id} — "drafts" would otherwise be captured as an id.
     // Not /posts/user/{id} with a flag: drafts are never someone else's to
@@ -56,6 +57,8 @@ class PostController : public drogon::HttpController<PostController>
     
     void getAllPosts(const HttpRequestPtr &req,
                     std::function<void(const HttpResponsePtr &)> &&callback);
+    void discoverPosts(const HttpRequestPtr &req,
+                       std::function<void(const HttpResponsePtr &)> &&callback);
     void listTags(const HttpRequestPtr &req,
                   std::function<void(const HttpResponsePtr &)> &&callback);
     void getPostsByTag(const HttpRequestPtr &req,

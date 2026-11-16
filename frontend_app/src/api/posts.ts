@@ -27,6 +27,8 @@ export interface Post {
   // future time the scheduler will publish it at.
   scheduled_at?: string | null
   reading_minutes?: number
+  likes_count?: number
+  comment_count?: number
   view_count?: number
   excerpt?: string
   tags?: Tag[]
@@ -72,7 +74,20 @@ export interface SearchResponse {
   posts: SearchHit[]
 }
 
+export interface DiscoveryOptions {
+  sort?: 'latest' | 'popular' | 'discussed'
+  period?: 'all' | 'week' | 'month'
+  tag?: string
+  max_minutes?: number
+  offset?: number
+  limit?: number
+}
+
 export const postsApi = {
+  discover(opts: DiscoveryOptions = {}, signal?: AbortSignal) {
+    return api.get<{ posts: Post[]; next_offset: number | null }>(
+      '/posts/discover', { params: opts, signal }).then(r => r.data)
+  },
   list(opts: { before?: number; limit?: number } = {}) {
     const params: Record<string, string> = {}
     if (opts.before) params.before = String(opts.before)

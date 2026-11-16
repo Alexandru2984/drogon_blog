@@ -58,6 +58,11 @@ const isoDate = computed(() => toIsoDate(props.post.created_at))
 
     <TagList :tags="post.tags" small />
 
+    <p v-if="typeof post.likes_count === 'number'" class="post-card-engagement">
+      <span>♡ {{ $t('feed.likes', { count: post.likes_count }) }}</span>
+      <span>↳ {{ $t('feed.comments', { count: post.comment_count ?? 0 }) }}</span>
+    </p>
+
     <router-link :to="{ name: 'post', params: { id: post.id } }" class="link-action post-card-more">
       Read <span aria-hidden="true">→</span>
     </router-link>
@@ -101,5 +106,6 @@ const isoDate = computed(() => toIsoDate(props.post.created_at))
   overflow: hidden;
 }
 
+.post-card-engagement { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0; color: var(--text-dim); font-size: var(--step--1); }
 .post-card-more { font-size: var(--step--1); align-self: start; }
 </style>
