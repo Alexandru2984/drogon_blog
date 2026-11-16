@@ -43,6 +43,25 @@ fi
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*"; }
 run() { if [[ "$DRY" == 1 ]]; then log "dry-run: $*"; else "$@"; fi; }
 
+# Prefer direct D-Bus/polkit restart so webhook-deploy@.service can restart
+# the unit without SUID/sudo inside its RestrictSUIDSGID=yes sandbox.
+restart_service() {
+    local err
+    if [[ "$DRY" == 1 ]]; then
+        log "dry-run: systemctl --no-ask-password restart $SERVICE"
+        return 0
+    fi
+    if err=$(systemctl --no-ask-password restart "$SERVICE" 2>&1); then
+        return 0
+    fi
+    if [[ "$err" == *"authentication"* || "$err" == *"Access denied"* || "$err" == *"Permission denied"* ]]; then
+        run sudo -n systemctl restart "$SERVICE"
+        return $?
+    fi
+    printf '%s\n' "$err" >&2
+    return 1
+}
+
 ready() {
     local i
     for (( i = 0; i < HEALTH_TIMEOUT; i++ )); do
@@ -94,7 +113,7 @@ else
     log "new binary built"
 fi
 
-run sudo -n systemctl restart "$SERVICE"
+restart_service
 if ready; then
     log "✅ Deploy OK: drogon-blog (${after:0:7})"
     exit 0
@@ -110,7 +129,7 @@ fi
 # the directory entry without touching the running image.
 run cp -p "$PREV" "$BIN.rollback"
 run mv -f "$BIN.rollback" "$BIN"
-run sudo -n systemctl restart "$SERVICE"
+restart_service
 if ready; then
     log "❌ Deploy failed: rolled back to the previous binary (${after:0:7} is checked out but not running)"
 else
