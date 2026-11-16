@@ -26,7 +26,7 @@ test.beforeAll(async () => {
       ['Older article', 'old', 20],
     ] as const) {
       const result = await client.query(`INSERT INTO posts(user_id,title,content,content_html,excerpt,reading_minutes,published_at,hidden_at)
-        VALUES($1,$2,'Article source',$3,$2,$4,
+        VALUES($1,$2,'Article source',$3,CASE WHEN $2='Liked article' THEN '' ELSE $2 END,$4,
           CASE WHEN $5='draft' THEN NULL WHEN $5='old' THEN now()-interval '60 days' ELSE now() END,
           CASE WHEN $5='hidden' THEN now() ELSE NULL END) RETURNING id`, [authorId, title, html, minutes, state])
       const id = result.rows[0].id
@@ -58,6 +58,7 @@ test('discovery sorts real engagement, filters and paginates only public posts',
   }
   const popular = await get('sort=popular&limit=1')
   expect(popular.posts.map((p: { id: number }) => p.id)).toEqual([likedId])
+  expect(popular.posts[0].excerpt).toBe('Article source')
   expect(popular.posts[0].comment_count).toBe(0)
   expect(popular.next_offset).toBe(1)
   const second = await get('sort=popular&limit=1&offset=1')

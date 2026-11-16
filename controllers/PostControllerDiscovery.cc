@@ -63,7 +63,10 @@ void PostController::discoverPosts(const HttpRequestPtr& req,
         "SELECT p.id, p.title, ''::text AS content, NULL::text AS content_html, "
         "p.created_at, p.updated_at, p.published_at, p.reading_minutes, "
         "p.excerpt, p.view_count, u.id AS author_id, u.username AS author_username, "
-        "u.profile_image AS author_profile_image, " + std::string(post_meta::kTagsJsonColumn) +
+        "u.profile_image AS author_profile_image, "
+        "CASE WHEN p.excerpt IS NULL OR p.excerpt = '' "
+        "THEN left(p.content, 4096) ELSE '' END AS excerpt_source, " +
+        std::string(post_meta::kTagsJsonColumn) +
         ", (SELECT count(*) FROM likes l WHERE l.post_id = p.id) AS likes_count, "
         "(SELECT count(*) FROM comments c WHERE c.post_id = p.id "
         " AND c.hidden_at IS NULL AND c.deleted_at IS NULL) AS comment_count "
@@ -82,6 +85,8 @@ void PostController::discoverPosts(const HttpRequestPtr& req,
             const auto count = std::min(rows.size(), static_cast<std::size_t>(limit));
             for (std::size_t i = 0; i < count; ++i) {
                 auto post = post_meta::feedRowJson(rows[i]);
+                if (post["excerpt"].asString().empty())
+                    post["excerpt"] = post_meta::makeExcerpt(rows[i]["excerpt_source"].as<std::string>());
                 post["published_at"] = rows[i]["published_at"].as<std::string>();
                 post["likes_count"] = rows[i]["likes_count"].as<int64_t>();
                 post["comment_count"] = rows[i]["comment_count"].as<int64_t>();
