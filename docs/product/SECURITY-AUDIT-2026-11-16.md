@@ -130,3 +130,39 @@ separate migration, rather than changing an applied migration in place.
 The incident desktop review covered stolen sessions (revocation regressions),
 leaked drafts (visibility regressions), and failed frontend publication (invalid
 asset refusal). This is not a substitute for an operator-led restore exercise.
+
+## Production rollout — 2026-11-16 13:15 UTC
+
+Deployment completed on the existing VPS/domain. The live service reports Drogon
+1.9.14. Readiness, the nginx vhost and the public Cloudflare route returned
+successful responses. Discovery returned JSON through Cloudflare; the browser
+feed loaded without an application error.
+
+Production serves build/live-public via BLOG_DOCUMENT_ROOT. It was seeded with
+the old release's assets before promotion, so existing tabs retain their lazy
+chunks. Tracked public/ now contains the verified release; intermediate build
+chunks were excluded from the commit, and all prior tracked assets were retained.
+
+The live systemd namespace was checked: application config is readable, personal
+home files and Docker socket are inaccessible. Only the blog was restarted;
+nginx and cloudflared remain active. The private static dependency is installed
+under the owner's local data directory and the host build cache selects it.
+No host-wide native library was replaced.
+
+The final legacy-summary fallback was compiled and passed a focused database/API
+regression before deployment; the existing public posts now have summaries.
+Live responsive checks passed at 320, 768 and 1440px in English and Romanian,
+without horizontal overflow or an application page error. Invalid empty login
+payloads verified the production origin guard without creating accounts or
+changing user data: expected origin reached validation (400), foreign origin was
+rejected (403); both responses prohibited storage.
+
+Rollback material: build/blog.prev holds the prior binary; the prior frontend
+entry point is outside the document root. The rollout's original binary, config,
+unit and mode-600 environment backup were retained in the restricted local audit
+workspace. No database schema migration was applied.
+
+SEO: public article pages keep their content at the canonical URL and link to the
+interactive view. Removing instant meta refresh avoids signaling a permanent
+redirect away from the article; see Google's redirect documentation:
+https://developers.google.com/search/docs/crawling-indexing/301-redirects

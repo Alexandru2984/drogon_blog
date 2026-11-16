@@ -103,7 +103,7 @@ sudo apt install -y \
     libjsoncpp-dev libpq-dev libmariadb-dev libsqlite3-dev libhiredis-dev \
     libbrotli-dev zlib1g-dev uuid-dev libc-ares-dev \
     postgresql postgresql-client \
-    nodejs npm
+    nodejs npm python3
 ```
 
 ### Database
