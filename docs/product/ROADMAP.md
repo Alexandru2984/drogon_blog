@@ -66,3 +66,11 @@ Prioritize by observed usage and user feedback, rather than adding empty screens
 Gates: a newsletter needs a deliverability/unsubscribe design; revision history
 needs a storage/retention budget; public uploads need ownership and deletion
 semantics. These are product design tasks, not placeholder functionality.
+
+## Release verification
+
+Stages 1–4 are implemented: security and native dependency fixes, discovery,
+reader controls, responsive public articles, API documentation and CI dependency
+alignment. Local backend, browser, build, lint and supply-chain checks passed;
+production rollout details are recorded in the security review. The next-release
+items above remain a prioritized backlog, not claimed completed features.

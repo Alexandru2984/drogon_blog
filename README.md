@@ -10,6 +10,20 @@ A full-stack blog platform built around a modern C++ HTTP backend and a Vue 3 SP
 
 ---
 
+## Current product work
+
+The [roadmap](docs/product/ROADMAP.md) and [security review](docs/product/SECURITY-AUDIT-2026-11-16.md)
+record completed work, evidence and remaining operational checks.
+
+- Public discovery with most-liked/most-discussed sorting, topic, publication
+  period and reading-time filters; filters survive reload through the URL.
+- Reading preferences, focus mode, print layout and protection against stale
+  article responses during navigation. Preferences store no article content.
+- Crawlable, responsive public articles at `/preview/posts/{id}`, with canonical,
+  Open Graph and JSON-LD metadata and an explicit link to the interactive view.
+- Browser-origin protection, consistent private response policy and a private
+  static Drogon 1.9.14 build shared by native/CI/Docker configurations.
+
 ## Highlights
 
 - **C++20 backend** on the [Drogon](https://github.com/drogonframework/drogon) async HTTP framework.
@@ -21,7 +35,7 @@ A full-stack blog platform built around a modern C++ HTTP backend and a Vue 3 SP
 - **Vue 3 SPA** (TypeScript, Pinia, Vue Router in hash mode, Axios) built by Vite directly into Drogon's `document_root`.
 - **Two-factor authentication** — TOTP (RFC 6238) implemented from scratch on libsodium + OpenSSL HMAC, WebAuthn passkeys (FIDO2 with ES256 + EdDSA), and Argon2id-hashed single-use recovery codes. Two-step login flow gates the session on a fresh factor even after a correct password. See [`SECURITY.md`](SECURITY.md).
 - **Conditional GETs** — every cacheable `/posts*` endpoint emits a weak `ETag` derived from `(max(updated_at), count, query keys)` and honours `If-None-Match` with a header-only `304 Not Modified`. Cuts outbound bandwidth on the `/posts` feed by ~77 % for warm clients with no correctness regression (writes always change the tag). See [`BENCHMARKS.md`](BENCHMARKS.md).
-- **Multi-arch Docker image** — `linux/amd64` + `linux/arm64`. Drogon (1.9.13, pinned) is built from source in its own stage on a multi-arch Ubuntu 24.04 base, so the whole image is portable to ARM hosts (Hetzner CAX, Oracle Free Tier ARM, Raspberry Pi 4/5). CI builds both arches on native runners.
+- **Multi-arch Docker image** — `linux/amd64` + `linux/arm64`. Drogon (1.9.14, commit-pinned) is built from source in its own stage on a multi-arch Ubuntu 24.04 base, so the whole image is portable to ARM hosts (Hetzner CAX, Oracle Free Tier ARM, Raspberry Pi 4/5). CI builds both arches on native runners.
 - **Helm chart** — under [`chart/drogon-blog`](chart/drogon-blog/), with optional Ingress / Prometheus ServiceMonitor templates, hardened pod security context, and `existingSecret` paths for DB / SMTP / metrics token so secrets never round-trip through `helm get values`. The chart fails closed on horizontal app scaling while Drogon sessions and security rate limits remain process-local.
 
 ## Architecture
@@ -84,7 +98,10 @@ The app listens on `http://localhost:8092`. PostgreSQL is exposed on `5432` for 
 ```bash
 sudo apt install -y \
     cmake g++ pkg-config \
-    libdrogon-dev libsodium-dev libcurl4-openssl-dev libssl-dev \
+    git libsodium-dev libcurl4-openssl-dev libssl-dev \
+    libvips-dev libcmark-gfm-dev libcmark-gfm-extensions-dev \
+    libjsoncpp-dev libpq-dev libmariadb-dev libsqlite3-dev libhiredis-dev \
+    libbrotli-dev zlib1g-dev uuid-dev libc-ares-dev \
     postgresql postgresql-client \
     nodejs npm
 ```
@@ -125,7 +142,9 @@ SMTP_FROM_NAME=Example Blog
 ### Build backend
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+scripts/build-drogon.sh "$HOME/.local/share/drogon-blog/drogon-1.9.14"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$HOME/.local/share/drogon-blog/drogon-1.9.14"
 cmake --build build -j$(nproc)
 ```
 
@@ -451,3 +470,29 @@ Restart=on-failure
 ## License
 
 Personal project. Code is open for reading and learning; no redistribution intended.
+
+## Host frontend promotion
+
+On the VPS, build into a staging directory first. `public/` is tracked build
+input; serving it directly lets a git pull expose HTML before backend validation.
+Configure the service with `BLOG_DOCUMENT_ROOT=./build/live-public/` and initialize
+that directory with `python3 scripts/promote-frontend.py public`. Thereafter the
+host deploy script promotes public/ only after the new backend becomes ready.
+
+For a local source change:
+
+```bash
+npm --prefix frontend_app run build -- --outDir /tmp/blog-frontend-stage
+python3 scripts/promote-frontend.py /tmp/blog-frontend-stage
+```
+
+Promotion validates entry-point assets, copies assets before HTML, retains old
+hashed chunks for open tabs, and replaces index.html with an atomic rename. The
+previous HTML is saved at build/frontend-live-public.prev.html, outside the document
+root. Binary and frontend changes are not one atomic transaction; keep API
+changes compatible with the previous frontend and preserve the previous binary.
+
+Use localhost for browser WebAuthn tests; IP-literal relying-party ids are rejected
+by browsers. Run tests only against a disposable database; blog_test refuses
+schema resets unless TEST_DB_NAME ends in _test_db. Never provide production
+credentials to tests.

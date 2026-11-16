@@ -134,3 +134,27 @@ test('a delayed old article cannot overwrite a new route', async ({ page }) => {
   release?.()
   await expect(page.locator('.post-title')).toHaveText('Discussed article')
 })
+
+test('reader preferences tolerate blocked or corrupted browser storage', async ({ page }) => {
+  await page.addInitScript(() => {
+    const read = Storage.prototype.getItem
+    const write = Storage.prototype.setItem
+    Storage.prototype.getItem = function(key: string) {
+      if (key === 'blog.reading.preferences.v1') return '{"size":999,"serif":{},"measure":"invalid"}'
+      return read.call(this, key)
+    }
+    Storage.prototype.setItem = function(key: string, value: string) {
+      if (key === 'blog.reading.preferences.v1') throw new DOMException('Storage blocked', 'SecurityError')
+      return write.call(this, key, value)
+    }
+  })
+  await page.goto(`/#/posts/${likedId}`)
+  await expect(page.locator('.post-title')).toHaveText('Liked article')
+  await page.getByText('Reading options', { exact: true }).click()
+  await expect(page.getByLabel('Text size', { exact: true })).toHaveValue('1')
+  const before = await page.locator('.reader-body').evaluate(el => parseFloat(getComputedStyle(el).fontSize))
+  await page.getByLabel('Text size', { exact: true }).selectOption('1.15')
+  await expect.poll(() => page.locator('.reader-body').evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThan(before)
+  await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
+  await expect(page.locator('.comments')).toHaveCount(0)
+})

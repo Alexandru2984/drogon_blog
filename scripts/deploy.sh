@@ -115,6 +115,14 @@ fi
 
 restart_service
 if ready; then
+    # Host deployments opt in via BLOG_DOCUMENT_ROOT=./build/live-public/.
+    # public/ is committed build input; HTML is exposed only after readiness.
+    if [[ -d build/live-public ]]; then
+        if ! run python3 scripts/promote-frontend.py public; then
+            log "❌ frontend promotion failed — previous entry point remains live"
+            exit 1
+        fi
+    fi
     log "✅ Deploy OK: drogon-blog (${after:0:7})"
     exit 0
 fi

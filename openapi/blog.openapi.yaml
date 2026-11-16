@@ -14,7 +14,10 @@ info:
     same-origin request to any state-mutating endpoint must also send
     the `X-CSRF-Token` header set to the value of the `csrf_token`
     cookie (double-submit pattern). Read-only `GET` requests don't
-    need the CSRF header.
+    need the CSRF header. TLS deployments use __Host-JSESSIONID and
+    __Host-csrf_token. Browser writes must match BLOG_SITE_ORIGIN, including
+    pre-login routes. Authentication, account and message responses use
+    private, no-store.
 
     **Conditional GETs**
 
@@ -830,6 +833,56 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /posts/discover:
+    get:
+      tags: [Posts]
+      summary: Discover public articles by engagement and reading time
+      description: |
+        Summary-only feed; content is empty and content_html is omitted.
+        Hidden posts, drafts and hidden/deleted comments are excluded.
+        Ordering uses a stable id tie-breaker, but engagement can change
+        between pages. Clients should deduplicate ids when appending pages.
+        Responses use no-store because engagement changes independently of
+        the article timestamp. Deep pagination stops at offset 2000.
+      security: []
+      parameters:
+        - in: query
+          name: sort
+          schema: { type: string, enum: [latest, popular, discussed], default: latest }
+        - in: query
+          name: period
+          schema: { type: string, enum: [all, week, month], default: all }
+        - in: query
+          name: tag
+          schema: { type: string, maxLength: 80 }
+        - in: query
+          name: max_minutes
+          schema: { type: integer, enum: [0, 5, 10], default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 24, default: 12 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, maximum: 2000, default: 0 }
+      responses:
+        '200':
+          description: Public article summaries with engagement counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [posts, next_offset]
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+                  next_offset:
+                    type: [integer, 'null']
+                    minimum: 0
+                    maximum: 2000
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /posts/search:
     get:
@@ -2441,6 +2494,8 @@ components:
           minimum: 1
           description: Estimated at 200 words per minute; never zero, because "0 min read" reads as a bug.
         view_count:      { type: integer, format: int64 }
+        likes_count:     { type: integer, minimum: 0 }
+        comment_count:   { type: integer, minimum: 0 }
         excerpt:
           type: string
           description: |

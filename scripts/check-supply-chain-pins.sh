@@ -71,6 +71,13 @@ if ! search_quiet '^ARG DROGON_COMMIT=[0-9a-f]{40}$' Dockerfile \
     report_floating 'Drogon source revision is not commit-verified'
 fi
 
+# Native/CI bootstrap must use the same reviewed source revision as Docker.
+source_revision=$(sed -n 's/^revision=//p' scripts/build-drogon.sh)
+docker_revision=$(sed -n 's/^ARG DROGON_COMMIT=//p' Dockerfile)
+if [[ ! "$source_revision" =~ ^[0-9a-f]{40}$ || "$source_revision" != "$docker_revision" ]]; then
+    report_floating 'Native Drogon revision differs from Docker'
+fi
+
 if ((errors > 0)); then
     printf '%d unpinned supply-chain input(s) found\n' "$errors" >&2
     exit 1

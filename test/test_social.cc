@@ -633,7 +633,7 @@ DROGON_TEST(Messages_OnlySenderCanDelete)
 }
 
 // /preview/posts/{id} rejects out-of-range/non-numeric ids with 400 and emits
-// canonical + JSON-LD + og:url + meta refresh with script-safe escaping.
+// canonical + JSON-LD + og:url and readable HTML without redirecting.
 DROGON_TEST(PublicPreview_CanonicalJsonLdAndBadId)
 {
     auto anon = HttpClient::newHttpClient(testBaseUrl());
@@ -667,7 +667,7 @@ DROGON_TEST(PublicPreview_CanonicalJsonLdAndBadId)
                 CHECK(body.find(previewPath + "\"") != std::string::npos);
                 CHECK(body.find("property=\"og:url\"") != std::string::npos);
                 CHECK(body.find("/#/posts/" + std::to_string(postId)) != std::string::npos);
-                CHECK(body.find("http-equiv=\"refresh\"") != std::string::npos);
+                CHECK(body.find("http-equiv=\"refresh\"") == std::string::npos);
                 CHECK(body.find("application/ld+json") != std::string::npos);
                 CHECK(body.find("BlogPosting") != std::string::npos);
                 CHECK(body.find("Preview \\u003c/script") != std::string::npos);

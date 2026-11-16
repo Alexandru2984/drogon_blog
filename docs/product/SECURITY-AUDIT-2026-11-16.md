@@ -90,3 +90,43 @@ operator/legal assessment; this review does not claim compliance certification.
 
 Production rollout is recorded separately below; passing local checks does not
 itself mean the live service has been upgraded.
+
+## Final local verification
+
+- 120 backend cases passed (1097 assertions in the final run).
+- All 28 browser cases passed on localhost, including TOTP, passkeys, recovery,
+  posts, comments, moderation and WebSockets; two focused cases also passed for
+  the new blocked-storage scenario and the final responsive canonical article.
+  The first IP-address browser run passed 26 and failed two passkey cases because
+  browsers reject IP-literal RP IDs; using localhost resolved that environment
+  mismatch without weakening WebAuthn checks.
+- Frontend typecheck/build and ESLint passed; targeted C++ cppcheck passed.
+  Both frontend and E2E npm audits returned zero known advisories.
+- New framework refused a raw request containing both Content-Length and
+  Transfer-Encoding with HTTP 400, against the isolated server only.
+- Frontend promotion refused an invalid build without changing live HTML.
+  Assets are copied first; HTML is replaced by rename; old chunks are retained.
+- CI YAML and OpenAPI parsed; all three native C++ jobs install the same pinned
+  Drogon; source revision consistency and supply-chain pin checks passed.
+  GitHub-hosted CI itself has not been executed from this local session.
+- The Cloudflare range generator now validates every CIDR and list size, and
+  retains loopback trust for the actual cloudflared topology. Production already
+  has those loopback rules; no host-wide nginx rewrite is needed.
+
+## Remaining work and limits
+
+Alert delivery, operator contacts, off-host encrypted backup coverage and a real
+restore drill still require operational verification. A dedicated service OS
+account would further separate application credentials from the VPS owner's
+identity. This rollout does not change database schema or run data migrations.
+
+Review findings for a future correctness pass: the legacy feed derives ETags
+from post timestamps rather than every serialized author field; view counters
+also update the generic post timestamp, which can affect edited labels and
+sitemap lastmod. The new discovery feed avoids that cache validator entirely.
+Fixing legacy timestamp semantics should include explicit regressions and a
+separate migration, rather than changing an applied migration in place.
+
+The incident desktop review covered stolen sessions (revocation regressions),
+leaked drafts (visibility regressions), and failed frontend publication (invalid
+asset refusal). This is not a substitute for an operator-led restore exercise.

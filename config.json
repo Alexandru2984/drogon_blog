@@ -56,7 +56,7 @@
         // with no Max-Age, which some clients keep across restarts).
         "session_max_age": 1209600,
         //document_root: Root path of HTTP document, default path is ./
-        "document_root": "./public/",
+        "document_root": "${BLOG_DOCUMENT_ROOT}",
         //home_page: Set the HTML file of the home page, the default value is "index.html"
         //If there isn't any handler registered to the path "/", the home page file in the "document_root" is send to clients as a response
         //to the request for "/".

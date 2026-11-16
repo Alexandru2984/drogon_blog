@@ -138,6 +138,8 @@ int main()
     // (.env / systemd / compose) already provided. config.json references
     // ${BLOG_LISTEN_ADDR} in its listeners block.
     setenv("BLOG_LISTEN_ADDR", "0.0.0.0", 0);
+    if (const char* root = std::getenv("BLOG_DOCUMENT_ROOT"); !root || !*root)
+        setenv("BLOG_DOCUMENT_ROOT", "./public/", 1);
 
     // Session cookie name, resolved before config.json is parsed because
     // config.json references it as ${BLOG_SESSION_COOKIE}.

@@ -51,13 +51,28 @@ for family in v4 v6; do
         echo "error: could not fetch Cloudflare ips-${family}" >&2
         exit 2
     fi
-    # A truncated or error response would silently shrink the trust list,
-    # so demand something that at least looks like CIDR notation.
-    if ! grep -qE '^[0-9a-fA-F:.]+/[0-9]+$' "${tmp}/${family}.txt"; then
-        echo "error: ips-${family} did not look like a CIDR list" >&2
-        exit 2
-    fi
+
 done
+
+# Validate every line, its address family and the list size before emitting
+# nginx source. A single matching line in an HTML/error response is not enough.
+python3 - "${tmp}/v4.txt" "${tmp}/v6.txt" <<'PYVALIDATE'
+import ipaddress
+from pathlib import Path
+import sys
+for filename, family, minimum in zip(sys.argv[1:], (4, 6), (10, 5)):
+    path = Path(filename)
+    try:
+        lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+        networks = [ipaddress.ip_network(line, strict=True) for line in lines]
+        if not minimum <= len(networks) <= 128 or len(set(networks)) != len(networks):
+            raise ValueError('invalid list cardinality')
+        if any(network.version != family for network in networks):
+            raise ValueError('wrong address family')
+    except ValueError:
+        raise SystemExit('Refusing invalid or unexpectedly short Cloudflare range list')
+    path.write_text('\n'.join(str(network) for network in networks) + '\n')
+PYVALIDATE
 
 {
     echo "# Cloudflare edge IP ranges — set_real_ip_from directives."
@@ -69,12 +84,17 @@ done
     echo "#"
     echo "# Last refreshed: $(date -u +%Y-%m-%d)"
     echo ""
+    echo "# cloudflared on this VPS connects over loopback. Local processes are"
+    echo "# part of this trust boundary; do not substitute a shared bridge range."
+    echo "set_real_ip_from 127.0.0.1;"
+    echo "set_real_ip_from ::1;"
+    echo ""
     emit_ranges "${tmp}/v4.txt"
     echo ""
     emit_ranges "${tmp}/v6.txt"
     echo ""
     echo "# Rewrite \$remote_addr from CF-Connecting-IP, but only for peers in"
-    echo "# the ranges above. A direct connection to the origin keeps its true"
+    echo "# the ranges above. A non-local direct origin connection keeps its true"
     echo "# peer address no matter what headers it sends."
     echo "real_ip_header CF-Connecting-IP;"
     echo "# CF-Connecting-IP is a single address that Cloudflare overwrites,"

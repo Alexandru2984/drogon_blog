@@ -100,7 +100,7 @@ void install(const std::string& siteOrigin)
             auto db = app().getDbClient();
             static const char* kSql =
                 "SELECT p.id, p.title, p.content, p.content_html, "
-                "       p.created_at, p.updated_at, "
+                "       p.created_at, p.updated_at, p.published_at, "
                 "       u.username AS author "
                 "  FROM posts p "
                 "  LEFT JOIN users u ON u.id = p.user_id "
@@ -122,20 +122,17 @@ void install(const std::string& siteOrigin)
                         <<       "/feed.xml\" rel=\"self\"/>\n"
                         << "  <id>" << xmlEscape(origin) << "/</id>\n";
 
-                    // <updated> uses the most-recent post's timestamp, or
-                    // "now" when the feed is empty. Both make crawlers happy.
-                    if (!r.empty()) {
-                        out << "  <updated>"
-                            << xmlEscape(toIso8601(r[0]["updated_at"].as<std::string>()))
-                            << "</updated>\n";
-                    } else {
-                        out << "  <updated>1970-01-01T00:00:00Z</updated>\n";
-                    }
+                    // Editing an older entry also updates the feed.
+                    std::string newest = "1970-01-01 00:00:00";
+                    for (const auto& row : r)
+                        newest = std::max(newest, row["updated_at"].as<std::string>());
+                    out << "  <updated>" << xmlEscape(toIso8601(newest))
+                        << "</updated>\n";
 
                     for (const auto& row : r) {
                         const auto id      = row["id"].as<int64_t>();
                         const auto title   = row["title"].as<std::string>();
-                        const auto created = row["created_at"].as<std::string>();
+                        const auto created = row["published_at"].as<std::string>();
                         const auto updated = row["updated_at"].as<std::string>();
                         const std::string content = row["content_html"].isNull()
                             ? std::string{} : row["content_html"].as<std::string>();
@@ -275,7 +272,7 @@ void install(const std::string& siteOrigin)
 
     // -------- GET /preview/posts/{id} --------
     // Share-friendly URL: contains the OG/Twitter meta tags crawlers need,
-    // then redirects real users to the SPA hash URL via meta-refresh. We
+    // and offers a link to the SPA discussion. No automatic redirect: we
     // deliberately do not serve the SPA itself here because hash routes
     // (`/#/...`) are opaque to crawlers.
     app().registerHandler("/preview/posts/{id}",
@@ -381,7 +378,7 @@ void install(const std::string& siteOrigin)
                       << "  <meta property=\"og:description\" content=\""
                       <<      xmlEscape(desc) << "\">\n"
                       << "  <meta property=\"og:url\" content=\""
-                      <<      xmlEscape(spaUrl) << "\">\n"
+                      <<      xmlEscape(previewUrl) << "\">\n"
                       << "  <meta property=\"article:published_time\" content=\""
                       <<      xmlEscape(publishedIso) << "\">\n"
                       << "  <meta property=\"article:modified_time\" content=\""
@@ -397,24 +394,31 @@ void install(const std::string& siteOrigin)
                       <<      xmlEscape(desc) << "\">\n"
                       << "  <script type=\"application/ld+json\">"
                       <<      jsonScriptSafe(ld) << "</script>\n"
-                      << "  <meta http-equiv=\"refresh\" content=\"0;url="
-                      <<      xmlEscape(spaUrl) << "\">\n"
+                      << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                      << "  <meta name=\"color-scheme\" content=\"light dark\">\n"
+                      << "  <link rel=\"stylesheet\" href=\"/article.css?v=20261116\">\n"
                       << "</head>\n"
                       << "<body>\n"
-                      << "  <main>\n"
+                      << "  <a class=\"skip-link\" href=\"#main\">Skip to article</a>\n"
+                      << "  <header class=\"site-head\"><a href=\"/\">✦ Micu's Blog</a>"
+                      << "<a class=\"discussion-link\" href=\"" << xmlEscape(spaUrl)
+                      << "\">Join the discussion ↗</a></header>\n"
+                      << "  <main id=\"main\">\n"
                       << "    <article>\n"
                       << "      <h1>" << xmlEscape(title) << "</h1>\n";
                     if (!author.empty()) {
-                        h << "      <p>by " << xmlEscape(author) << "</p>\n";
+                        h << "      <p class=\"byline\">by " << xmlEscape(author)
+                          << " · <time datetime=\"" << xmlEscape(publishedIso) << "\">"
+                          << xmlEscape(publishedIso.substr(0, 10)) << "</time></p>\n";
                     }
                     if (!contentHtml.empty()) {
-                        h << "      <div>" << contentHtml << "</div>\n";
+                        h << "      <div class=\"article-body\">" << contentHtml << "</div>\n";
                     } else {
-                        h << "      <p>" << xmlEscape(desc) << "</p>\n";
+                        h << "      <p class=\"plain-source\">" << xmlEscape(content) << "</p>\n";
                     }
                     h << "    </article>\n"
-                      << "    <p>If you are not redirected, <a href=\""
-                      <<      xmlEscape(spaUrl) << "\">open the post</a>.</p>\n"
+                      << "    <footer><p>Keep the conversation going.</p><a class=\"discussion-link\" href=\""
+                      <<      xmlEscape(spaUrl) << "\">Comment, save and share this article →</a></footer>\n"
                       << "  </main>\n"
                       << "</body></html>\n";
 

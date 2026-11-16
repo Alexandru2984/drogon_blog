@@ -153,6 +153,11 @@ jobs:
             libcmark-gfm-dev libcmark-gfm-extensions-dev \
             clang-tidy cppcheck
 
+      - name: Build pinned private Drogon
+        run: |
+          scripts/build-drogon.sh /opt/blog-drogon
+          echo "CMAKE_PREFIX_PATH=/opt/blog-drogon" >> "$GITHUB_ENV"
+
       - name: Generate compile_commands.json
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
