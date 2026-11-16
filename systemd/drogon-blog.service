@@ -37,13 +37,16 @@ LimitNOFILE=65536
 # Defence-in-depth so an RCE in a C++ parser (libvips / cmark / grpc / libpq)
 # is confined. Kept compatible with running in-tree as User=micu: the app
 # lives under /home/micu/drogon_blog and must read its code/config there, so
-# ProtectHome stays off and we use ProtectSystem=strict (whole FS read-only)
-# plus an explicit ReadWritePaths for the only directory it writes — uploads.
+# ProtectHome=tmpfs hides personal files; bind only the project back in,
+# with uploads as its one writable subtree. ProtectSystem keeps the rest
+# of the filesystem read-only.
 # Logs go to journald (stdout), so nothing else needs write access.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/micu/drogon_blog
 # ProtectSystem=strict alone leaves the user's home writable on this host, so
 # pin the app tree read-only explicitly (verified: a write to the repo root is
 # then blocked) while ReadWritePaths re-grants the uploads subdir.

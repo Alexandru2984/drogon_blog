@@ -32,7 +32,7 @@ add_executable(${PROJECT_NAME} main.cc)
 # target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
 #
 # and comment out the following lines
-find_package(Drogon CONFIG REQUIRED)
+find_package(Drogon 1.9.14 CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)

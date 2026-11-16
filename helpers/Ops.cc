@@ -93,9 +93,10 @@ void install()
                     cb(jsonStatus(k200OK, body));
                 },
                 [cb](const orm::DrogonDbException& e) {
+                    LOG_ERROR << "Readiness DB probe failed: " << e.base().what();
                     Json::Value body;
                     body["status"] = "db unreachable";
-                    body["error"]  = e.base().what();
+                    body["error"]  = "Database unavailable";
                     cb(jsonStatus(k503ServiceUnavailable, body));
                 });
         },

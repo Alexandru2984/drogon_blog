@@ -19,6 +19,11 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <utility>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <cerrno>
 
 namespace {
 
@@ -28,42 +33,52 @@ std::string env(const char* name, const char* fallback)
     return (v && *v) ? std::string(v) : std::string(fallback);
 }
 
-// Resets the test database to a known empty state by dropping `public` and
-// then driving migrations/apply.sh against it. We exercise the same code
-// path production uses to land schema changes, so a broken migration
-// surfaces in CI before it surfaces in prod.
+// Called before any worker threads exist. Pass arguments directly to exec,
+// never through a shell: DB passwords and filesystem paths are opaque data.
+bool runProcess(const std::vector<std::string>& args,
+                const std::vector<std::pair<std::string, std::string>>& vars)
+{
+    std::vector<char*> argv;
+    for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+    const pid_t child = fork();
+    if (child < 0) return false;
+    if (child == 0) {
+        for (const auto& item : vars) setenv(item.first.c_str(), item.second.c_str(), 1);
+        execvp(argv.front(), argv.data());
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return false;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 bool resetDatabase()
 {
-    const std::string host = env("TEST_DB_HOST",     "127.0.0.1");
-    const std::string port = env("TEST_DB_PORT",     "5432");
-    const std::string user = env("TEST_DB_USER",     "blog_user");
+    const std::string host = env("TEST_DB_HOST", "127.0.0.1");
+    const std::string port = env("TEST_DB_PORT", "5432");
+    const std::string user = env("TEST_DB_USER", "blog_user");
     const std::string pass = env("TEST_DB_PASSWORD", "");
-    const std::string name = env("TEST_DB_NAME",     "blog_test_db");
+    const std::string name = env("TEST_DB_NAME", "blog_test_db");
     const std::string migrations = env("TEST_MIGRATIONS_DIR", "../migrations");
 
-    std::ostringstream drop;
-    drop << "PGPASSWORD='" << pass << "' psql"
-         << " -h " << host
-         << " -p " << port
-         << " -U " << user
-         << " -d " << name
-         << " -v ON_ERROR_STOP=1"
-         << " -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
-            "    GRANT ALL ON SCHEMA public TO " << user << ";'"
-         << " >/dev/null";
-    if (std::system(drop.str().c_str()) != 0) return false;
+    // No override escape hatch: this binary always destroys its target schema.
+    const std::string suffix = "_test_db";
+    if (name.size() <= suffix.size() ||
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        std::cerr << "Refusing schema reset: TEST_DB_NAME must end in _test_db\n";
+        return false;
+    }
+    if (!runProcess({"psql", "-X", "-h", host, "-p", port, "-U", user,
+                     "-d", name, "-v", "ON_ERROR_STOP=1", "-q", "-c",
+                     "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"},
+                    {{"PGPASSWORD", pass}})) return false;
 
-    // Drive the production migration runner. Failure here would mean a
-    // newly-added migration file is broken — same outcome as a broken
-    // schema.sql used to give us.
-    std::ostringstream mig;
-    mig << "DB_HOST='"     << host << "' "
-        << "DB_PORT='"     << port << "' "
-        << "DB_NAME='"     << name << "' "
-        << "DB_USER='"     << user << "' "
-        << "DB_PASSWORD='" << pass << "' "
-        << "sh " << migrations << "/apply.sh >/dev/null";
-    return std::system(mig.str().c_str()) == 0;
+    return runProcess({"sh", migrations + "/apply.sh"},
+                      {{"DB_HOST", host}, {"DB_PORT", port}, {"DB_NAME", name},
+                       {"DB_USER", user}, {"DB_PASSWORD", pass}});
 }
 
 Json::Value buildConfig()
@@ -90,6 +105,7 @@ Json::Value buildConfig()
 
     Json::Value app;
     app["number_of_threads"]  = 2;
+    app["document_root"] = BLOG_TEST_SOURCE_DIR "/fixtures";
     app["enable_session"]     = true;
     app["session_same_site"]  = "Lax";
     app["session_cookie_key"] = "JSESSIONID";

@@ -65,3 +65,28 @@ operator/legal assessment; this review does not claim compliance certification.
 - OWASP CSRF prevention: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 - Upstream Drogon changelog: https://github.com/drogonframework/drogon/blob/master/ChangeLog.md
 - Criteria JSON report: https://github.com/drogonframework/drogon/issues/2576
+
+## Remediation validation
+
+- SEC-01/02/03: final policy now covers static responses and explicitly covers
+  sync-advice rejections (Drogon skips pre-sending advice on that path). Regression
+  tests exercise static HTML, early cross-origin rejection and response headers.
+- SEC-04: built private static Drogon 1.9.14 at verified revision
+  `3aae769cc405cf5abb9d477675c6430924f02c7c`; upgraded Docker pin and minimum
+  CMake version. CI bootstraps the same private library. No system shared library
+  is replaced. The upgraded application passed all 120 backend test cases
+  (1096 assertions) against a disposable PostgreSQL instance on port 55487.
+- SEC-06: harness rejects names without `_test_db` suffix before connecting and
+  passes command arguments directly to exec; database credentials no longer enter
+  shell source. The suffix guard reduces accidental targeting; it does not replace
+  keeping production credentials out of test environments.
+- SEC-07 (high, defense in depth): live service's ProtectHome was disabled and
+  it runs as the VPS owner's account, making personal files accessible after an
+  application compromise. ProtectHome=tmpfs plus a project-only read-only bind was
+  validated in a transient systemd unit: config readable, personal home and Docker
+  socket inaccessible, uploads writable. Existing socket denials are retained.
+- Readiness failures now log database diagnostics privately and return a generic
+  message instead of database exception text.
+
+Production rollout is recorded separately below; passing local checks does not
+itself mean the live service has been upgraded.

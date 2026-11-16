@@ -198,6 +198,21 @@ std::string resolveClientIp(const std::string& peer,
     return hop.empty() ? peer : hop;
 }
 
+bool browserWriteAllowed(const drogon::HttpRequestPtr& req,
+                         std::string_view expectedOrigin)
+{
+    const auto method = req->method();
+    if (method == drogon::Get || method == drogon::Head ||
+        method == drogon::Options) return true;
+
+    // Same-site includes sibling vhosts. Only same-origin is sufficient.
+    const auto& site = req->getHeader("Sec-Fetch-Site");
+    if (site == "cross-site" || site == "same-site") return false;
+    const auto& origin = req->getHeader("Origin");
+    if (origin.empty()) return true; // native client; token checks still apply
+    return !expectedOrigin.empty() && origin == expectedOrigin;
+}
+
 std::string randomToken(std::size_t bytes)
 {
     std::string raw(bytes, '\0');
@@ -379,6 +394,40 @@ drogon::HttpResponsePtr rateLimitOr429(const std::string& bucketName,
     return resp;
 }
 
+namespace {
+// Drogon bypasses pre-sending advice for responses returned by sync advice.
+// Invoke this policy explicitly on those rejection paths as well.
+void applyResponsePolicy(const drogon::HttpRequestPtr& req,
+                         const drogon::HttpResponsePtr& resp)
+{
+    applySecurityHeaders(resp);
+
+    std::string path = req->getPath();
+    std::transform(path.begin(), path.end(), path.begin(),
+        [](unsigned char c) { return std::tolower(c); });
+    const auto in = [&path](std::string_view family) {
+        return path == family ||
+            (path.size() > family.size() &&
+             path.compare(0, family.size(), family) == 0 &&
+             path[family.size()] == '/');
+    };
+    if (in("/auth") || in("/account") || in("/messages") ||
+        in("/notifications") || in("/bookmarks") ||
+        in("/moderation") || in("/feed/following")) {
+        resp->addHeader("Cache-Control", "private, no-store");
+        resp->addHeader("Pragma", "no-cache");
+        const auto vary = resp->getHeader("Vary");
+        if (vary.find("Cookie") == std::string::npos)
+            resp->addHeader("Vary", vary.empty() ? "Cookie" : vary + ", Cookie");
+    }
+
+    // Entry HTML and the worker must revalidate after a deployment.
+    if (path == "/" || path == "/index.html" || path == "/sw.js")
+        resp->addHeader("Cache-Control", "no-cache");
+
+}
+} // namespace
+
 void registerAdvices()
 {
     // Per-IP token buckets for sensitive endpoints. Capacity is the burst
@@ -407,6 +456,7 @@ void registerAdvices()
         // long crafted terms can saturate Postgres cores; per-IP cap kills
         // that without affecting human browsing.
         {"/posts/search",              drogon::Get,  10.0, 10.0 / 60.0},  // 10 burst, 10 / min
+        {"/posts/discover",            drogon::Get,  30.0, 30.0 / 60.0},
     };
 
     static const std::unordered_set<std::string> kCsrfExempt = {
@@ -429,9 +479,21 @@ void registerAdvices()
 
     const char* disableRl = std::getenv("BLOG_DISABLE_RATE_LIMIT");
     const bool rateLimitEnabled = !(disableRl && std::string(disableRl) == "1");
+    const char* originEnv = std::getenv("BLOG_SITE_ORIGIN");
+    const std::string expectedOrigin = originEnv && *originEnv
+        ? originEnv : (secureCookies() ? "https://blog.micutu.com"
+                                      : "http://localhost:8092");
 
     drogon::app().registerSyncAdvice(
-        [rateLimitEnabled](const drogon::HttpRequestPtr& req) -> drogon::HttpResponsePtr {
+        [rateLimitEnabled, expectedOrigin](const drogon::HttpRequestPtr& req) -> drogon::HttpResponsePtr {
+            if (!browserWriteAllowed(req, expectedOrigin)) {
+                Json::Value body;
+                body["error"] = "Cross-origin writes are not allowed";
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+                resp->setStatusCode(drogon::k403Forbidden);
+                applyResponsePolicy(req, resp);
+                return resp;
+            }
             const auto path   = req->getPath();
             const auto method = req->getMethod();
 
@@ -469,6 +531,7 @@ void registerAdvices()
                             resp->addHeader("X-RateLimit-Remaining", "0");
                             resp->addHeader("X-RateLimit-Reset",
                                 std::to_string(static_cast<int>(d.resetSeconds) + 1));
+                            applyResponsePolicy(req, resp);
                             return resp;
                         }
                         // Stash the post-take bucket state on the request
@@ -494,6 +557,7 @@ void registerAdvices()
                     body["error"] = "Invalid or missing CSRF token";
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
                     resp->setStatusCode(drogon::k403Forbidden);
+                    applyResponsePolicy(req, resp);
                     return resp;
                 }
             }
@@ -501,9 +565,10 @@ void registerAdvices()
             return nullptr; // continue to handler
         });
 
-    drogon::app().registerPostHandlingAdvice(
+    // Pre-sending also covers static files and early advice rejections.
+    drogon::app().registerPreSendingAdvice(
         [](const drogon::HttpRequestPtr& req, const drogon::HttpResponsePtr& resp) {
-            applySecurityHeaders(resp);
+            applyResponsePolicy(req, resp);
 
             // X-RateLimit-* advisory headers. The sync advice above
             // stashes the post-take state on the request whenever the

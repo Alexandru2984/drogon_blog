@@ -44,6 +44,11 @@ jobs:
             libcmark-gfm-dev libcmark-gfm-extensions-dev \
             postgresql-client
 
+      - name: Build pinned private Drogon
+        run: |
+          scripts/build-drogon.sh /opt/blog-drogon
+          echo "CMAKE_PREFIX_PATH=/opt/blog-drogon" >> "$GITHUB_ENV"
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
@@ -670,6 +675,11 @@ jobs:
             libvips-dev \
             libcmark-gfm-dev libcmark-gfm-extensions-dev \
             postgresql-client
+
+      - name: Build pinned private Drogon
+        run: |
+          scripts/build-drogon.sh /opt/blog-drogon
+          echo "CMAKE_PREFIX_PATH=/opt/blog-drogon" >> "$GITHUB_ENV"
 
       - name: Configure (Debug + ASan/UBSan)
         run: |

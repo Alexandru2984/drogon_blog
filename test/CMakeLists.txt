@@ -26,7 +26,8 @@ set(TEST_SOURCES
     test_draft_visibility.cc)
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
-target_compile_definitions(${PROJECT_NAME} PRIVATE BLOG_TEST_BUILD=1)
+target_compile_definitions(${PROJECT_NAME} PRIVATE BLOG_TEST_BUILD=1
+    BLOG_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Bring in the project's own sources so tests link against the same controllers,
 # helpers and ORM models that the production binary uses.

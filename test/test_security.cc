@@ -426,3 +426,58 @@ DROGON_TEST(Security_VerifyEmailIsAtomic)
                 username, hash);
         });
 }
+
+DROGON_TEST(Security_BrowserWritesRequireExactOrigin)
+{
+    auto req = HttpRequest::newHttpRequest();
+    req->setMethod(Post);
+    CHECK(security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->addHeader("Origin", "https://blog.example.test");
+    CHECK(security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->addHeader("Origin", "https://sibling.example.test");
+    CHECK(!security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->addHeader("Origin", "https://blog.example.test.evil.test");
+    CHECK(!security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->addHeader("Origin", "null");
+    CHECK(!security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->removeHeader("Origin");
+    req->addHeader("Sec-Fetch-Site", "same-site");
+    CHECK(!security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->addHeader("Sec-Fetch-Site", "cross-site");
+    CHECK(!security::browserWriteAllowed(req, "https://blog.example.test"));
+    req->setMethod(Get);
+    CHECK(security::browserWriteAllowed(req, "https://blog.example.test"));
+}
+
+DROGON_TEST(Security_EarlyRejectionHasHeadersAndCannotBeStored)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+    Json::Value body;
+    body["username"] = "never-processed";
+    auto req = jsonPost("/auth/login", body);
+    req->addHeader("Origin", "https://attacker.example.test");
+    client->sendRequest(req, [TEST_CTX](ReqResult result, const HttpResponsePtr& resp) {
+        REQUIRE(result == ReqResult::Ok);
+        REQUIRE(resp);
+        CHECK(resp->getStatusCode() == k403Forbidden);
+        CHECK(resp->getHeader("X-Frame-Options") == "DENY");
+        CHECK(resp->getHeader("X-Content-Type-Options") == "nosniff");
+        CHECK(!resp->getHeader("Content-Security-Policy").empty());
+        CHECK(resp->getHeader("Cache-Control") == "private, no-store");
+    });
+}
+
+DROGON_TEST(Security_StaticHtmlHasSecurityHeaders)
+{
+    auto client = HttpClient::newHttpClient(testBaseUrl());
+    auto req = HttpRequest::newHttpRequest();
+    req->setPath("/security.html");
+    client->sendRequest(req, [TEST_CTX](ReqResult result, const HttpResponsePtr& resp) {
+        REQUIRE(result == ReqResult::Ok);
+        REQUIRE(resp);
+        REQUIRE(resp->getStatusCode() == k200OK);
+        CHECK(resp->getHeader("X-Frame-Options") == "DENY");
+        CHECK(resp->getHeader("X-Content-Type-Options") == "nosniff");
+        CHECK(!resp->getHeader("Content-Security-Policy").empty());
+    });
+}

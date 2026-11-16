@@ -13,14 +13,14 @@ RUN npm run build
 # Drogon ourselves on a multi-arch Ubuntu base lets the whole image cross to
 # linux/arm64 (Hetzner CAX, Oracle Free Tier ARM, Raspberry Pi 4/5, …).
 #
-# Version pinned to 1.9.13 to match what the upstream image currently
-# provides — the surface we depend on (registerSyncAdvice, runOnQuit,
+# Version pinned to 1.9.14 for HTTP framing and static-path fixes.
+# The surface we depend on (registerSyncAdvice, runOnQuit,
 # HttpResponsePtr-returning sync advice) landed in 1.9.x and isn't in the
 # Ubuntu noble apt package (1.8.7).
 FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS drogon-builder
 ARG DEBIAN_FRONTEND=noninteractive
-ARG DROGON_VERSION=v1.9.13
-ARG DROGON_COMMIT=4c5430757ea5451a7c38fbbef4b4bef7dbb47f2f
+ARG DROGON_VERSION=v1.9.14
+ARG DROGON_COMMIT=3aae769cc405cf5abb9d477675c6430924f02c7c
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates pkg-config \
         libssl-dev libjsoncpp-dev \

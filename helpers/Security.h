@@ -37,6 +37,12 @@ std::string resolveClientIp(const std::string& peer,
 // (BLOG_CLIENT_IP_HEADER, default "X-Real-IP"). Parsed once.
 const std::string& clientIpHeader();
 
+// Browser writes must originate from the configured site, even on routes
+// that cannot require an authenticated CSRF token yet. Requests without
+// browser provenance headers still use the usual authentication/CSRF checks.
+bool browserWriteAllowed(const drogon::HttpRequestPtr& req,
+                         std::string_view expectedOrigin);
+
 // Cryptographically-random URL-safe token (uses libsodium's RNG).
 std::string randomToken(std::size_t bytes = 32);
 
