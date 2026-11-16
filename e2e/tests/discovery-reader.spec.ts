@@ -93,3 +93,44 @@ test('discovery controls keep shareable filters, recover from failure, and fit m
   await page.getByRole('button', { name: 'Try again', exact: true }).click()
   await expect(page.locator('.post-card')).toHaveCount(1)
 })
+
+test('reader settings persist, focus hides discussion, and print excludes controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`/#/posts/${likedId}`)
+  await expect(page.locator('.post-title')).toHaveText('Liked article')
+  await page.getByText('Reading options', { exact: true }).click()
+  await page.getByLabel('Text size', { exact: true }).selectOption('1.3')
+  await page.getByLabel('Book-style font', { exact: true }).check()
+  await page.getByLabel('Line width', { exact: true }).selectOption('comfortable')
+  await expect(page.locator('.reader-body')).toHaveClass(/reader-serif-body/)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
+  await page.reload()
+  await page.getByText('Reading options', { exact: true }).click()
+  await expect(page.getByLabel('Text size', { exact: true })).toHaveValue('1.3')
+  await expect(page.getByLabel('Book-style font', { exact: true })).toBeChecked()
+  await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
+  await expect(page.locator('.comments')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Exit focus mode', exact: true }).click()
+  await expect(page.locator('.comments')).toBeVisible()
+  await page.emulateMedia({ media: 'print' })
+  await expect(page.locator('.reading-tools')).toBeHidden()
+  await expect(page.locator('.reader-body')).toBeVisible()
+})
+
+test('a delayed old article cannot overwrite a new route', async ({ page }) => {
+  let firstRequested = false
+  let release: (() => void) | undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route(`**/posts/${likedId}`, async route => {
+    firstRequested = true
+    const response = await route.fetch()
+    await gate
+    await route.fulfill({ response })
+  })
+  await page.goto(`/#/posts/${likedId}`)
+  await expect.poll(() => firstRequested).toBeTruthy()
+  await page.goto(`/#/posts/${discussedId}`)
+  await expect(page.locator('.post-title')).toHaveText('Discussed article')
+  release?.()
+  await expect(page.locator('.post-title')).toHaveText('Discussed article')
+})

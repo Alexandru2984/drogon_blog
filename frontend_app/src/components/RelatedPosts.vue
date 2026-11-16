@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { postsApi, type RelatedPost } from '@/api/posts'
 import PostMeta from '@/components/PostMeta.vue'
 import TagList from '@/components/TagList.vue'
@@ -16,16 +16,21 @@ const props = defineProps<{ postId: number }>()
 const posts = ref<RelatedPost[]>([])
 const loading = ref(true)
 
+let sequence = 0
+let disposed = false
+onBeforeUnmount(() => { disposed = true; ++sequence })
 async function load(id: number) {
+  const current = ++sequence
   loading.value = true
   try {
-    posts.value = await postsApi.related(id)
+    const result = await postsApi.related(id)
+    if (!disposed && current === sequence) posts.value = result
   } catch {
     // Suggestions are an extra. A failure here must not put an error banner
     // on an article that loaded perfectly well.
-    posts.value = []
+    if (!disposed && current === sequence) posts.value = []
   } finally {
-    loading.value = false
+    if (!disposed && current === sequence) loading.value = false
   }
 }
 

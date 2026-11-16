@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useReadingPreferences } from '@/composables/useReadingPreferences'
 import Avatar from '@/components/Avatar.vue'
 import { formatDateTime, isoDate as toIsoDate, parseApiDate } from '@/lib/date'
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
@@ -17,6 +18,14 @@ import RelatedPosts from '@/components/RelatedPosts.vue'
 import ReportButton from '@/components/ReportButton.vue'
 import { socialApi } from '@/api/social'
 import { usePageMeta } from '@/composables/usePageMeta'
+
+const { size: readerSize, serif: readerSerif, measure: readerMeasure, reset: resetReading } = useReadingPreferences()
+const focusMode = ref(false)
+const commentsError = ref(false)
+function printArticle() { window.print() }
+function backToTop() {
+  window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+}
 
 const props = defineProps<{ id: number }>()
 
@@ -71,18 +80,20 @@ const bodyEl = ref<HTMLElement | null>(null)
 // loaded lazily, so a reader who only ever opens prose posts never pays for
 // the highlighter. Both are why this is a watcher rather than part of the
 // render: highlight.js rewrites the <code> innerHTML in place.
-watch(bodyHtml, async (html) => {
-  if (!html) return
+watch([bodyHtml, bodyEl], async ([html, root]) => {
+  if (!html || !root) return
   await nextTick()
-  if (!bodyEl.value) return
+  if (bodyEl.value !== root) return
   try {
     const { highlightWithin } = await import('@/lib/highlight')
-    highlightWithin(bodyEl.value)
+    if (bodyEl.value !== root) return
+    highlightWithin(root)
   } catch {
     // A chunk that fails to load leaves plain monospace code. That is a
     // worse-looking article, not a broken one.
   }
-  addCopyButtons(bodyEl.value)
+  if (bodyEl.value !== root) return
+  addCopyButtons(root)
   updateProgress()
 }, { immediate: true })
 
@@ -141,7 +152,7 @@ onBeforeUnmount(() => {
 // --- Share --------------------------------------------------------------
 // The /preview/posts/{id} page carries server-rendered Open Graph tags, so a
 // link pasted into a chat app unfurls with the real title and excerpt, then
-// forwards human visitors to the SPA route.
+// offers readers a link into the interactive discussion.
 const shareUrl = computed(() => `${window.location.origin}/preview/posts/${props.id}`)
 async function sharePost() {
   if (!post.value) return
@@ -165,36 +176,50 @@ const wasEdited = computed(() => {
   return !!c && !!u && u.getTime() - c.getTime() > 60_000
 })
 
+let loadSequence = 0
+let disposed = false
 async function load() {
+  const sequence = ++loadSequence
+  const postId = props.id
   loading.value = true
   commentsLoading.value = true
   error.value = ''
+  commentsError.value = false
   try {
     const [p, l, c] = await Promise.all([
-      postsApi.get(props.id),
-      postsApi.likesCount(props.id).catch(() => ({ likes_count: 0, liked: false })),
-      commentsApi.forPost(props.id).catch(() => []),
+      postsApi.get(postId),
+      postsApi.likesCount(postId).catch(() => ({ likes_count: 0, liked: false })),
+      commentsApi.forPost(postId).catch(() => null),
     ])
+    if (disposed || sequence !== loadSequence) return
     post.value = p
     likes.value = l.likes_count
     liked.value = !!l.liked
     bookmarked.value = !!p.bookmarked
-    comments.value = c
+    comments.value = c ?? []
+    commentsError.value = c === null
   } catch (e: any) {
+    if (disposed || sequence !== loadSequence) return
     error.value = e?.response?.data?.error ?? 'Post not found'
   } finally {
-    loading.value = false
-    commentsLoading.value = false
+    if (!disposed && sequence === loadSequence) {
+      loading.value = false
+      commentsLoading.value = false
+    }
   }
 }
 
 onMounted(() => { load(); subscribeLive(props.id) })
 watch(() => props.id, (newId, oldId) => {
+  focusMode.value = false
+  replyingTo.value = null
+  newComment.value = ''
+  removedIds.clear()
   if (oldId) live.unsubscribePost(oldId)
   load()
   subscribeLive(newId)
 })
-onBeforeUnmount(() => { live.unsubscribePost(props.id) })
+onBeforeUnmount(() => { disposed = true; ++loadSequence; live.unsubscribePost(props.id) })
 
 function subscribeLive(postId: number) {
   // Connect the WS lazily if the user happens to be authed; anonymous viewers
@@ -382,7 +407,7 @@ async function deletePost() {
   </div>
 
   <template v-else-if="post">
-    <article class="card">
+    <article class="card reader-article" :class="{ 'reader-focus': focusMode }">
       <header class="row tight post-head">
         <Avatar :image-url="post.author?.profile_image" :username="post.author?.username" />
         <div class="post-head-meta">
@@ -423,12 +448,41 @@ async function deletePost() {
            that additionally wraps tables in a scroll container.
            Fall back to plain-text content for legacy rows where the column
            hasn't been backfilled. -->
+      <div class="reading-tools">
+        <details class="reading-options">
+          <summary>{{ $t('reader.options') }}</summary>
+          <div class="reading-settings">
+            <div class="reader-field"><label for="reader-size">{{ $t('reader.text_size') }}</label>
+              <select id="reader-size" v-model="readerSize">
+                <option :value="0.95">{{ $t('reader.small') }}</option>
+                <option :value="1">{{ $t('reader.standard') }}</option>
+                <option :value="1.15">{{ $t('reader.large') }}</option>
+                <option :value="1.3">{{ $t('reader.larger') }}</option>
+              </select>
+      </div>
+            <div class="reader-field"><label for="reader-measure">{{ $t('reader.measure') }}</label>
+              <select id="reader-measure" v-model="readerMeasure">
+                <option value="full">{{ $t('reader.full') }}</option>
+                <option value="comfortable">{{ $t('reader.comfortable') }}</option>
+              </select>
+      </div>
+            <label class="reader-serif"><input v-model="readerSerif" type="checkbox"> {{ $t('reader.serif') }}</label>
+            <button type="button" class="ghost sm" @click="resetReading">{{ $t('reader.reset') }}</button>
+          </div>
+        </details>
+        <div class="reader-actions">
+          <button type="button" class="ghost sm" :aria-pressed="focusMode" @click="focusMode = !focusMode">{{ $t(focusMode ? 'reader.exit_focus' : 'reader.focus') }}</button>
+          <button type="button" class="ghost sm" @click="printArticle">{{ $t('reader.print') }}</button>
+        </div>
+      </div>
+
       <TableOfContents :body="bodyEl" :revision="bodyHtml" />
 
-      <div v-if="bodyHtml" ref="bodyEl" class="post-body" v-html="bodyHtml"></div>
+      <div v-if="bodyHtml" ref="bodyEl" class="post-body reader-body" :class="{ 'reader-serif-body': readerSerif }"
+        :style="{ fontSize: `${readerSize}em`, maxWidth: readerMeasure === 'comfortable' ? '58ch' : undefined }" v-html="bodyHtml"></div>
       <p v-else class="post-content">{{ post.content }}</p>
 
-      <div class="row tight post-actions">
+      <div v-if="!focusMode" class="row tight post-actions">
         <!-- Publishing from the post itself, because that is where the
              author lands after saving a draft and re-reading it. -->
         <button v-if="isOwner && post.is_draft" :disabled="publishing" @click="publishDraft">
@@ -465,7 +519,8 @@ async function deletePost() {
       </div>
     </article>
 
-    <section class="comments">
+    <div class="reader-return"><button type="button" class="ghost sm" @click="backToTop">↑ {{ $t('reader.top') }}</button></div>
+    <section v-if="!focusMode" class="comments">
       <h2 class="comments-heading">Comments ({{ comments.filter(c => !c.deleted).length }})</h2>
 
       <form v-if="auth.isAuthed" @submit.prevent="submitComment" class="card">
@@ -487,7 +542,11 @@ async function deletePost() {
         <router-link to="/login">Log in</router-link> to comment.
       </p>
 
-      <div v-if="!commentsLoading && !comments.length" class="empty-state">
+      <p v-if="commentsError" class="error" role="alert">
+        {{ $t('reader.comments_error') }}
+        <button type="button" class="ghost sm" @click="load">{{ $t('reader.retry_comments') }}</button>
+      </p>
+      <div v-if="!commentsError && !commentsLoading && !comments.length" class="empty-state">
         <span class="emoji" aria-hidden="true">💬</span>
         <p>No comments yet. Be the first to say something.</p>
       </div>
@@ -506,11 +565,32 @@ async function deletePost() {
 
     <!-- Last, deliberately: this is the "what next" once there is nothing
          left to read or reply to. -->
-    <RelatedPosts :post-id="id" />
+    <RelatedPosts v-if="!focusMode" :post-id="id" />
   </template>
 </template>
 
 <style scoped>
+.reading-tools { margin-block: var(--sp-4); padding-block: var(--sp-3); border-block: 1px solid var(--border-soft); }
+.reading-options summary { cursor: pointer; color: var(--text-dim); font-size: var(--step--1); padding-block: var(--sp-2); }
+.reading-settings { display: flex; align-items: end; flex-wrap: wrap; gap: var(--sp-3); padding-block: var(--sp-3); }
+.reader-field { min-width: 0; }
+.reading-settings label { min-width: 0; font-size: var(--step--1); }
+.reading-settings select { width: 100%; display: block; margin-top: var(--sp-1); }
+.reading-settings .reader-serif { display: flex; align-items: center; gap: var(--sp-2); min-height: 2.75rem; }
+.reader-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.reader-body { margin-inline: auto; }
+.reader-serif-body { font-family: Georgia, 'Times New Roman', serif; line-height: 1.85; }
+.reader-focus { border-color: var(--accent); }
+.reader-return { text-align: right; }
+@media (max-width: 420px) { .reading-settings > label, .reading-settings > .reader-field { flex: 1 1 100%; } }
+@media print {
+  .reading-tools, .reader-return, .post-actions, .comments, :deep(.related), :deep(.toc), .read-progress, .post-head .btn, .post-head button { display: none !important; }
+  .reader-article { border: 0; padding: 0; }
+  .reader-body { font-size: 11pt !important; max-width: none !important; }
+  .reader-article :deep(pre), .reader-article :deep(blockquote) { break-inside: avoid; }
+  .reader-article :deep(.code-copy) { display: none !important; }
+}
+
 .read-progress {
   position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 40;
   pointer-events: none;
